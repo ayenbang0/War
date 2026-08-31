@@ -68,6 +68,7 @@ export function hashWorld(world: World): string {
     h = mixF64(h, q.holdY);
     h = mixF64(h, q.holdRadius);
     h = mixU32(h, q.recoverUntil);
+    h = mixU32(h, (q.seenBy[0] ? 1 : 0) | (q.seenBy[1] ? 2 : 0));
     h = mixU32(h, q.patrolLeg);
     h = mixU32(h, q.patrolForward ? 1 : 0);
     h = mixU32(h, q.patrol.length);

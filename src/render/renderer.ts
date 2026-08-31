@@ -15,6 +15,7 @@ import { TerrainLayer } from "./terrain-layer.ts";
 import { ink, inkFaint, inkSoft, parchment, playerColor, playerColorSoft } from "./palette.ts";
 import { RECOVER_LOCK_SECONDS, TICK_RATE } from "../sim/world.ts";
 import { UNIT_TYPES } from "../content/unit-types.ts";
+import { FOG_CELL } from "../sim/vision.ts";
 
 /** Matches the recover gesture ink, so the order and its aftermath read alike. */
 const RECOVER_COLOR = "#9c3f63";
@@ -52,6 +53,8 @@ export class Renderer {
     selected: readonly number[],
     /** Render clock in seconds; drives idle wander and attack lunges. */
     now = 0,
+    /** Whose eyes we are looking through. */
+    viewer = 0,
   ): void {
     const ctx = this.ctx;
     ctx.fillStyle = parchment;
@@ -61,13 +64,22 @@ export class Renderer {
     this.drawGrid(world.terrain, cam);
     this.drawWorldEdge(world.terrain, cam);
 
-    for (const q of world.squads) this.drawOrder(q, cam, prev, alpha, world.tick);
+    // Only your own orders are on the board; you cannot read an enemy's plan.
+    for (const q of world.squads) {
+      if (q.player === viewer) this.drawOrder(q, cam, prev, alpha, world.tick);
+    }
     for (const q of world.squads) {
       if (selected.includes(q.id)) this.drawSelection(q, cam, prev, alpha);
     }
 
-    if (cam.zoom >= SOLDIER_LOD_ZOOM) this.drawSoldiers(world, cam, prev, alpha, now);
-    else for (const q of world.squads) this.drawCounter(q, cam, prev, alpha);
+    if (cam.zoom >= SOLDIER_LOD_ZOOM) this.drawSoldiers(world, cam, prev, alpha, now, viewer);
+    else {
+      for (const q of world.squads) {
+        if (q.player === viewer || q.seenBy[viewer]) this.drawCounter(q, cam, prev, alpha);
+      }
+    }
+
+    this.drawFog(world, cam, viewer);
   }
 
   private drawGrid(terrain: TerrainGrid, cam: Camera): void {
@@ -141,6 +153,7 @@ export class Renderer {
     prev: Snapshot,
     alpha: number,
     now: number,
+    viewer: number,
   ): void {
     const ctx = this.ctx;
     const s = world.soldiers;
@@ -152,6 +165,8 @@ export class Renderer {
       ctx.beginPath();
       for (const q of world.squads) {
         if (q.player !== player) continue;
+        // Enemies are drawn only while actually observed.
+        if (q.player !== viewer && !q.seenBy[viewer]) continue;
         if (q.anchorX < b.x0 - q.radius - margin || q.anchorX > b.x1 + q.radius + margin) continue;
         if (q.anchorY < b.y0 - q.radius - margin || q.anchorY > b.y1 + q.radius + margin) continue;
 
@@ -216,6 +231,17 @@ export class Renderer {
   }
 
   /** Zoomed-out stand-in: one wargame counter per squad. */
+  private drawFog(world: World, cam: Camera, viewer: number): void {
+    const fog = world.fog[viewer];
+    paintFog(
+      this.ctx,
+      cam,
+      (x, y) => fog.at(x, y),
+      world.terrain.worldWidth,
+      world.terrain.worldHeight,
+    );
+  }
+
   private drawCounter(q: Squad, cam: Camera, prev: Snapshot, alpha: number): void {
     const ctx = this.ctx;
     const a = this.anchor(q, prev, alpha);
@@ -374,4 +400,44 @@ function crossMark(ctx: CanvasRenderingContext2D, x: number, y: number, r: numbe
   ctx.moveTo(x + r, y - r);
   ctx.lineTo(x - r, y + r);
   ctx.stroke();
+}
+
+/**
+ * Fog, painted over everything else.
+ *
+ * Three states, and the middle one matters: ground you have never seen is
+ * fully dark, ground you saw earlier is dimmed but readable, and ground you
+ * currently observe is clear. Remembering terrain while forgetting what stands
+ * on it is what makes scouting worth doing -- otherwise the map is either a
+ * mystery forever or solved once and never again.
+ */
+function paintFog(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  fogAt: (x: number, y: number) => number,
+  worldW: number,
+  worldH: number,
+): void {
+  const b = cam.bounds();
+  const x0 = Math.max(0, Math.floor(b.x0 / FOG_CELL) * FOG_CELL);
+  const y0 = Math.max(0, Math.floor(b.y0 / FOG_CELL) * FOG_CELL);
+  const x1 = Math.min(worldW, b.x1 + FOG_CELL);
+  const y1 = Math.min(worldH, b.y1 + FOG_CELL);
+  const size = Math.ceil(FOG_CELL * cam.zoom) + 1;
+
+  ctx.save();
+  for (let wy = y0; wy < y1; wy += FOG_CELL) {
+    for (let wx = x0; wx < x1; wx += FOG_CELL) {
+      const state = fogAt(wx + 1, wy + 1);
+      if (state === 1) continue;
+      ctx.fillStyle = state === 2 ? "rgba(58, 48, 34, 0.30)" : "rgba(44, 37, 26, 0.78)";
+      ctx.fillRect(
+        Math.floor(cam.worldToScreenX(wx)),
+        Math.floor(cam.worldToScreenY(wy)),
+        size,
+        size,
+      );
+    }
+  }
+  ctx.restore();
 }

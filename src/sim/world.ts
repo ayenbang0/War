@@ -27,6 +27,7 @@ import { UNIT_TYPES, type UnitTypeId } from "../content/unit-types.ts";
 import { MELEE_RANGE, d2, hitDamage, isFlanking, nearestInSquad, spreadTarget } from "./combat.ts";
 import { globalMorale, nextMorale, ROUT_THRESHOLD } from "./morale.ts";
 import { evaluate, type ArmyState, type Outcome } from "./victory.ts";
+import { FogField, concealment, effectiveSight, hasLineOfSight, rangeFromHeight } from "./vision.ts";
 
 /** Simulation ticks per second. Slow, deliberate pacing needs no more than this. */
 export const TICK_RATE = 20;
@@ -129,6 +130,8 @@ export type Squad = {
   recoverUntil: number;
   /** Living soldiers. Formation slots are re-derived from this as men fall. */
   live: number;
+  /** Whether each player can currently see this squad, indexed by player. */
+  seenBy: [boolean, boolean];
   /** Enemies this squad has killed, and its own dead. */
   kills: number;
   losses: number;
@@ -220,6 +223,8 @@ export class World {
   private readonly hash: SpatialHash;
   /** soldier index -> index into squads. Scanning squads per blow is O(n^2). */
   private readonly ownerOf: Int32Array;
+  /** Coarse lit/remembered grid per army, for drawing fog. */
+  readonly fog: [FogField, FogField];
   private readonly neighbours: Int32Array;
   private nextEntityId = 1;
 
@@ -237,6 +242,7 @@ export class World {
     );
     this.neighbours = new Int32Array(256);
     this.ownerOf = new Int32Array(capacity).fill(-1);
+    this.fog = [new FogField(this.terrain), new FogField(this.terrain)];
     this.rng = {
       combat: Rng.create(this.seed, Stream.Combat),
       morale: Rng.create(this.seed, Stream.Morale),
@@ -286,6 +292,7 @@ export class World {
       cohesion: 1,
       recoverUntil: 0,
       live: count,
+      seenBy: [player === 0, player === 1],
       kills: 0,
       losses: 0,
       casualtiesThisTick: 0,
@@ -359,6 +366,7 @@ export class World {
     this.updateSquadAnchors();
     this.rebuildHash();
     this.updateSoldiers();
+    this.updateVision();
     this.resolveCombat();
     this.updateMorale();
     this.tick++;
@@ -717,6 +725,58 @@ export class World {
     }
   }
 
+  // -- vision -----------------------------------------------------------------
+
+  /**
+   * Who can see whom, and what each army has lit up.
+   *
+   * Runs for BOTH armies through the same code. The AI is subject to exactly
+   * the fog the player is, which is only credible if there is one
+   * implementation rather than a player-facing one and an AI-facing one.
+   */
+  private updateVision(): void {
+    for (const f of this.fog) f.beginUpdate();
+
+    for (const q of this.squads) {
+      if (q.live === 0) {
+        q.seenBy[0] = false;
+        q.seenBy[1] = false;
+        continue;
+      }
+      q.seenBy[q.player] = true;
+      this.fog[q.player].stamp(
+        q.anchorX,
+        q.anchorY,
+        effectiveSight(this.terrain, UNIT_TYPES[q.type].sight, q.anchorX, q.anchorY),
+      );
+    }
+
+    for (const target of this.squads) {
+      if (target.live === 0) continue;
+      const foe = 1 - target.player;
+      let spotted = false;
+      const hidden = concealment(this.terrain, target.anchorX, target.anchorY);
+      for (const watcher of this.squads) {
+        if (watcher.player !== foe || watcher.live === 0) continue;
+        const reach =
+          effectiveSight(this.terrain, UNIT_TYPES[watcher.type].sight, watcher.anchorX, watcher.anchorY) *
+          (1 - hidden);
+        if (d2(watcher.anchorX, watcher.anchorY, target.anchorX, target.anchorY) > reach * reach) continue;
+        if (!hasLineOfSight(this.terrain, watcher.anchorX, watcher.anchorY, target.anchorX, target.anchorY)) {
+          continue;
+        }
+        spotted = true;
+        break;
+      }
+      target.seenBy[foe] = spotted;
+    }
+  }
+
+  /** Enemy squads a player can currently see. */
+  visibleEnemies(player: number): Squad[] {
+    return this.squads.filter((q) => q.player !== player && q.live > 0 && q.seenBy[player]);
+  }
+
   // -- combat -----------------------------------------------------------------
 
   /**
@@ -793,8 +853,12 @@ export class World {
     let bestD = Infinity;
     for (const other of this.squads) {
       if (other.player === q.player || other.live === 0) continue;
+      // No shooting at what the army cannot see.
+      if (!other.seenBy[q.player]) continue;
       const dd = d2(q.anchorX, q.anchorY, other.anchorX, other.anchorY);
-      const reach = range + other.radius;
+      const reach =
+        range * rangeFromHeight(this.terrain, q.anchorX, q.anchorY, other.anchorX, other.anchorY) +
+        other.radius;
       if (dd > reach * reach) continue;
       if (dd < bestD || (dd === bestD && other.id < (target ? target.id : Infinity))) {
         bestD = dd;

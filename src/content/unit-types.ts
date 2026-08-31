@@ -34,6 +34,8 @@ export type UnitType = {
   readonly range: number;
   /** Seconds between attacks. */
   readonly attackInterval: number;
+  /** How far this unit sees on level open ground, in world units. */
+  readonly sight: number;
   /** Point-buy cost (Phase 6). */
   readonly cost: number;
   /** Maximum of this type in one army (Phase 6). */
@@ -53,6 +55,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     defence: 110,
     range: 9,
     attackInterval: 0.9,
+    sight: 320,
     cost: 3,
     maxPerArmy: 8,
   },
@@ -68,6 +71,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     defence: 55,
     range: 95,
     attackInterval: 1.4,
+    sight: 480,
     cost: 2,
     maxPerArmy: 5,
   },
@@ -83,6 +87,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     defence: 45,
     range: 250,
     attackInterval: 1.9,
+    sight: 420,
     cost: 4,
     maxPerArmy: 4,
   },
@@ -98,6 +103,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     defence: 95,
     range: 10,
     attackInterval: 1.2,
+    sight: 520,
     cost: 6,
     maxPerArmy: 3,
   },
@@ -113,6 +119,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     defence: 170,
     range: 9,
     attackInterval: 1.1,
+    sight: 300,
     cost: 7,
     maxPerArmy: 2,
   },

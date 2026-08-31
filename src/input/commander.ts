@@ -77,8 +77,8 @@ export class Commander {
       y: q.anchorY,
       radius: q.radius,
       facing: q.facing,
-      // Phase 4 replaces this with real line-of-sight.
-      visible: true,
+      // Your own squads are always visible; enemies only through the fog.
+      visible: q.player === this.player || q.seenBy[this.player],
     }));
     // Home is the map edge the player deployed on: it is what separates a
     // fighting withdrawal from an ordinary reposition.

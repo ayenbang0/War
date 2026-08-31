@@ -150,7 +150,7 @@ function frame(now: number): void {
 
   const alpha = paused ? 1 : Math.min(accumulator / TICK_DT, 1);
   const clock = now / 1000;
-  renderer.draw(world, cam, prev, alpha, commander.selected, clock);
+  renderer.draw(world, cam, prev, alpha, commander.selected, clock, PLAYER);
   effects.draw(ctx, cam, clock);
   drawInk(ctx, cam, pen.points, commander.preview, commander.pendingRail);
 

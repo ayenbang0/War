@@ -10,6 +10,7 @@
 import { World, TICK_RATE, type Squad } from "../src/sim/world.ts";
 import { MELEE_RANGE } from "../src/sim/combat.ts";
 import { evaluate, score } from "../src/sim/victory.ts";
+import { effectiveSight, hasLineOfSight, rangeFromHeight, FogField } from "../src/sim/vision.ts";
 import { ROUT_THRESHOLD } from "../src/sim/morale.ts";
 import { hashWorld, hashTerrain, hashRngStream, hashPaths } from "../src/sim/hash.ts";
 import { Rng, Stream } from "../src/sim/rng.ts";
@@ -873,6 +874,156 @@ section("victory");
     w.step();
     w.step();
     check("a decided world does not keep ticking", w.tick === frozen);
+  }
+}
+
+// -- 8f. vision and fog --------------------------------------------------------
+
+section("vision");
+{
+  const w = buildWorld();
+  const g = w.terrain;
+
+  // Find open plain, and a wood, to test sight against.
+  let openX = 0;
+  let openY = 0;
+  outer: for (let ty = 20; ty < g.height - 20; ty += 3) {
+    for (let tx = 15; tx < 60; tx++) {
+      let clear = true;
+      for (let dy = -8; dy <= 8 && clear; dy++) {
+        for (let dx = -14; dx <= 14; dx++) if (g.typeAt(tx + dx, ty + dy) !== Terrain.Plain) { clear = false; break; }
+      }
+      if (clear) { openX = (tx + 0.5) * TILE_SIZE; openY = (ty + 0.5) * TILE_SIZE; break outer; }
+    }
+  }
+  check("found open ground to test sight on", openX > 0);
+
+  function place(q: (typeof w.squads)[number], x: number, y: number): void {
+    q.anchorX = x;
+    q.anchorY = y;
+    q.stance = "idle";
+    q.path.length = 0;
+    for (let i = 0; i < q.count; i++) {
+      w.soldiers.x[q.first + i] = x;
+      w.soldiers.y[q.first + i] = y;
+    }
+  }
+
+  const watcher = w.squads.find((q) => q.player === 0 && q.type === "skirmisher")!;
+  const quarry = w.squads.find((q) => q.player === 1 && q.type === "line")!;
+  let n = 0;
+  for (const q of w.squads) {
+    if (q === watcher || q === quarry) continue;
+    place(q, (q.player === 0 ? 260 : 5860) + (n % 4) * 55, (q.player === 0 ? 3760 : 240) + ((n / 4) | 0) * 55);
+    n++;
+  }
+
+  const sight = effectiveSight(g, UNIT_TYPES.skirmisher.sight, openX, openY);
+
+  place(watcher, openX, openY);
+  place(quarry, openX + sight * 0.5, openY);
+  w.step();
+  check("an enemy in the open within sight is spotted", quarry.seenBy[0], "sight " + sight.toFixed(0));
+
+  place(quarry, openX + sight * 2.2, openY);
+  w.step();
+  check("an enemy beyond sight is not spotted", !quarry.seenBy[0]);
+
+  check("vision is symmetric: the watcher is seen too",
+    (() => { place(quarry, openX + sight * 0.4, openY); w.step(); return watcher.seenBy[1]; })());
+
+  // A wood between them must break the line of sight.
+  let forestX = -1;
+  let forestY = -1;
+  for (let ty = 6; ty < g.height - 6 && forestX < 0; ty++) {
+    for (let tx = 6; tx < g.width - 6; tx++) {
+      if (g.typeAt(tx, ty) !== Terrain.Forest) continue;
+      let thick = true;
+      for (let d = -2; d <= 2 && thick; d++) if (g.typeAt(tx + d, ty) !== Terrain.Forest) thick = false;
+      if (thick) { forestX = (tx + 0.5) * TILE_SIZE; forestY = (ty + 0.5) * TILE_SIZE; break; }
+    }
+  }
+  check("found a wood to hide behind", forestX > 0);
+  check("terrain blocks line of sight",
+    !hasLineOfSight(g, forestX - 120, forestY, forestX + 120, forestY));
+  check("open ground does not block line of sight",
+    hasLineOfSight(g, openX - 200, openY, openX + 200, openY));
+  check("standing beside a wood does not blind you",
+    hasLineOfSight(g, forestX, forestY, forestX + 20, forestY));
+
+  // High ground sees further than low.
+  let hi = 0;
+  let lo = 255;
+  let hx = 0, hy = 0, lx = 0, ly = 0;
+  for (let ty = 4; ty < g.height - 4; ty += 2) {
+    for (let tx = 4; tx < g.width - 4; tx += 2) {
+      if (!g.passableAt(tx, ty)) continue;
+      const e = g.elevationAt(tx, ty);
+      if (e > hi) { hi = e; hx = (tx + 0.5) * TILE_SIZE; hy = (ty + 0.5) * TILE_SIZE; }
+      if (e < lo) { lo = e; lx = (tx + 0.5) * TILE_SIZE; ly = (ty + 0.5) * TILE_SIZE; }
+    }
+  }
+  check("high ground sees further than low",
+    effectiveSight(g, 400, hx, hy) > effectiveSight(g, 400, lx, ly),
+    effectiveSight(g, 400, hx, hy).toFixed(0) + " vs " + effectiveSight(g, 400, lx, ly).toFixed(0));
+  check("shooting downhill outranges shooting uphill",
+    rangeFromHeight(g, hx, hy, lx, ly) > rangeFromHeight(g, lx, ly, hx, hy));
+
+  // The fog field must light up around your own army and nowhere else.
+  {
+    const fog = new FogField(g);
+    fog.beginUpdate();
+    fog.stamp(openX, openY, 300);
+    check("fog lights up around your own squads", fog.at(openX, openY) === 1);
+    check("fog stays dark where nobody has been", fog.at(openX + 2000, openY) === 0);
+    fog.beginUpdate();
+    check("ground once seen is remembered, not re-hidden", fog.at(openX, openY) === 2);
+  }
+
+  // You cannot shoot what you cannot see. Rather than poke at internals, this
+  // hides the target behind a real wood and checks the arrows stop.
+  {
+    function fireAt(sepFromWood: number, throughForest: boolean): { shots: number; seen: boolean } {
+      const w2 = buildWorld();
+      const archer = w2.squads.find((q) => q.player === 0 && q.type === "archer")!;
+      const target = w2.squads.find((q) => q.player === 1 && q.type === "line")!;
+      let k = 0;
+      for (const q of w2.squads) {
+        if (q === archer || q === target) continue;
+        // Opposite corners. Parking both armies in one corner has them fighting
+        // each other, and their arrows get counted as the archers' own.
+        const px = (q.player === 0 ? 260 : 5860) + (k % 4) * 55;
+        const py = (q.player === 0 ? 3760 : 240) + ((k / 4) | 0) * 55;
+        q.anchorX = px;
+        q.anchorY = py;
+        q.stance = "idle";
+        for (let i = 0; i < q.count; i++) { w2.soldiers.x[q.first + i] = px; w2.soldiers.y[q.first + i] = py; }
+        k++;
+      }
+      const ax = throughForest ? forestX - sepFromWood : openX;
+      const ay = throughForest ? forestY : openY;
+      const tx = throughForest ? forestX + sepFromWood : openX + 200;
+      const ty = throughForest ? forestY : openY;
+      for (const [q, x, y] of [[archer, ax, ay], [target, tx, ty]] as const) {
+        q.anchorX = x;
+        q.anchorY = y;
+        q.stance = "idle";
+        q.path.length = 0;
+        for (let i = 0; i < q.count; i++) { w2.soldiers.x[q.first + i] = x; w2.soldiers.y[q.first + i] = y; }
+      }
+      let shots = 0;
+      for (let t = 0; t < 60; t++) {
+        w2.step();
+        for (const e of w2.events) if (e.kind === "shot") shots++;
+      }
+      return { shots, seen: target.seenBy[0] };
+    }
+
+    const clear = fireAt(0, false);
+    const hidden = fireAt(110, true);
+    check("archers fire on a target in the open", clear.seen && clear.shots > 0, clear.shots + " shots");
+    check("a wood between them stops both the sighting and the shooting",
+      !hidden.seen && hidden.shots === 0, hidden.shots + " shots, seen=" + hidden.seen);
   }
 }
 

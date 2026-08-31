@@ -76,8 +76,12 @@ Ranged attacks pick a target **squad** first and only then a soldier. The soldie
 
 **Verified:** 97 checks. A mirrored 120-second battle trades 65 vs 80 casualties with morale falling to 93%/84%; mutual kills land simultaneously; archers engage without closing; survivors re-form into a tightened line.
 
-### Phase 4 — Terrain and vision
-Forest/hill/river/plain/fortification behaviors, elevation effects on range and speed, bridges as chokepoints, per-unit vision radius, line-of-sight blocking, fog of war for both sides.
+### Phase 4 — Terrain and vision — **DONE**
+Per-unit sight, line-of-sight blocked by woods and fortifications, three-state fog (unseen / remembered / lit), elevation raising both sight and ranged reach, cover concealing the unit standing in it. Ranged fire is gated on visibility, and only your own orders are drawn on the board.
+
+Both armies run through **one** vision implementation. The AI being subject to the same fog is only credible if there is not a second, more generous code path for it.
+
+Two subtleties: LOS ignores cover within half a tile of either endpoint, or a squad standing in a wood cannot see its own flank; and fog is stamped as discs rather than raycast per cell, because raycasting every cell against every squad is tens of thousands of casts a tick to decide the shading of a picture. Unit visibility, which decides targeting, is exact.
 
 ### Phase 5 — AI
 Aggressive / defensive / maneuver / reactive playstyles, mid-match switching, macro rules (protect objectives, exploit flanks), intent prediction from observed positions under the same fog constraints. Cannot see drawn paths.
