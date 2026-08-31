@@ -11,17 +11,20 @@
 import { World, TICK_DT, TICK_RATE } from "./sim/world.ts";
 import { hashWorld } from "./sim/hash.ts";
 import { PI } from "./sim/math.ts";
+import { TILE_SIZE } from "./sim/terrain.ts";
 import { provingGround } from "./content/levels/proving-ground.ts";
+import { UNIT_TYPES, type UnitTypeId } from "./content/unit-types.ts";
 import { Camera } from "./render/camera.ts";
-import { Renderer, type RenderSnapshot } from "./render/renderer.ts";
+import { Renderer, type Snapshot } from "./render/renderer.ts";
+import { drawInk } from "./render/ink.ts";
 import { CameraControls } from "./input/camera-controls.ts";
+import { Commander } from "./input/commander.ts";
+import { Pen } from "./input/pen.ts";
 
 const canvas = document.getElementById("stage") as HTMLCanvasElement;
 const hud = document.getElementById("hud") as HTMLDivElement;
 const ctx2d = canvas.getContext("2d", { alpha: false });
 if (!ctx2d) throw new Error("2d canvas context unavailable");
-// Bound to its own const: `resize` below is a hoisted declaration, so TS will
-// not carry the null-narrowing of `ctx2d` into it.
 const ctx: CanvasRenderingContext2D = ctx2d;
 
 const level = provingGround;
@@ -31,36 +34,33 @@ const world = new World({
   tilesHigh: level.tilesHigh,
 });
 
-// Phase 0 opening: two forces deploy and march toward the river. Identical to
-// the scripted run in tools/headless.ts, so what renders here is the same
-// trajectory the determinism harness verifies.
+/** The spec's stated cap: about fifteen squads a side. */
+const ARMY: readonly UnitTypeId[] = [
+  "line", "line", "line", "line", "line",
+  "skirmisher", "skirmisher", "skirmisher", "skirmisher",
+  "archer", "archer", "archer",
+  "horse", "horse",
+  "guard",
+];
+
 for (const zone of level.deployment) {
-  for (let i = 0; i < 8; i++) {
-    const x = (zone.x + 4 + (i % 2) * 8) * 32;
-    const y = (zone.y + 6 + Math.floor(i / 2) * 12) * 32;
-    world.spawnUnit(zone.player, x, y, zone.player === 0 ? 0 : PI);
+  for (let i = 0; i < ARMY.length; i++) {
+    const x = (zone.x + 4 + (i % 3) * 7) * TILE_SIZE;
+    const y = (zone.y + 5 + ((i / 3) | 0) * 10) * TILE_SIZE;
+    world.spawnSquad(zone.player, ARMY[i], x, y, zone.player === 0 ? 0 : PI);
   }
 }
-for (const unit of world.units) {
-  const toward = unit.player === 0 ? 1 : -1;
-  world.orders.issue(
-    {
-      kind: "move",
-      unit: unit.id,
-      path: [unit.x + toward * 900, unit.y - 260, unit.x + toward * 1700, unit.y + 320],
-    },
-    unit.player,
-    10 + (unit.id % 5) * 3,
-  );
-}
 
+const PLAYER = 0;
 const cam = new Camera(world.terrain.worldWidth, world.terrain.worldHeight);
-cam.x = world.terrain.worldWidth * 0.25;
+cam.x = level.deployment[0].x * TILE_SIZE + 500;
 cam.y = world.terrain.worldHeight * 0.5;
-cam.zoom = 0.7;
+cam.zoom = 0.85;
 
 const renderer = new Renderer(ctx, world.terrain);
 const controls = new CameraControls(canvas, cam);
+const commander = new Commander(world, PLAYER);
+const pen = new Pen(canvas, cam, commander);
 
 let dpr = 1;
 function resize(): void {
@@ -83,24 +83,34 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     paused = !paused;
   } else if (e.code === "Period" && paused) {
-    // Single-step while paused: invaluable for eyeballing sim behaviour.
     snapshotInto(prev);
     world.step();
   }
 });
 
-/** Positions at the previous tick, for render interpolation. */
-let prev: RenderSnapshot = new Map();
-function snapshotInto(target: RenderSnapshot): void {
-  target.clear();
-  for (const u of world.units) target.set(u.id, { x: u.x, y: u.y, facing: u.facing });
+/** State at the previous tick, for render interpolation. */
+const prev: Snapshot = {
+  soldiers: {
+    x: new Float64Array(world.soldiers.x.length),
+    y: new Float64Array(world.soldiers.y.length),
+    facing: new Float64Array(world.soldiers.facing.length),
+  },
+  squads: new Map(),
+};
+
+function snapshotInto(target: Snapshot): void {
+  target.soldiers.x.set(world.soldiers.x);
+  target.soldiers.y.set(world.soldiers.y);
+  target.soldiers.facing.set(world.soldiers.facing);
+  target.squads.clear();
+  for (const q of world.squads) {
+    target.squads.set(q.id, { x: q.anchorX, y: q.anchorY, facing: q.facing });
+  }
 }
 snapshotInto(prev);
 
-// Dev-only handle for poking at state from the console. Stripped from
-// production builds by the import.meta.env.DEV guard.
 if (import.meta.env.DEV) {
-  (window as unknown as { war: unknown }).war = { world, cam, level, hashWorld };
+  (window as unknown as { war: unknown }).war = { world, cam, level, commander, pen, hashWorld, UNIT_TYPES };
 }
 
 let last = performance.now();
@@ -109,8 +119,8 @@ let fps = 0;
 let hudTimer = 0;
 let cachedHash = hashWorld(world);
 
-/** Beyond this many ticks in one frame, give up and let the sim fall behind
- *  rather than spiral: a long stall must not turn into a freeze. */
+/** Beyond this many ticks in one frame, let the sim fall behind rather than
+ *  spiral: a long stall must not turn into a freeze. */
 const MAX_STEPS_PER_FRAME = 5;
 
 function frame(now: number): void {
@@ -133,7 +143,8 @@ function frame(now: number): void {
   }
 
   const alpha = paused ? 1 : Math.min(accumulator / TICK_DT, 1);
-  renderer.draw(world, cam, prev, alpha);
+  renderer.draw(world, cam, prev, alpha, commander.selected);
+  drawInk(ctx, cam, pen.points, commander.preview);
 
   hudTimer += dtReal;
   if (hudTimer > 0.5) {
@@ -141,17 +152,17 @@ function frame(now: number): void {
     cachedHash = hashWorld(world);
   }
   const t = world.tick / TICK_RATE;
+  const mine = world.squads.filter((q) => q.player === PLAYER);
+  const sel = commander.selected.length;
   hud.textContent = [
     level.name + (paused ? "   [PAUSED]" : ""),
-    "t     " + String(Math.floor(t / 60)).padStart(2, "0") + ":" +
+    "t      " + String(Math.floor(t / 60)).padStart(2, "0") + ":" +
       (t % 60).toFixed(1).padStart(4, "0") + " / " + level.duration / 60 + ":00",
-    "tick  " + world.tick,
-    "hash  " + cachedHash,
-    "units " + world.units.length,
-    "zoom  " + cam.zoom.toFixed(2) + "   fps " + fps.toFixed(0),
-    "",
-    "drag mid/right pan - wheel zoom",
-    "WASD pan - space pause - . step",
+    "tick   " + world.tick + "   " + cachedHash,
+    "squads " + mine.length + "   soldiers " + world.soldiers.count,
+    "sel    " + (sel > 0 ? sel + " squad" + (sel > 1 ? "s" : "") : "none") +
+      (pen.lastAction ? "   > " + pen.lastAction : ""),
+    "zoom   " + cam.zoom.toFixed(2) + "   fps " + fps.toFixed(0),
   ].join("\n");
 
   requestAnimationFrame(frame);

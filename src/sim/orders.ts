@@ -7,19 +7,33 @@
  * identical order stream. Nothing in render/ or input/ may touch world state
  * directly -- it emits an Order instead.
  *
- * The union already covers all six gestures from the spec. Phase 0 implements
- * Move only; the rest are accepted and ignored until their phase lands.
+ * The six bodies map one-to-one onto the six pen gestures in spec section 5.2.
+ * The recognizer in input/gestures.ts produces exactly these and nothing else,
+ * so the gesture vocabulary and the simulation's command vocabulary cannot
+ * drift apart.
  */
 
-export type FormationShape = "line" | "column" | "wedge" | "square" | "loose" | "tight";
+import type { FormationShape } from "./formations.ts";
 
 export type OrderBody =
-  | { kind: "move"; unit: number; path: readonly number[] }
-  | { kind: "attack"; unit: number; target: number; path: readonly number[] }
-  | { kind: "hold"; unit: number; x: number; y: number; radius: number }
-  | { kind: "formation"; unit: number; shape: FormationShape }
-  | { kind: "retreat"; unit: number; path: readonly number[] }
-  | { kind: "patrol"; unit: number; path: readonly number[] };
+  /** Walk the route. Paths are world-space [x0, y0, x1, y1, ...]. */
+  | { kind: "move"; squad: number; path: readonly number[] }
+  /** Close on an enemy squad and engage it. */
+  | { kind: "attack"; squad: number; target: number; path: readonly number[] }
+  /** Occupy an area and stand: no pursuit beyond radius. */
+  | { kind: "hold"; squad: number; x: number; y: number; radius: number }
+  /** Re-form into a different shape in place. */
+  | { kind: "formation"; squad: number; shape: FormationShape }
+  /** Disengage and fall back along the route. */
+  | { kind: "retreat"; squad: number; path: readonly number[] }
+  /** Walk the circuit forever, reversing at the ends of an open route. */
+  | { kind: "patrol"; squad: number; path: readonly number[] };
+
+export type OrderKind = OrderBody["kind"];
+
+export const ORDER_KINDS: readonly OrderKind[] = [
+  "move", "attack", "hold", "formation", "retreat", "patrol",
+];
 
 export type Order = OrderBody & {
   /** Tick at which this order takes effect. */
@@ -40,7 +54,7 @@ export class OrderQueue {
   private pending: Order[] = [];
   private seqByPlayer = new Map<number, number>();
 
-  /** Stamp and enqueue an order for `tick`. Returns the stamped order. */
+  /** Stamp and enqueue an order for tick. Returns the stamped order. */
   issue(body: OrderBody, player: number, tick: number): Order {
     const seq = (this.seqByPlayer.get(player) ?? 0) + 1;
     this.seqByPlayer.set(player, seq);
@@ -54,7 +68,7 @@ export class OrderQueue {
     this.pending.push(order);
   }
 
-  /** Remove and return every order due at or before `tick`, in canonical order. */
+  /** Remove and return every order due at or before tick, in canonical order. */
   drain(tick: number): Order[] {
     if (this.pending.length === 0) return [];
     const due: Order[] = [];

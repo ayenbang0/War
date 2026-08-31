@@ -41,8 +41,17 @@ The split exists because a single anchor that legitimately moves every commit tr
 
 The same hash function detects netplay desync in Phase 10, and the stable tier tells you which layer drifted.
 
-## Movement invariant
-A unit may never advance more than half a tile without re-testing the ground beneath it (`MAX_SUBSTEP` in `world.ts`). Consuming a whole waypoint unchecked lets a unit land wherever the waypoint points — including mid-river — whenever that waypoint falls inside one tick's step budget. Dense paths are not hypothetical: a drawn pen stroke is a dense polyline. Any future pathing layer must keep this bounded-substep shape.
+## Movement invariants
+**Everything that moves goes through `advanceToward` in `sim/movement.ts`.** A mover may never advance more than half a tile without re-testing the ground beneath it. Consuming a whole waypoint unchecked lets a mover land wherever the waypoint points — including mid-river — whenever that waypoint falls inside one tick's step budget. Dense paths are not hypothetical: a drawn pen stroke is a dense polyline. There are two integrators (squad anchors and soldier steering) and they share this function on purpose; writing `position += velocity * dt` anywhere reintroduces the bug one layer down.
+
+**Movement is three layers and they are never conflated:** squad route (A*) → slot assignment → local avoidance. Collapsing any two is how formation movement turns to mush.
+
+**`SEPARATION_RADIUS` must stay below the tightest rank spacing any formation produces.** If soldiers push each other from further than they actually stand, a settled formation shoves itself apart forever and never reaches equilibrium with the slot pull.
+
+## Pen control
+The **left pointer button is the pen** and nothing else may bind it. Strokes are converted to world space at capture time, and every recognizer threshold is in world units — a stroke must mean the same thing at zoom 0.35 and at 2.4.
+
+`input/gestures.ts` is pure (no DOM, no state) so the whole discrimination table is testable headless. The corpus in `tools/gesture-corpus.ts` feeds a **confusion matrix** that must stay diagonal; per-case tests hide exactly the pair collisions that matter (hold/patrol, formation/hold, move/retreat). Add strokes to the corpus when adding a gesture.
 
 ## Art direction
 Map-table wargame aesthetic: parchment ground, relief shading, topographic contours, unit counters, ink-drawn strokes. All procedurally drawn — there are no sprite assets in this project.

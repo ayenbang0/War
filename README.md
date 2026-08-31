@@ -26,13 +26,30 @@ npm test
 runs the simulation headless under Node and checks a scripted 90-second match
 against a committed state hash.
 
-## Controls (Phase 0)
+## Controls
 
-Middle or right drag pans, as do WASD/arrows and pushing the screen edge. The
-wheel zooms about the cursor. `space` pauses; `.` single-steps while paused.
+The **left button is the pen**, and it is the only way to command the army.
+Draw from one of your squads and it becomes the subject of the order:
 
-The **left button is deliberately unbound** — it belongs to the pen, and Phase 2
-gives it the six gesture strokes.
+| Draw | Order |
+|---|---|
+| A line out to open ground | **move** |
+| A line ending on an enemy | **attack** |
+| A line back toward your own edge | **retreat** |
+| A small closed loop on the map | **hold** that area |
+| A large closed circuit | **patrol** it |
+| A glyph *on top of* a squad | **re-form** it |
+| A tap on a squad / on the ground | select / clear |
+
+Formation glyphs, drawn centred on the squad: a stroke **across** its front
+forms line, **along** its axis forms column, a **chevron** forms wedge, a
+**box** forms square.
+
+The interpretation appears as a labelled ghost while you draw — release to
+commit, `esc` to abandon.
+
+Camera: middle or right drag, WASD/arrows, or push the screen edge; wheel zooms
+about the cursor. `space` pauses, `.` single-steps while paused.
 
 ## Why the simulation looks over-engineered
 

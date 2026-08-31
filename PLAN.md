@@ -43,15 +43,21 @@ Vite + TS scaffold, directory boundaries, `sim/math.ts` (polynomial trig), `sim/
 
 **Verified:** 22 headless checks pass; the browser reproduces Node's golden hash `f57db420` bit-for-bit over a scripted 1800-tick run; sim cost is 1.0 ms/frame (6% of a 60 fps budget) and 1800 ticks execute in 11 ms.
 
-### Phase 1 — Squads, formations, movement
-Squad + soldier entities, per-soldier HP, formation templates (line/column/wedge/square/loose/tight), the three movement layers, spatial hash, terrain movement cost, path smoothing (Ramer–Douglas–Peucker).
-**Runnable:** drag a squad, it marches across terrain holding formation.
+### Phase 1 — Squads, formations, movement — **DONE**
+Squad and per-soldier entities (soldiers in struct-of-arrays), six formation templates, the three movement layers kept strictly separate, uniform-grid spatial hash, A* with deterministic tie-breaks and string pulling, terrain movement cost, the unit roster.
 
-### Phase 2 — Pen control
-Pointer-event stroke capture, stroke simplification, the six-gesture recognizer per the table above, ghost preview, ink rendering, order visualization (arrows, hold rings, patrol circuits).
-**Runnable:** the game is controlled entirely by drawing.
+**Verified:** 460 soldiers at **0.20 ms/tick** (248x real time); squads on open ground hold cohesion > 0.85 through a march and a wheel; formations compress around impassable terrain instead of stranding men; no soldier ever ends a tick on water, including via dense paths.
 
-### Phase 3 — Combat, morale, victory
+### Phase 2 — Pen control — **DONE**
+Pointer-event capture on the left button (world-space from the first sample), RDP simplification, the six-gesture recognizer, ghost preview with commit-on-release, ink rendering, per-order visualization, selection.
+
+**Verified:** the confusion matrix over 85 synthetic jittered strokes is **fully diagonal** — all six gestures plus four formation glyphs and selection, across seven squad facings. All six drive the sim end-to-end through the real pointer path.
+
+Two rules earned their keep and should not be relaxed:
+- **The subject rule.** A stroke starting on one of your squads takes that squad as subject and selects it, so ordering is one motion. Anchor tolerance is in **world units, never screen pixels** — otherwise the same stroke means different things at different zooms. Ties break on squad id.
+- **Formation glyphs are recognized only when centred ON the squad.** That is what keeps a drawn box from meaning both "form square" and "hold this area". Frontage is deliberately *not* encoded in stroke length: extent is already the hold/patrol discriminator, and overloading it would make a slightly-too-long line flip between two orders.
+
+### Phase 3 — Combat, morale, victory — NEXT
 Per-soldier melee/ranged resolution, frontline engagement and rear ranks, formation deformation under contact and re-forming after, squad morale (casualties, flanking, outnumbering, terrain), global morale aggregation, rout, 15-minute timer, win/loss.
 **Runnable:** a complete match against a placeholder AI.
 *Known design hole to revisit here:* "higher global morale at timer" rewards turtling. Likely fix is morale decay out of contact, or a different tiebreak. Flagged, not solved.

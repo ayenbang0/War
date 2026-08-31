@@ -43,26 +43,40 @@ export function hashWorld(world: World): string {
   h = mixU32(h, world.tick);
   h = mixU32(h, world.seed);
   h = mixU32(h, world.terrain.revision);
-  h = mixU32(h, world.units.length);
+  h = mixU32(h, world.squads.length);
 
-  for (const u of world.units) {
-    h = mixU32(h, u.id);
-    h = mixU32(h, u.player);
-    h = mixF64(h, u.x);
-    h = mixF64(h, u.y);
-    h = mixF64(h, u.facing);
-    h = mixF64(h, u.strength);
-    h = mixF64(h, u.morale);
-    h = mixU32(h, u.path.length);
-    for (const p of u.path) h = mixF64(h, p);
+  for (const q of world.squads) {
+    h = mixU32(h, q.id);
+    h = mixU32(h, q.player);
+    h = mixF64(h, q.anchorX);
+    h = mixF64(h, q.anchorY);
+    h = mixF64(h, q.facing);
+    h = mixF64(h, q.morale);
+    h = mixU32(h, q.target);
+    h = mixU32(h, q.path.length);
+    for (const p of q.path) h = mixF64(h, p);
+  }
+
+  // Soldiers are the bulk of the state and the thing most likely to drift, so
+  // they are hashed individually rather than via a squad-level summary.
+  const s = world.soldiers;
+  h = mixU32(h, s.count);
+  for (let i = 0; i < s.count; i++) {
+    h = mixU32(h, s.alive[i]);
+    if (s.alive[i] !== 1) continue;
+    h = mixU32(h, s.slot[i]);
+    h = mixF64(h, s.x[i]);
+    h = mixF64(h, s.y[i]);
+    h = mixF64(h, s.facing[i]);
+    h = mixF64(h, s.hp[i]);
   }
 
   for (const rng of [world.rng.combat, world.rng.morale, world.rng.ai, world.rng.spawn]) {
-    const s = rng.snapshot();
-    h = mixU32(h, s.a);
-    h = mixU32(h, s.b);
-    h = mixU32(h, s.c);
-    h = mixU32(h, s.d);
+    const st = rng.snapshot();
+    h = mixU32(h, st.a);
+    h = mixU32(h, st.b);
+    h = mixU32(h, st.c);
+    h = mixU32(h, st.d);
   }
 
   return (h >>> 0).toString(16).padStart(8, "0");
@@ -71,11 +85,11 @@ export function hashWorld(world: World): string {
 /**
  * Fingerprint of the terrain generator's output alone.
  *
- * Deliberately separate from the world hash. World state is *expected* to change
+ * Deliberately separate from the world hash. World state is expected to change
  * as phases add movement, combat and morale, so its golden gets regenerated
  * often -- which would train everyone to regenerate reflexively. Terrain
  * generation is not expected to change, so a move here is unambiguously a bug
- * (or a deliberate, loud generator change) rather than routine drift.
+ * rather than routine drift.
  */
 export function hashTerrain(grid: TerrainGrid): string {
   let h = FNV_OFFSET | 0;
@@ -88,13 +102,21 @@ export function hashTerrain(grid: TerrainGrid): string {
 }
 
 /**
- * Fingerprint of a PRNG stream's first `pulls` outputs. Consumes the generator,
- * so pass a freshly created one. Like hashTerrain, this must never change: it
- * pins the arithmetic in rng.ts independently of any gameplay system, so a
- * Phase 10 desync can be attributed to the right layer.
+ * Fingerprint of a PRNG stream's first pulls outputs. Consumes the generator,
+ * so pass a freshly created one.
  */
 export function hashRngStream(rng: Rng, pulls: number): string {
   let h = FNV_OFFSET | 0;
   for (let i = 0; i < pulls; i++) h = mixU32(h, rng.nextU32());
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+/** Fingerprint of a set of route results. Pins pathfinding independently. */
+export function hashPaths(paths: readonly (readonly number[])[]): string {
+  let h = FNV_OFFSET | 0;
+  for (const p of paths) {
+    h = mixU32(h, p.length);
+    for (const v of p) h = mixF64(h, v);
+  }
   return (h >>> 0).toString(16).padStart(8, "0");
 }

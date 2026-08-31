@@ -1,0 +1,115 @@
+/**
+ * The pen: pointer capture on the LEFT button, which this game reserves
+ * entirely for drawing (camera lives on middle/right drag and the keyboard).
+ *
+ * Points are converted to WORLD space as they arrive, not screen space. That
+ * matters for more than convenience: the recognizer's thresholds are all in
+ * world units, so a stroke drawn at zoom 0.35 and the same stroke drawn at 2.4
+ * must classify identically. Converting late would make zoom change meaning.
+ *
+ * Works with a mouse, a trackpad, or a stylus -- Pointer Events unify all
+ * three. Tuned for the mouse, which is jitterier than a pen and is what most
+ * players will actually use.
+ */
+
+import type { Camera } from "../render/camera.ts";
+import type { Point } from "./gestures.ts";
+import type { Commander } from "./commander.ts";
+
+/** Minimum world-space travel before a new sample is kept. */
+const MIN_SAMPLE_DISTANCE = 3;
+/** Hard cap so a slow, meandering stroke cannot grow without bound. */
+const MAX_POINTS = 600;
+
+export class Pen {
+  /** The stroke being drawn right now, in world space. Empty when idle. */
+  points: Point[] = [];
+  drawing = false;
+  /** Label of the last committed gesture, for the HUD. */
+  lastAction = "";
+
+  private readonly canvas: HTMLCanvasElement;
+  private readonly cam: Camera;
+  private readonly commander: Commander;
+  private pointerId: number | null = null;
+
+  constructor(canvas: HTMLCanvasElement, cam: Camera, commander: Commander) {
+    this.canvas = canvas;
+    this.cam = cam;
+    this.commander = commander;
+    canvas.addEventListener("pointerdown", this.onDown);
+    canvas.addEventListener("pointermove", this.onMove);
+    canvas.addEventListener("pointerup", this.onUp);
+    canvas.addEventListener("pointercancel", this.onCancel);
+    window.addEventListener("keydown", this.onKey);
+  }
+
+  private toWorld(e: PointerEvent): Point {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: this.cam.screenToWorldX(e.clientX - rect.left),
+      y: this.cam.screenToWorldY(e.clientY - rect.top),
+    };
+  }
+
+  private onDown = (e: PointerEvent): void => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    this.drawing = true;
+    this.pointerId = e.pointerId;
+    this.points = [this.toWorld(e)];
+    // Capture keeps a stroke alive if the pen leaves the canvas mid-draw. It
+    // throws for a pointer the browser is not actually tracking, which happens
+    // with synthetic events, so a failure here must not abort the stroke.
+    try {
+      this.canvas.setPointerCapture(e.pointerId);
+    } catch {
+      /* not a live pointer; the stroke still works */
+    }
+    this.commander.update(this.points);
+  };
+
+  private onMove = (e: PointerEvent): void => {
+    if (!this.drawing || e.pointerId !== this.pointerId) return;
+    const p = this.toWorld(e);
+    const last = this.points[this.points.length - 1];
+    if (Math.hypot(p.x - last.x, p.y - last.y) < MIN_SAMPLE_DISTANCE) return;
+    if (this.points.length < MAX_POINTS) this.points.push(p);
+    // Re-classify every sample so the ghost preview tracks the pen. The
+    // recognizer is pure, so this is just arithmetic over a few hundred points.
+    this.commander.update(this.points);
+  };
+
+  private onUp = (e: PointerEvent): void => {
+    if (!this.drawing || e.pointerId !== this.pointerId) return;
+    this.release(e.pointerId);
+    this.lastAction = this.commander.commit(this.points);
+    this.points = [];
+  };
+
+  private onCancel = (e: PointerEvent): void => {
+    if (e.pointerId !== this.pointerId) return;
+    this.release(e.pointerId);
+    this.points = [];
+    this.commander.cancel();
+  };
+
+  /** Escape abandons a stroke mid-draw without issuing anything. */
+  private onKey = (e: KeyboardEvent): void => {
+    if (e.key !== "Escape" || !this.drawing) return;
+    if (this.pointerId !== null) this.release(this.pointerId);
+    this.points = [];
+    this.commander.cancel();
+    this.lastAction = "cancelled";
+  };
+
+  private release(id: number): void {
+    this.drawing = false;
+    this.pointerId = null;
+    try {
+      if (this.canvas.hasPointerCapture(id)) this.canvas.releasePointerCapture(id);
+    } catch {
+      /* nothing to release */
+    }
+  }
+}

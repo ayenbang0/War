@@ -4,16 +4,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #d9cbb0; }
-  canvas { display: block; touch-action: none; cursor: grab; }
+  canvas { display: block; touch-action: none; cursor: crosshair; }
   canvas.panning { cursor: grabbing; }
-  #hud {
-    position: fixed; left: 12px; top: 12px;
-    font: 12px/1.5 ui-monospace, "Cascadia Mono", Menlo, monospace;
-    color: #4a3f30; background: rgba(233,224,205,.82);
-    border: 1px solid #b3a68a; padding: 8px 10px; border-radius: 3px;
-    pointer-events: none; white-space: pre;
+  .panel {
+    position: fixed;
+    font: 11px/1.45 ui-monospace, "Cascadia Mono", Menlo, monospace;
+    color: #4a3f30;
+    background: rgba(235, 227, 209, 0.78);
+    border: 1px solid rgba(120, 102, 74, 0.4);
+    padding: 7px 9px;
+    border-radius: 3px;
+    pointer-events: none;
+    white-space: pre;
   }
+  #hud { left: 12px; top: 12px; }
+  #legend { left: 12px; bottom: 12px; opacity: 0.72; font-size: 10px; line-height: 1.5; }
+  #legend b { font-weight: 600; color: #2f2718; }
 </style>
 <canvas id="stage"></canvas>
-<div id="hud"></div>
+<div id="hud" class="panel"></div>
+<div id="legend" class="panel"><b>PEN</b>  left-drag. draw from a squad to order it.
+  line out <b>move</b>     end on enemy <b>attack</b>     back toward home <b>retreat</b>
+  small loop <b>hold</b>   large circuit <b>patrol</b>    tap squad <b>select</b>, tap ground <b>clear</b>
+  glyph drawn ON a squad re-forms it:  across <b>line</b>  along <b>column</b>  chevron <b>wedge</b>  box <b>square</b>
+<b>CAMERA</b>  middle/right-drag or WASD pan   wheel zoom   space pause   . step   esc cancel stroke</div>
 <script type="module" src="/src/main.ts"></script>
