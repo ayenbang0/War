@@ -12,6 +12,9 @@ import { MELEE_RANGE } from "../src/sim/combat.ts";
 import { evaluate, score } from "../src/sim/victory.ts";
 import { effectiveSight, hasLineOfSight, rangeFromHeight, FogField } from "../src/sim/vision.ts";
 import { PLAYSTYLES } from "../src/sim/ai.ts";
+import { DOCTRINES, DOCTRINE_IDS } from "../src/content/doctrines.ts";
+import { DEFAULT_BUDGET, MAX_SQUADS, cost, defaultArmy, validate } from "../src/content/army.ts";
+import { statsFor } from "../src/sim/world.ts";
 import { ROUT_THRESHOLD } from "../src/sim/morale.ts";
 import { hashWorld, hashTerrain, hashRngStream, hashPaths } from "../src/sim/hash.ts";
 import { Rng, Stream } from "../src/sim/rng.ts";
@@ -1124,6 +1127,104 @@ section("ai");
   console.log("  ai match    " + (ticks / TICK_RATE).toFixed(0) + "s, " + (startMen - endMen) + " dead");
   console.log("  postures    " + [...stylesSeen].join(", "));
   if (w.outcome) console.log("  outcome     " + w.outcome.reason + ": " + w.outcome.detail);
+}
+
+// -- 8h. army building ---------------------------------------------------------
+
+section("army");
+{
+  const army = defaultArmy();
+  const v = validate(army);
+  check("the default army is legal", v.ok, v.problems.join("; "));
+  check("the default army spends most of its budget",
+    v.spent > DEFAULT_BUDGET * 0.75 && v.spent <= DEFAULT_BUDGET,
+    v.spent + "/" + DEFAULT_BUDGET);
+  check("the default army fits the squad cap", army.squads.length <= MAX_SQUADS,
+    army.squads.length + " squads");
+
+  check("over budget is rejected",
+    !validate({ doctrine: "maneuver", squads: new Array(15).fill("guard") }).ok);
+  check("too many squads is rejected",
+    validate({ doctrine: "maneuver", squads: new Array(20).fill("line") }, 999)
+      .problems.some((p2) => p2.includes("too many squads")));
+  check("a single type cannot dominate",
+    validate({ doctrine: "maneuver", squads: new Array(9).fill("line") }, 999)
+      .problems.some((p2) => p2.includes("Line Infantry")));
+  check("an empty army is rejected", !validate({ doctrine: "maneuver", squads: [] }).ok);
+  check("cost adds up", cost({ doctrine: "maneuver", squads: ["line", "horse"] }) ===
+    UNIT_TYPES.line.cost + UNIT_TYPES.horse.cost);
+
+  // Every doctrine must be a trade. A doctrine that is better at everything is
+  // not a choice, it is the answer.
+  let dominant = "";
+  for (const a of DOCTRINE_IDS) {
+    for (const b of DOCTRINE_IDS) {
+      if (a === b) continue;
+      const A = DOCTRINES[a];
+      const B = DOCTRINES[b];
+      const keys = ["speed", "turnRate", "attack", "defence", "hp", "sight", "magic"] as const;
+      const better = keys.every((k) => A[k] >= B[k]) && A.resolve <= B.resolve;
+      if (better) dominant = a + " dominates " + b;
+    }
+  }
+  check("no doctrine is strictly better than another", dominant === "", dominant);
+
+  // Doctrine has to actually reach the squads.
+  const aggr = statsFor("line", "aggressive");
+  const def = statsFor("line", "defensive");
+  check("aggressive trades armour for pace", aggr.speed > def.speed && aggr.defence < def.defence,
+    aggr.speed.toFixed(1) + "/" + aggr.defence.toFixed(0) + " vs " +
+      def.speed.toFixed(1) + "/" + def.defence.toFixed(0));
+  check("maneuver re-forms fastest",
+    DOCTRINE_IDS.every((d) => DOCTRINES[d].turnRate <= DOCTRINES.maneuver.turnRate));
+  check("magic trades physical strength for it",
+    DOCTRINES.magic.magic > 1 && DOCTRINES.magic.attack < 1);
+
+  // A doctrine chosen before spawn must be baked into the squads it produces.
+  {
+    const w = new World({
+      seed: 7, tilesWide: 40, tilesHigh: 40, soldierCapacity: 64,
+    });
+    w.doctrine[0] = "aggressive";
+    w.doctrine[1] = "defensive";
+    const fast = w.spawnSquad(0, "line", 400, 400, 0);
+    const tough = w.spawnSquad(1, "line", 800, 400, M.PI);
+    check("each army carries its own doctrine",
+      fast.stats.speed > tough.stats.speed && fast.stats.defence < tough.stats.defence,
+      fast.stats.speed.toFixed(1) + " vs " + tough.stats.speed.toFixed(1));
+    check("doctrine reaches soldier hit points",
+      w.soldiers.hp[tough.first] > w.soldiers.hp[fast.first]);
+  }
+
+  // Deployment holds the world until the player gives the off.
+  {
+    const w = new World({ seed: 11, tilesWide: 40, tilesHigh: 40, soldierCapacity: 64 });
+    w.deploying = true;
+    const q = w.spawnSquad(0, "line", 400, 400, 0);
+    // An army with no opponent counts as having annihilated it, which ends the
+    // match on the first tick and would make this look like a deployment bug.
+    w.spawnSquad(1, "line", 1150, 400, M.PI);
+    w.orders.issue({ kind: "move", squad: q.id, path: [900, 400] }, 0, 0);
+    for (let t = 0; t < 40; t++) w.step();
+    check("deployment freezes the match", w.tick === 0 && q.anchorX === 400, "tick " + w.tick);
+    w.deploying = false;
+    for (let t = 0; t < 40; t++) w.step();
+    check("the match runs once deployment ends", w.tick === 40 && q.anchorX > 400,
+      "tick " + w.tick + ", x " + q.anchorX.toFixed(0));
+  }
+
+  // Capacity is guarded: writing past a typed array is a silent no-op.
+  {
+    const w = new World({ seed: 3, tilesWide: 30, tilesHigh: 30, soldierCapacity: 24 });
+    w.spawnSquad(0, "line", 200, 200, 0);
+    let threw = false;
+    try {
+      w.spawnSquad(0, "line", 300, 200, 0);
+    } catch {
+      threw = true;
+    }
+    check("overrunning soldier capacity throws instead of failing silently", threw);
+  }
 }
 
 // -- 9. gestures ---------------------------------------------------------------

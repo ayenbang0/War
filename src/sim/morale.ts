@@ -56,6 +56,8 @@ export type MoraleInputs = {
   /** Terrain cover fraction under the squad. */
   readonly cover: number;
   readonly dt: number;
+  /** Doctrine multiplier on casualty shock. Below 1 means steadier troops. */
+  readonly resolve: number;
 };
 
 /** One tick of morale change for a squad. */
@@ -65,7 +67,7 @@ export function nextMorale(current: number, i: MoraleInputs): number {
   // Both scale by roster fraction: losing three men out of ten is a rout in
   // the making, losing three out of twenty is a bad morning.
   if (i.roster > 0) {
-    if (i.casualties > 0) m -= SHOCK_PER_CASUALTY * (i.casualties / i.roster);
+    if (i.casualties > 0) m -= SHOCK_PER_CASUALTY * i.resolve * (i.casualties / i.roster);
     if (i.kills > 0) m += HEART_PER_KILL * (i.kills / i.roster);
   }
 

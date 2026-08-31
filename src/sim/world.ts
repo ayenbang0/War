@@ -24,6 +24,7 @@ import { advanceToward } from "./movement.ts";
 import { SpatialHash } from "./spatial.ts";
 import { findPath } from "./pathfind.ts";
 import { UNIT_TYPES, type UnitTypeId } from "../content/unit-types.ts";
+import { DOCTRINES, type DoctrineId } from "../content/doctrines.ts";
 import { MELEE_RANGE, d2, hitDamage, isFlanking, nearestInSquad, spreadTarget } from "./combat.ts";
 import { globalMorale, nextMorale, ROUT_THRESHOLD } from "./morale.ts";
 import { evaluate, type ArmyState, type Outcome } from "./victory.ts";
@@ -69,6 +70,44 @@ const RECOVER_HP_FRACTION_PER_SEC = 0.04;
  */
 export const RECOVER_LOCK_SECONDS = 30;
 
+/**
+ * A squad's effective stats, doctrine already applied.
+ *
+ * Baked at spawn rather than looked up in the hot loops. Combat reads these
+ * thousands of times a tick and a doctrine cannot change mid-match, so folding
+ * the multipliers in every time would be pure cost for an answer that never
+ * changes.
+ */
+export type SquadStats = {
+  readonly hp: number;
+  readonly speed: number;
+  readonly turnRate: number;
+  readonly attack: number;
+  readonly defence: number;
+  readonly range: number;
+  readonly attackInterval: number;
+  readonly sight: number;
+  readonly resolve: number;
+  readonly magic: number;
+};
+
+export function statsFor(type: UnitTypeId, doctrine: DoctrineId): SquadStats {
+  const u = UNIT_TYPES[type];
+  const d = DOCTRINES[doctrine];
+  return {
+    hp: u.hp * d.hp,
+    speed: u.speed * d.speed,
+    turnRate: u.turnRate * d.turnRate,
+    attack: u.attack * d.attack,
+    defence: u.defence * d.defence,
+    range: u.range,
+    attackInterval: u.attackInterval,
+    sight: u.sight * d.sight,
+    resolve: d.resolve,
+    magic: d.magic,
+  };
+}
+
 export type Stance = "idle" | "move" | "attack" | "hold" | "retreat" | "patrol" | "recover";
 
 /** A blow struck this tick, for the renderer to animate. Never read by the sim. */
@@ -98,6 +137,8 @@ export type Squad = {
   readonly id: number;
   readonly player: number;
   readonly type: UnitTypeId;
+  /** Doctrine-adjusted stats, fixed at spawn. */
+  readonly stats: SquadStats;
   /** Formation centre. Soldiers orbit this, they do not define it. */
   anchorX: number;
   anchorY: number;
@@ -203,6 +244,11 @@ export class World {
   readonly duration: number;
   /** Set once the match is decided; the world then stops advancing. */
   outcome: Outcome | null = null;
+  /**
+   * While true the world accepts placement but does not advance: the
+   * deployment phase (spec section 3.3). Orders and combat wait for the off.
+   */
+  deploying = false;
 
   /**
    * Presentation-only output channel, cleared at the start of every tick.
@@ -258,8 +304,12 @@ export class World {
   }
 
   /** Create a squad at full strength, its soldiers already standing in formation. */
+  /** Doctrine per player, chosen before deployment. */
+  readonly doctrine: [DoctrineId, DoctrineId] = ["maneuver", "maneuver"];
+
   spawnSquad(player: number, type: UnitTypeId, x: number, y: number, facing: number): Squad {
     const spec = UNIT_TYPES[type];
+    const stats = statsFor(type, this.doctrine[player]);
     const s = this.soldiers;
     const first = s.count;
     const count = spec.soldiers;
@@ -277,6 +327,7 @@ export class World {
       id: this.nextEntityId++,
       player,
       type,
+      stats,
       anchorX: x,
       anchorY: y,
       facing,
@@ -313,7 +364,7 @@ export class World {
       const id = first + i;
       s.squad[id] = squad.id;
       s.slot[id] = i;
-      s.hp[id] = spec.hp;
+      s.hp[id] = stats.hp;
       s.alive[id] = 1;
       s.cooldown[id] = 0;
       s.incoming[id] = 0;
@@ -368,6 +419,7 @@ export class World {
   /** Advance exactly one tick. The only mutator of world state. */
   step(): void {
     if (this.outcome) return; // the match is decided; freeze the board
+    if (this.deploying) return; // still setting out; the match has not begun
     // The AI thinks first and issues into the same queue the player uses, so
     // its orders are drained by the very next line like anyone else's.
     for (const ai of this.ai) ai.update(this);
@@ -531,7 +583,7 @@ export class World {
 
       // Pivot toward the next waypoint. A formation turns, it does not strafe.
       const desired = atan2(q.path[1] - q.anchorY, q.path[0] - q.anchorX);
-      q.facing = rotateToward(q.facing, desired, UNIT_TYPES[q.type].turnRate * TICK_DT);
+      q.facing = rotateToward(q.facing, desired, q.stats.turnRate * TICK_DT);
 
       let budget = speed * TICK_DT;
       while (budget > 1e-9 && q.path.length >= 2) {
@@ -568,7 +620,7 @@ export class World {
       return;
     }
     q.morale = min(1, q.morale + RECOVER_MORALE_PER_SEC * TICK_DT);
-    const maxHp = UNIT_TYPES[q.type].hp;
+    const maxHp = q.stats.hp;
     const heal = maxHp * RECOVER_HP_FRACTION_PER_SEC * TICK_DT;
     const s = this.soldiers;
     for (let i = 0; i < q.count; i++) {
@@ -610,13 +662,12 @@ export class World {
   }
 
   private squadSpeed(q: Squad): number {
-    const spec = UNIT_TYPES[q.type];
     const ground = TERRAIN_INFO[this.terrain.typeAtWorld(q.anchorX, q.anchorY)];
     // Impassable ground scales movement to zero, which is right for entering it
     // and disastrous for standing in it: a squad caught on a flooded tile would
     // have zero speed and never leave. Wading out is slow, not impossible.
     const scale = ground.moveScale > 0 ? ground.moveScale : STRANDED_WADE;
-    return spec.speed * scale * moraleSpeedScale(q.morale);
+    return q.stats.speed * scale * moraleSpeedScale(q.morale);
   }
 
   private rebuildHash(): void {
@@ -633,7 +684,6 @@ export class World {
   private updateSoldiers(): void {
     const s = this.soldiers;
     for (const q of this.squads) {
-      const spec = UNIT_TYPES[q.type];
       // Soldiers get headroom over the squad so stragglers can close up; the
       // floor keeps a standing squad able to re-form after being jostled.
       const squadSpeed = this.squadSpeed(q);
@@ -679,8 +729,8 @@ export class World {
         // anchor's pace and the wings fall out of formation on every turn.
         const slotDist = sqrt(lx * lx + ly * ly);
         const maxSpeed = max(
-          squadSpeed * CATCHUP + spec.turnRate * slotDist,
-          spec.speed * 0.4,
+          squadSpeed * CATCHUP + q.stats.turnRate * slotDist,
+          q.stats.speed * 0.4,
         );
 
         const sx = s.x[id];
@@ -724,9 +774,9 @@ export class World {
           // Face the way you are going while closing up; face with the
           // formation once you are in place.
           const desired = d > IN_SLOT * 1.5 ? atan2(uy, ux) : q.facing;
-          s.facing[id] = rotateToward(s.facing[id], desired, spec.turnRate * 2.2 * TICK_DT);
+          s.facing[id] = rotateToward(s.facing[id], desired, q.stats.turnRate * 2.2 * TICK_DT);
         } else {
-          s.facing[id] = rotateToward(s.facing[id], q.facing, spec.turnRate * 2.2 * TICK_DT);
+          s.facing[id] = rotateToward(s.facing[id], q.facing, q.stats.turnRate * 2.2 * TICK_DT);
         }
       }
 
@@ -756,7 +806,7 @@ export class World {
       this.fog[q.player].stamp(
         q.anchorX,
         q.anchorY,
-        effectiveSight(this.terrain, UNIT_TYPES[q.type].sight, q.anchorX, q.anchorY),
+        effectiveSight(this.terrain, q.stats.sight, q.anchorX, q.anchorY),
       );
     }
 
@@ -768,7 +818,7 @@ export class World {
       for (const watcher of this.squads) {
         if (watcher.player !== foe || watcher.live === 0) continue;
         const reach =
-          effectiveSight(this.terrain, UNIT_TYPES[watcher.type].sight, watcher.anchorX, watcher.anchorY) *
+          effectiveSight(this.terrain, watcher.stats.sight, watcher.anchorX, watcher.anchorY) *
           (1 - hidden);
         if (d2(watcher.anchorX, watcher.anchorY, target.anchorX, target.anchorY) > reach * reach) continue;
         if (!hasLineOfSight(this.terrain, watcher.anchorX, watcher.anchorY, target.anchorX, target.anchorY)) {
@@ -806,8 +856,7 @@ export class World {
 
     for (const q of this.squads) {
       if (q.live === 0) continue;
-      const spec = UNIT_TYPES[q.type];
-      if (spec.range > MELEE_RANGE) this.aimRanged(q, spec.range);
+      if (q.stats.range > MELEE_RANGE) this.aimRanged(q, q.stats.range);
       else this.aimMelee(q);
     }
 
@@ -817,7 +866,6 @@ export class World {
   /** Hand-to-hand: neighbours come from the soldier hash, which is sized for it. */
   private aimMelee(q: Squad): void {
     const s = this.soldiers;
-    const spec = UNIT_TYPES[q.type];
     const reach = MELEE_RANGE;
 
     for (let i = 0; i < q.count; i++) {
@@ -843,7 +891,7 @@ export class World {
         }
       }
       if (target < 0) continue;
-      this.strike(q, id, target, spec.attack, spec.defence, spec.attackInterval);
+      this.strike(q, id, target, q.stats.attack, q.stats.attackInterval);
     }
   }
 
@@ -856,7 +904,6 @@ export class World {
    */
   private aimRanged(q: Squad, range: number): void {
     const s = this.soldiers;
-    const spec = UNIT_TYPES[q.type];
 
     let target: Squad | null = null;
     let bestD = Infinity;
@@ -893,10 +940,10 @@ export class World {
           s.x[id], s.y[id], target.first, target.count, s.alive, s.x, s.y, range,
         );
         if (closer < 0) continue;
-        this.strike(q, id, closer, spec.attack, spec.defence, spec.attackInterval);
+        this.strike(q, id, closer, q.stats.attack, q.stats.attackInterval);
         continue;
       }
-      this.strike(q, id, victim, spec.attack, spec.defence, spec.attackInterval);
+      this.strike(q, id, victim, q.stats.attack, q.stats.attackInterval);
     }
   }
 
@@ -906,21 +953,19 @@ export class World {
     attacker: number,
     victim: number,
     attack: number,
-    _defence: number,
     interval: number,
   ): void {
     const s = this.soldiers;
     const vq = this.squadOf(victim);
     if (!vq) return;
-    const vSpec = UNIT_TYPES[vq.type];
     const dmg = hitDamage(
-      this.rng.combat, attack, vSpec.defence, 0, this.terrain, s.x[victim], s.y[victim],
+      this.rng.combat, attack, vq.stats.defence, 0, this.terrain, s.x[victim], s.y[victim],
     );
     s.incoming[victim] += dmg;
     s.struckBy[victim] = this.ownerOf[attacker];
     s.cooldown[attacker] = interval;
     this.events.push({
-      kind: UNIT_TYPES[q.type].range > MELEE_RANGE ? "shot" : "melee",
+      kind: q.stats.range > MELEE_RANGE ? "shot" : "melee",
       player: q.player,
       x0: s.x[attacker],
       y0: s.y[attacker],
@@ -1024,6 +1069,8 @@ export class World {
       }
 
       q.morale = nextMorale(q.morale, {
+        // Doctrine steadies or shortens the nerve of the whole army.
+        resolve: q.stats.resolve,
         casualties: q.casualtiesThisTick,
         kills: q.killsThisTick,
         strength: q.live,

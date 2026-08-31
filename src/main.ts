@@ -13,7 +13,8 @@ import { hashWorld } from "./sim/hash.ts";
 import { PI } from "./sim/math.ts";
 import { TILE_SIZE } from "./sim/terrain.ts";
 import { provingGround } from "./content/levels/proving-ground.ts";
-import { UNIT_TYPES, type UnitTypeId } from "./content/unit-types.ts";
+import { defaultArmy, validate } from "./content/army.ts";
+import { UNIT_TYPES } from "./content/unit-types.ts";
 import { Camera } from "./render/camera.ts";
 import { Renderer, type Snapshot } from "./render/renderer.ts";
 import { drawInk } from "./render/ink.ts";
@@ -40,21 +41,34 @@ const world = new World({
   aiPlayers: [1],
 });
 
-/** The spec's stated cap: about fifteen squads a side. */
-const ARMY: readonly UnitTypeId[] = [
-  "line", "line", "line", "line", "line",
-  "skirmisher", "skirmisher", "skirmisher", "skirmisher",
-  "archer", "archer", "archer",
-  "horse", "horse",
-  "guard",
-];
+// Point-bought armies, validated before a single squad is spawned.
+const ARMIES = [defaultArmy("maneuver"), defaultArmy("aggressive")] as const;
+for (const list of ARMIES) {
+  const v = validate(list);
+  if (!v.ok) throw new Error("illegal army list: " + v.problems.join("; "));
+}
+world.doctrine[0] = ARMIES[0].doctrine;
+world.doctrine[1] = ARMIES[1].doctrine;
 
 for (const zone of level.deployment) {
-  for (let i = 0; i < ARMY.length; i++) {
+  const list = ARMIES[zone.player];
+  for (let i = 0; i < list.squads.length; i++) {
     const x = (zone.x + 4 + (i % 3) * 7) * TILE_SIZE;
     const y = (zone.y + 5 + ((i / 3) | 0) * 10) * TILE_SIZE;
-    world.spawnSquad(zone.player, ARMY[i], x, y, zone.player === 0 ? 0 : PI);
+    world.spawnSquad(zone.player, list.squads[i], x, y, zone.player === 0 ? 0 : PI);
   }
+}
+
+// Deployment: the board is set out but the match has not begun. Drag a squad
+// anywhere inside your own zone; Enter gives the off.
+world.deploying = true;
+const myZone = level.deployment.find((z) => z.player === PLAYER);
+function inDeploymentZone(x: number, y: number): boolean {
+  if (!myZone) return false;
+  return (
+    x >= myZone.x * TILE_SIZE && x <= (myZone.x + myZone.w) * TILE_SIZE &&
+    y >= myZone.y * TILE_SIZE && y <= (myZone.y + myZone.h) * TILE_SIZE
+  );
 }
 
 const cam = new Camera(world.terrain.worldWidth, world.terrain.worldHeight);
@@ -85,6 +99,11 @@ resize();
 
 let paused = false;
 window.addEventListener("keydown", (e) => {
+  if (e.code === "Enter" && world.deploying) {
+    world.deploying = false;
+    pen.lastAction = "battle begins";
+    return;
+  }
   if (e.code === "Space") {
     e.preventDefault();
     paused = !paused;
@@ -163,11 +182,32 @@ function frame(now: number): void {
     hudTimer = 0;
     cachedHash = hashWorld(world);
   }
+  // During deployment the pen places squads instead of issuing orders.
+  if (world.deploying && pen.drawing && pen.points.length > 1 && commander.selected.length > 0) {
+    const tip = pen.points[pen.points.length - 1];
+    if (inDeploymentZone(tip.x, tip.y)) {
+      for (const id of commander.selected) {
+        const q = world.squadById(id);
+        if (!q || q.player !== PLAYER) continue;
+        const dx = tip.x - q.anchorX;
+        const dy = tip.y - q.anchorY;
+        q.anchorX = tip.x;
+        q.anchorY = tip.y;
+        for (let i = 0; i < q.count; i++) {
+          world.soldiers.x[q.first + i] += dx;
+          world.soldiers.y[q.first + i] += dy;
+        }
+      }
+      snapshotInto(prev);
+    }
+  }
+
   const t = world.tick / TICK_RATE;
   const mine = world.squads.filter((q) => q.player === PLAYER);
   const sel = commander.selected.length;
   hud.textContent = [
-    level.name + (paused ? "   [PAUSED]" : "") +
+    level.name + (world.deploying ? "   [DEPLOY - drag squads, ENTER to begin]" : "") +
+      (paused ? "   [PAUSED]" : "") +
       (world.outcome
         ? "   " + (world.outcome.winner === PLAYER ? "VICTORY" : world.outcome.winner < 0 ? "DRAW" : "DEFEAT")
         : ""),
@@ -180,6 +220,7 @@ function frame(now: number): void {
       "   enemy " + (world.armyMorale(1 - PLAYER) * 100).toFixed(0) + "%",
     "seen   " + world.visibleEnemies(PLAYER).length + " enemy squads" +
       (world.ai[0] ? "   foe: " + world.ai[0].style : ""),
+    "army   " + ARMIES[PLAYER].doctrine + "   " + validate(ARMIES[PLAYER]).spent + " pts",
     "sel    " + (sel > 0 ? sel + " squad" + (sel > 1 ? "s" : "") : "none") +
       (pen.lastAction ? "   > " + pen.lastAction : ""),
     "zoom   " + cam.zoom.toFixed(2) + "   fps " + fps.toFixed(0),

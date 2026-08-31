@@ -92,8 +92,14 @@ It reads `visibleEnemies()` and nothing else, and a test asserts it never *order
 
 **Verified:** a full 15-minute AI-vs-AI match resolves with 347 casualties and all four postures used, and two matches from one seed stay hash-identical throughout with no orders supplied at all.
 
-### Phase 6 — Army building
-Unit roster and costs, point budget, per-type caps, doctrines (aggressive/defensive/maneuver/magic) as army-wide modifiers, deployment-zone placement phase.
+### Phase 6 — Army building — **DONE**
+Point budget, per-type caps and a squad cap, four doctrines as army-wide trades, and a deployment phase that holds the world until the player gives the off.
+
+Doctrine is **baked into each squad's own stat block at spawn**, not looked up in the hot loops: combat reads a squad's stats thousands of times a tick and a doctrine cannot change mid-match. Validation lives in `content/`, not the UI, so the AI, saved armies and level presets are held to the same rules.
+
+A test asserts **no doctrine is strictly better than another** across every stat pair — a doctrine that wins at everything is not a choice, it is the answer.
+
+`spawnSquad` now throws when the soldier store would overflow. Writing past a `Float64Array` is a silent no-op, so an over-large army would have produced squads whose soldiers all sat at (0, 0) with no error anywhere.
 
 ### Phase 7 — Magic and special units
 Medium-intensity tactical spells: area buffs/debuffs, temporary cover, heal-over-time, morale boosts. Special units tied to doctrines (siege, elite guard, mage, scout).
