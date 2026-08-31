@@ -29,10 +29,15 @@ if (!ctx2d) throw new Error("2d canvas context unavailable");
 const ctx: CanvasRenderingContext2D = ctx2d;
 
 const level = provingGround;
+const PLAYER = 0;
 const world = new World({
   seed: level.seed,
   tilesWide: level.tilesWide,
   tilesHigh: level.tilesHigh,
+  duration: level.duration,
+  // The opposing commander. It runs inside the simulation and issues orders
+  // through the same queue you do.
+  aiPlayers: [1],
 });
 
 /** The spec's stated cap: about fifteen squads a side. */
@@ -52,7 +57,6 @@ for (const zone of level.deployment) {
   }
 }
 
-const PLAYER = 0;
 const cam = new Camera(world.terrain.worldWidth, world.terrain.worldHeight);
 cam.x = level.deployment[0].x * TILE_SIZE + 500;
 cam.y = world.terrain.worldHeight * 0.5;
@@ -174,6 +178,8 @@ function frame(now: number): void {
       "   men " + mine.reduce((n, q) => n + q.live, 0),
     "morale " + (world.armyMorale(PLAYER) * 100).toFixed(0) + "%" +
       "   enemy " + (world.armyMorale(1 - PLAYER) * 100).toFixed(0) + "%",
+    "seen   " + world.visibleEnemies(PLAYER).length + " enemy squads" +
+      (world.ai[0] ? "   foe: " + world.ai[0].style : ""),
     "sel    " + (sel > 0 ? sel + " squad" + (sel > 1 ? "s" : "") : "none") +
       (pen.lastAction ? "   > " + pen.lastAction : ""),
     "zoom   " + cam.zoom.toFixed(2) + "   fps " + fps.toFixed(0),

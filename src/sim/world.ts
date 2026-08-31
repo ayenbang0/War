@@ -28,6 +28,7 @@ import { MELEE_RANGE, d2, hitDamage, isFlanking, nearestInSquad, spreadTarget } 
 import { globalMorale, nextMorale, ROUT_THRESHOLD } from "./morale.ts";
 import { evaluate, type ArmyState, type Outcome } from "./victory.ts";
 import { FogField, concealment, effectiveSight, hasLineOfSight, rangeFromHeight } from "./vision.ts";
+import { ArmyAI } from "./ai.ts";
 
 /** Simulation ticks per second. Slow, deliberate pacing needs no more than this. */
 export const TICK_RATE = 20;
@@ -187,6 +188,8 @@ export type WorldConfig = {
   readonly soldierCapacity?: number;
   /** Match length in seconds. Defaults to the spec's 15 minutes. */
   readonly duration?: number;
+  /** Player numbers to be run by the AI. Defaults to none. */
+  readonly aiPlayers?: readonly number[];
 };
 
 export class World {
@@ -225,6 +228,8 @@ export class World {
   private readonly ownerOf: Int32Array;
   /** Coarse lit/remembered grid per army, for drawing fog. */
   readonly fog: [FogField, FogField];
+  /** Commanders the machine is running. Empty in a pure sandbox. */
+  readonly ai: ArmyAI[] = [];
   private readonly neighbours: Int32Array;
   private nextEntityId = 1;
 
@@ -243,6 +248,7 @@ export class World {
     this.neighbours = new Int32Array(256);
     this.ownerOf = new Int32Array(capacity).fill(-1);
     this.fog = [new FogField(this.terrain), new FogField(this.terrain)];
+    for (const p of config.aiPlayers ?? []) this.ai.push(new ArmyAI(p));
     this.rng = {
       combat: Rng.create(this.seed, Stream.Combat),
       morale: Rng.create(this.seed, Stream.Morale),
@@ -362,6 +368,9 @@ export class World {
   /** Advance exactly one tick. The only mutator of world state. */
   step(): void {
     if (this.outcome) return; // the match is decided; freeze the board
+    // The AI thinks first and issues into the same queue the player uses, so
+    // its orders are drained by the very next line like anyone else's.
+    for (const ai of this.ai) ai.update(this);
     this.applyOrders();
     this.updateSquadAnchors();
     this.rebuildHash();

@@ -11,6 +11,7 @@ import { World, TICK_RATE, type Squad } from "../src/sim/world.ts";
 import { MELEE_RANGE } from "../src/sim/combat.ts";
 import { evaluate, score } from "../src/sim/victory.ts";
 import { effectiveSight, hasLineOfSight, rangeFromHeight, FogField } from "../src/sim/vision.ts";
+import { PLAYSTYLES } from "../src/sim/ai.ts";
 import { ROUT_THRESHOLD } from "../src/sim/morale.ts";
 import { hashWorld, hashTerrain, hashRngStream, hashPaths } from "../src/sim/hash.ts";
 import { Rng, Stream } from "../src/sim/rng.ts";
@@ -1025,6 +1026,104 @@ section("vision");
     check("a wood between them stops both the sighting and the shooting",
       !hidden.seen && hidden.shots === 0, hidden.shots + " shots, seen=" + hidden.seen);
   }
+}
+
+// -- 8g. the AI ----------------------------------------------------------------
+
+section("ai");
+{
+  /** A full match with both sides run by the machine. */
+  function autoMatch(seed: number, duration: number): World {
+    const w = new World({
+      seed,
+      tilesWide: provingGround.tilesWide,
+      tilesHigh: provingGround.tilesHigh,
+      duration,
+      aiPlayers: [0, 1],
+    });
+    for (const zone of provingGround.deployment) {
+      for (let i = 0; i < ARMY.length; i++) {
+        w.spawnSquad(
+          zone.player,
+          ARMY[i],
+          (zone.x + 4 + (i % 3) * 7) * TILE_SIZE,
+          (zone.y + 5 + ((i / 3) | 0) * 10) * TILE_SIZE,
+          zone.player === 0 ? 0 : M.PI,
+        );
+      }
+    }
+    return w;
+  }
+
+  const w = autoMatch(provingGround.seed, 15 * 60);
+  const startMen = w.squads.reduce((n, q) => n + q.live, 0);
+  const stylesSeen = new Set<string>();
+  let sawThroughFog = 0;
+
+  // The AI issues into the queue and the same tick drains it, so the pending
+  // count never rises. Count the calls instead.
+  let ordersIssued = 0;
+  const byKind = new Map<string, number>();
+  const realIssue = w.orders.issue.bind(w.orders);
+  w.orders.issue = ((body, player, tick) => {
+    ordersIssued++;
+    byKind.set(body.kind, (byKind.get(body.kind) ?? 0) + 1);
+    // The invariant that matters: an attack order must name a squad the
+    // issuing side can see AT THE MOMENT IT IS GIVEN. Losing sight of the
+    // target mid-approach afterwards is fine -- that is memory, not cheating.
+    if (body.kind === "attack") {
+      const t = w.squadById(body.target);
+      if (t && !t.seenBy[player]) sawThroughFog++;
+    }
+    return realIssue(body, player, tick);
+  }) as typeof w.orders.issue;
+
+  const t0 = Date.now();
+  let ticks = 0;
+  for (; ticks < TICK_RATE * 15 * 60 && !w.outcome; ticks++) {
+    w.step();
+    for (const ai of w.ai) stylesSeen.add(ai.style);
+    // The AI must never act on a squad the fog is hiding from it. Sampling is
+    // cheap and catches a privileged-information regression immediately.
+
+  }
+  const elapsed = Date.now() - t0;
+  const endMen = w.squads.reduce((n, q) => n + q.live, 0);
+
+  check("the AI issues orders", ordersIssued > 0, ordersIssued + " orders");
+  check("the AI uses more than one kind of order", byKind.size > 1,
+    [...byKind].map(([k, n]) => k + " " + n).join(", "));
+  check("the AI never orders an attack on a squad it cannot see", sawThroughFog === 0,
+    sawThroughFog + " attacks ordered on unseen squads");
+  check("the AI brings on a battle", endMen < startMen, startMen - endMen + " casualties");
+  check("the AI changes posture during a match", stylesSeen.size > 1, [...stylesSeen].join(", "));
+  check("every posture the AI adopts is a known one",
+    [...stylesSeen].every((s2) => (PLAYSTYLES as readonly string[]).includes(s2)));
+  check("a full AI match reaches a decision", w.outcome !== null,
+    w.outcome ? w.outcome.reason + ": " + w.outcome.detail : "still running at full time");
+  check("AI decisions cost little", elapsed / Math.max(ticks, 1) < 5,
+    (elapsed / Math.max(ticks, 1)).toFixed(3) + " ms/tick over " + ticks + " ticks");
+
+  // Determinism: the AI is part of the simulation, so two identical worlds must
+  // stay identical for a whole match without a single order being supplied.
+  const a = autoMatch(provingGround.seed ^ 0x99, 60);
+  const b = autoMatch(provingGround.seed ^ 0x99, 60);
+  let diverged = -1;
+  for (let t = 0; t < TICK_RATE * 60; t++) {
+    a.step();
+    b.step();
+    if (t % 25 === 0 && hashWorld(a) !== hashWorld(b)) {
+      diverged = t;
+      break;
+    }
+  }
+  check("two AI matches from one seed never diverge", diverged < 0,
+    diverged >= 0 ? "diverged at tick " + diverged : "identical throughout");
+
+  console.log("");
+  console.log("  ai match    " + (ticks / TICK_RATE).toFixed(0) + "s, " + (startMen - endMen) + " dead");
+  console.log("  postures    " + [...stylesSeen].join(", "));
+  if (w.outcome) console.log("  outcome     " + w.outcome.reason + ": " + w.outcome.detail);
 }
 
 // -- 9. gestures ---------------------------------------------------------------

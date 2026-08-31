@@ -89,6 +89,12 @@ export function hashWorld(world: World): string {
     h = mixF64(h, s.hp[i]);
   }
 
+  // The AI's posture and its memory of where the enemy was decide its future
+  // orders, so they are state and must be hashed like any other.
+  for (const ai of world.ai) {
+    for (const v of ai.snapshot()) h = mixF64(h, v);
+  }
+
   for (const rng of [world.rng.combat, world.rng.morale, world.rng.ai, world.rng.spawn]) {
     const st = rng.snapshot();
     h = mixU32(h, st.a);

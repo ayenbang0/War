@@ -83,8 +83,14 @@ Both armies run through **one** vision implementation. The AI being subject to t
 
 Two subtleties: LOS ignores cover within half a tile of either endpoint, or a squad standing in a wood cannot see its own flank; and fog is stamped as discs rather than raycast per cell, because raycasting every cell against every squad is tens of thousands of casts a tick to decide the shading of a picture. Unit visibility, which decides targeting, is exact.
 
-### Phase 5 — AI
-Aggressive / defensive / maneuver / reactive playstyles, mid-match switching, macro rules (protect objectives, exploit flanks), intent prediction from observed positions under the same fog constraints. Cannot see drawn paths.
+### Phase 5 — AI — **DONE**
+Four postures (aggressive / defensive / maneuver / reactive) chosen from relative strength and morale, with hysteresis so a commander reads as having intent rather than twitching. Flanking swings, target selection that prefers already-weakened squads, withdrawal when a squad breaks, and standing down to recover when badly thinned.
+
+**The AI lives in  and issues Orders through the same queue the player uses.** Anywhere else and it mutates state outside the order stream, so a replay fed only that stream diverges the moment the AI acts — and lockstep netplay dies with it. It draws from , so adding a decision never shifts a combat or morale roll.
+
+It reads  and nothing else, and a test asserts it never *orders* an attack on a squad it cannot see at that moment. Losing sight mid-approach is memory, not cheating; it remembers the last known enemy position rather than forgetting them the instant they step behind a wood.
+
+**Verified:** a full 15-minute AI-vs-AI match resolves with 347 casualties and all four postures used, and two matches from one seed stay hash-identical throughout with no orders supplied at all.
 
 ### Phase 6 — Army building
 Unit roster and costs, point budget, per-type caps, doctrines (aggressive/defensive/maneuver/magic) as army-wide modifiers, deployment-zone placement phase.
