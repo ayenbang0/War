@@ -1,0 +1,540 @@
+Top‑Down Tactical RTS Web App – Full Build Specification
+This document is a single, comprehensive build spec for a minimalist, slow‑paced, tactical RTS played on a large top‑down map in a PC web app. It is written like an instruction manual for designers, programmers, and UX engineers, covering all core features, systems, and behaviors.
+
+1. Game overview
+Game type:
+
+Top‑down, real‑time tactical RTS
+
+Slow, deliberate pacing
+
+Match length: ~15 minutes
+
+Platform: PC web app (browser‑based)
+
+Focus: minimal UI, high tactical depth, pen‑based control
+
+Core fantasy:  
+The player commands a small, highly controlled army (up to ~15 units) on a large battlefield using pen‑like gestures to draw paths, formations, and actions. The game emphasizes macro strategy, formations, morale, terrain, and doctrine, rather than micro‑click spam.
+
+2. Match structure
+Match duration:
+
+Target: 15 minutes per match
+
+Real‑time only (no turn‑based mode)
+
+Players:
+
+Initial version: 1 human vs AI
+
+Future expansion: multiplayer (1v1, team modes)
+
+Win conditions (examples):
+
+Control key objectives for a set duration
+
+Destroy or rout enemy forces
+
+Accumulate victory points via terrain control and enemy losses
+
+Exact win conditions can be configured per level setting.
+
+3. Army composition and point‑buy system
+3.1 Unit cap and structure
+Total units per player: ~15 individual units (each unit = a squad or formation of soldiers)
+
+Each unit has:
+
+Individual soldier HP (tracked per soldier within the unit)
+
+A formation shape and size
+
+A unit type (e.g., infantry, archers, cavalry, mages, support, special units)
+
+Morale (per squad, aggregated globally)
+
+3.2 Point‑buy system
+Before the match, the player builds an army using a point‑buy system:
+
+Each unit type has a cost.
+
+The player has a total point budget.
+
+There are limits per unit type (e.g., max 3 cavalry, max 2 mages, etc.).
+
+The system ensures:
+
+No single unit type can dominate.
+
+Armies are varied but balanced.
+
+3.3 Unit placement
+Each individual unit is placed on a controlled part of the map during deployment:
+
+Deployment zones are defined per side.
+
+Units can be placed close together or spread out.
+
+A single unit can be as large as the entire army in footprint (e.g., a massive formation).
+
+4. Formations and movement
+4.1 Formation definition
+The player defines formations for each unit:
+
+Line, column, wedge, square, loose, tight, custom shapes.
+
+Formation is visually represented by soldier positions.
+
+Formations are kept while in motion:
+
+Units move as a coherent shape.
+
+Soldiers maintain relative positions.
+
+Formations break or deform during combat:
+
+When engaged in melee, soldiers may spread, rotate, or compress.
+
+After combat, units attempt to re‑form into their assigned formation.
+
+4.2 Movement rules
+Movement is slow and deliberate:
+
+Units have defined movement speeds based on type and terrain.
+
+Movement speed can be reduced by low morale, fatigue, or terrain penalties.
+
+Paths are auto‑corrected:
+
+When the player draws a path, the game smooths it into a clean curve or line.
+
+No scribble‑like paths; the system simplifies and optimizes routes.
+
+Units avoid:
+
+Impassable terrain (cliffs, deep rivers).
+
+Collisions with friendly units (formation‑aware pathing).
+
+5. Pen‑based control and gestures
+5.1 Core interaction paradigm
+The only control tool is a pen/drawing system:
+
+No traditional RTS box‑select or click‑to‑move.
+
+The player selects a unit or group, then draws actions.
+
+Once controlling a certain group:
+
+The player uses the pen to draw:
+
+Movement paths
+
+Attack arcs
+
+Defensive lines
+
+Patrol routes
+
+Retreat paths
+
+Formation changes
+
+5.2 Six core gestures
+The game defines six core gestures that behave traditionally but are implemented via pen input. Each gesture has only the capabilities of the pen—no extra UI buttons.
+
+Examples (you can refine exact shapes):
+
+Move gesture
+
+Draw a line from the unit to a destination.
+
+System interprets as a movement order along that path.
+
+Attack gesture
+
+Draw a line or arc ending on an enemy unit.
+
+System interprets as “move and engage” or “attack along this direction.”
+
+Hold/Defend gesture
+
+Draw a closed loop around a position.
+
+System interprets as “hold this area” with defensive posture.
+
+Formation change gesture
+
+Draw a shape (line, wedge, square) near the unit.
+
+System re‑forms the unit into that shape.
+
+Retreat/Fallback gesture
+
+Draw a line backwards from the unit toward friendly territory.
+
+System interprets as “disengage and move to this safe point.”
+
+Patrol/Route gesture
+
+Draw a looping path across multiple points.
+
+System interprets as a patrol route.
+
+All gestures are:
+
+Recognized via pattern matching.
+
+Auto‑corrected into clean paths or shapes.
+
+Executed with clear visual feedback.
+
+6. Combat, abilities, and magic level
+6.1 Combat model
+Combat is real‑time, but relatively slow:
+
+Engagements last several seconds to minutes.
+
+Positioning and timing matter more than click speed.
+
+Each soldier has:
+
+HP
+
+Attack power
+
+Defense
+
+Attack range (melee or ranged)
+
+Attack speed
+
+Units fight as formations:
+
+Frontline soldiers engage first.
+
+Rear ranks support (ranged, magic, buffs).
+
+6.2 Medium‑magic level
+Magic exists but is medium‑intensity:
+
+No world‑breaking spells.
+
+Magic is tactical, not cinematic.
+
+Examples:
+
+Short‑range area buffs/debuffs.
+
+Terrain manipulation (small barriers, temporary cover).
+
+Healing over time.
+
+Morale boosts.
+
+6.3 Doctrines and special units
+Doctrines are army‑wide strategic modifiers:
+
+Aggressive doctrine: faster movement, lower defense.
+
+Defensive doctrine: higher defense, slower movement.
+
+Maneuver doctrine: better pathing, faster formation changes.
+
+Magic doctrine: stronger spells, weaker physical stats.
+
+Special units:
+
+Limited in number.
+
+Provide unique tactical options (e.g., siege units, elite guards, mages, scouts).
+
+Often tied to doctrines.
+
+7. Morale system
+7.1 Squad morale
+Each unit (squad) has a morale value:
+
+Affected by:
+
+Taking casualties
+
+Being flanked
+
+Losing nearby allies
+
+Being outnumbered
+
+Terrain disadvantage
+
+Improved by:
+
+Healing
+
+Holding terrain
+
+Killing enemies
+
+Being near leaders or special units
+
+Low squad morale causes:
+
+Reduced accuracy
+
+Slower movement
+
+Panic behaviors (hesitation, partial retreat)
+
+7.2 Global morale
+Global morale is the only morale value that matters for win/loss:
+
+It is the sum or weighted average of all squad morale values.
+
+When global morale drops below a threshold (e.g., 10%), effects are instant:
+
+Army may rout.
+
+Player loses the match.
+
+Global morale can be restored:
+
+By healing units.
+
+Holding key terrain.
+
+Killing enemy units.
+
+8. Terrain and map design
+8.1 Large tactical map
+The battlefield is large, with:
+
+Multiple lanes and flanking routes.
+
+Strategic choke points.
+
+Open plains and dense areas.
+
+The player’s view is not the entire map:
+
+Camera is limited to a portion of the map at a time.
+
+Fog of war or limited visibility applies.
+
+8.2 Terrain types
+Include:
+
+Forests
+
+Provide cover.
+
+Reduce movement speed.
+
+Hide units from long‑range detection.
+
+Hills
+
+Elevation advantage.
+
+Increased range and visibility.
+
+Slower uphill movement.
+
+Rivers
+
+Crossing penalties.
+
+Bridges as choke points.
+
+Some units may be better at crossing.
+
+Plains
+
+Fast movement.
+
+Little cover.
+
+Ideal for cavalry charges.
+
+Fortifications
+
+Walls, towers, bunkers.
+
+Provide strong defensive bonuses.
+
+Can be captured or contested.
+
+8.3 Destructible terrain
+Certain terrain elements are destructible:
+
+Fortifications can be damaged or destroyed.
+
+Forests can be partially burned or cleared.
+
+Bridges can be destroyed to alter routes.
+
+Destruction:
+
+Changes pathing.
+
+Alters tactical options.
+
+9. Vision and information
+9.1 Limited vision
+Neither player nor AI sees the entire map at once.
+
+Each side has:
+
+Vision radius per unit.
+
+Line‑of‑sight rules (blocked by terrain).
+
+Fog of war hides:
+
+Enemy units outside vision.
+
+Enemy movements and paths.
+
+9.2 AI vision constraints
+AI is subject to the same vision rules:
+
+It can only see a portion of the map at a time.
+
+It cannot see the player’s drawn paths.
+
+It only sees:
+
+Player unit positions
+
+Visible actions
+
+10. AI behavior
+10.1 Playstyle alternation
+AI should alternate between different playstyles:
+
+Aggressive: pushes forward, seeks engagements.
+
+Defensive: holds terrain, fortifies positions.
+
+Maneuver: focuses on flanking and repositioning.
+
+Reactive: responds to player moves.
+
+Playstyle can:
+
+Change mid‑match based on conditions.
+
+Be influenced by doctrines and unit composition.
+
+10.2 Predictive and reactive behavior
+AI cannot see drawn paths, but:
+
+It predicts likely player intentions based on unit positions and movement trends.
+
+It reacts to:
+
+Approaching units
+
+Threats to key terrain
+
+Flanking attempts
+
+AI uses:
+
+Limited information.
+
+Local decision‑making.
+
+Macro strategy rules (e.g., protect objectives, exploit weak flanks).
+
+11. UI and UX design (web app)
+11.1 Minimalist tactical UI
+UI is minimal:
+
+No cluttered panels.
+
+Focus on the battlefield and pen interactions.
+
+Core elements:
+
+Small unit status indicators (HP, morale).
+
+Global morale bar.
+
+Doctrine indicator.
+
+Timer and objective status.
+
+11.2 Pen interaction feedback
+When drawing:
+
+Paths are shown as smooth lines.
+
+Gestures are recognized and highlighted.
+
+Units show:
+
+Arrows for movement.
+
+Icons for attack/defend/retreat.
+
+Errors (e.g., invalid gesture) are:
+
+Gently corrected.
+
+Communicated via subtle UI hints.
+
+11.3 Level settings
+Each level can define:
+
+Terrain layout.
+
+Objectives.
+
+AI doctrine and behavior.
+
+Magic intensity.
+
+Unit point budget.
+
+12. Technical implementation notes (high level)
+12.1 Web app architecture
+Frontend:
+
+HTML5 canvas or WebGL for rendering.
+
+JavaScript/TypeScript for logic.
+
+Pen input via mouse or stylus.
+
+Backend (optional for multiplayer or persistence):
+
+Node.js or similar.
+
+Matchmaking and state sync.
+
+12.2 Path smoothing and gesture recognition
+Use:
+
+Polyline simplification (e.g., Ramer–Douglas–Peucker).
+
+Gesture classification (shape recognition, direction analysis).
+
+Ensure:
+
+Low latency.
+
+Clear mapping from gesture → action.
+
+13. Summary
+This spec defines a slow, tactical, top‑down RTS web app where:
+
+The player commands up to 15 units via pen‑based gestures.
+
+Units move in formations, fight with individual soldier HP, and are governed by morale.
+
+The battlefield is large, with complex terrain, limited vision, and destructible elements.
+
+The AI alternates between playstyles, reacts to the player, and shares the same vision constraints.
+
+The game emphasizes macro strategy, doctrine, terrain, and formation control, not click speed.
