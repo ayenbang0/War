@@ -13,7 +13,7 @@
  */
 
 import { atan2, clamp, cos, min, sin, sqrt } from "./math.ts";
-import type { Squad, World } from "./world.ts";
+import type { Group, World } from "./world.ts";
 
 /** Ticks between decisions. Re-planning every tick makes squads twitch. */
 const THINK_INTERVAL = 20;
@@ -21,6 +21,8 @@ const THINK_INTERVAL = 20;
 const COMMIT_TICKS = 60;
 /** Ticks a posture is held before it may change again. */
 const STYLE_DWELL = THINK_INTERVAL * 12;
+/** Upper size for a machine-formed group. Beyond this a formation is unwieldy. */
+const MAX_GROUP = 20;
 
 export type Playstyle = "aggressive" | "defensive" | "maneuver" | "reactive";
 
@@ -47,6 +49,9 @@ export class ArmyAI {
   /** Called once per tick from World.step, before orders are drained. */
   update(world: World): void {
     if (world.tick % THINK_INTERVAL !== 0) return;
+    // With no inherent squads, the machine must organise its own men before it
+    // can command them -- exactly as the player does with the pen.
+    this.formGroups(world);
     this.chooseStyle(world);
 
     const foes = world.visibleEnemies(this.player);
@@ -64,11 +69,11 @@ export class ArmyAI {
       this.hasContact = true;
     }
 
-    for (const q of world.squads) {
-      if (q.player !== this.player || q.live === 0) continue;
+    for (const q of world.groups) {
+      if (q.player !== this.player || world.liveCount(q) === 0) continue;
       if (q.recoverUntil > world.tick) continue;
       if (world.tick < (this.committedUntil.get(q.id) ?? 0)) continue;
-      if (this.orderSquad(world, q, foes)) {
+      if (this.orderGroup(world, q, foes)) {
         this.committedUntil.set(q.id, world.tick + COMMIT_TICKS);
       }
     }
@@ -108,12 +113,12 @@ export class ArmyAI {
   }
 
   /** Give one squad something to do. Returns false if nothing was issued. */
-  private orderSquad(world: World, q: Squad, foes: readonly Squad[]): boolean {
+  private orderGroup(world: World, q: Group, foes: readonly Group[]): boolean {
     const tick = world.tick;
     const rng = world.rng.ai;
 
     // A badly mauled squad pulls out rather than feeding the grinder.
-    if (q.morale < 0.28) {
+    if (this.moraleOf(world, q) < 0.28) {
       const dx = this.homeX(world) - q.anchorX;
       world.orders.issue(
         { kind: "retreat", squad: q.id, path: [q.anchorX + clamp(dx, -700, 700), q.anchorY] },
@@ -124,7 +129,7 @@ export class ArmyAI {
     }
     // Shaken and thinned out: stand down and recover, accepting the 30 seconds
     // of helplessness that costs.
-    if (q.morale < 0.5 && q.live <= q.count * 0.4 && rng.chance(0.35)) {
+    if (this.moraleOf(world, q) < 0.5 && rng.chance(0.12)) {
       world.orders.issue({ kind: "recover", squad: q.id }, this.player, tick);
       return true;
     }
@@ -180,7 +185,7 @@ export class ArmyAI {
     }
   }
 
-  private assault(world: World, q: Squad, target: Squad, tick: number): boolean {
+  private assault(world: World, q: Group, target: Group, tick: number): boolean {
     world.orders.issue(
       { kind: "attack", squad: q.id, target: target.id, path: [target.anchorX, target.anchorY] },
       this.player,
@@ -195,15 +200,15 @@ export class ArmyAI {
    * Ties break on squad id, so two peers replaying an identical order stream
    * make an identical choice.
    */
-  private pickTarget(q: Squad, foes: readonly Squad[]): Squad | null {
-    let best: Squad | null = null;
+  private pickTarget(q: Group, foes: readonly Group[]): Group | null {
+    let best: Group | null = null;
     let bestScore = Infinity;
     for (const f of foes) {
       const dx = f.anchorX - q.anchorX;
       const dy = f.anchorY - q.anchorY;
       const d = sqrt(dx * dx + dy * dy);
       // A squad already down to half strength is worth walking further for.
-      const s = d * (0.6 + (f.live / f.count) * 0.8);
+      const s = d * (0.6 + f.members.length * 0.04);
       if (s < bestScore || (s === bestScore && best !== null && f.id < best.id)) {
         bestScore = s;
         best = f;
@@ -212,14 +217,59 @@ export class ArmyAI {
     return best;
   }
 
-  private near(q: Squad, other: Squad, within: number): boolean {
+  /**
+   * Organise loose soldiers into groups.
+   *
+   * With no inherent squads the machine has to do what the player does with the
+   * pen: gather men who are standing together into something it can command.
+   * Ungrouped soldiers are bucketed by proximity, largest cluster first, and
+   * ties break on soldier id so two peers build identical groups.
+   */
+  private formGroups(world: World): void {
+    const loose = world
+      .soldiersOf(this.player)
+      .filter((id) => world.soldiers.group[id] < 0);
+    if (loose.length === 0) return;
+
+    const CLUSTER = 220;
+    const taken = new Set<number>();
+    for (const seed of loose) {
+      if (taken.has(seed)) continue;
+      const batch: number[] = [seed];
+      taken.add(seed);
+      for (const other of loose) {
+        if (taken.has(other) || batch.length >= MAX_GROUP) continue;
+        const dx = world.soldiers.x[other] - world.soldiers.x[seed];
+        const dy = world.soldiers.y[other] - world.soldiers.y[seed];
+        if (dx * dx + dy * dy > CLUSTER * CLUSTER) continue;
+        batch.push(other);
+        taken.add(other);
+      }
+      // A lone straggler is not worth a command structure of its own.
+      if (batch.length >= 3) world.createGroup(this.player, batch);
+    }
+  }
+
+  /** Mean nerve of a group's living members. */
+  private moraleOf(world: World, g: Group): number {
+    let sum = 0;
+    let n = 0;
+    for (const m of g.members) {
+      if (world.soldiers.alive[m] !== 1) continue;
+      sum += world.soldiers.morale[m];
+      n++;
+    }
+    return n === 0 ? 0 : sum / n;
+  }
+
+  private near(q: Group, other: Group, within: number): boolean {
     const dx = other.anchorX - q.anchorX;
     const dy = other.anchorY - q.anchorY;
     return dx * dx + dy * dy <= within * within;
   }
 
   /** Push toward where the enemy was last seen, or the far side of the map. */
-  private advance(world: World, q: Squad, tick: number): boolean {
+  private advance(world: World, q: Group, tick: number): boolean {
     const tx = this.hasContact ? this.lastKnownX : world.terrain.worldWidth - this.homeX(world);
     const ty = this.hasContact ? this.lastKnownY : world.terrain.worldHeight * 0.5;
     const dx = tx - q.anchorX;

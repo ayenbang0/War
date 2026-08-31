@@ -2,10 +2,10 @@
  * Browser entry point: owns the frame loop, the canvas, and the wiring between
  * the pure simulation and the layers that observe it.
  *
- * The loop is a fixed-timestep accumulator. The sim advances in whole 20 Hz
- * ticks and never sees real time; rendering happens at display rate and
- * interpolates between the last two tick states. This split is what makes the
- * simulation reproducible while the picture stays smooth.
+ * Fixed-timestep accumulator: the sim advances in whole 20 Hz ticks and never
+ * sees real time, while rendering happens at display rate and interpolates
+ * between the last two tick states. That split is what makes the simulation
+ * reproducible while the picture stays smooth.
  */
 
 import { World, TICK_DT, TICK_RATE } from "./sim/world.ts";
@@ -29,19 +29,17 @@ const ctx2d = canvas.getContext("2d", { alpha: false });
 if (!ctx2d) throw new Error("2d canvas context unavailable");
 const ctx: CanvasRenderingContext2D = ctx2d;
 
-const level = provingGround;
 const PLAYER = 0;
+const level = provingGround;
 const world = new World({
   seed: level.seed,
   tilesWide: level.tilesWide,
   tilesHigh: level.tilesHigh,
   duration: level.duration,
-  // The opposing commander. It runs inside the simulation and issues orders
-  // through the same queue you do.
+  soldierCapacity: 2048,
   aiPlayers: [1],
 });
 
-// Point-bought armies, validated before a single squad is spawned.
 const ARMIES = [defaultArmy("maneuver"), defaultArmy("aggressive")] as const;
 for (const list of ARMIES) {
   const v = validate(list);
@@ -50,17 +48,32 @@ for (const list of ARMIES) {
 world.doctrine[0] = ARMIES[0].doctrine;
 world.doctrine[1] = ARMIES[1].doctrine;
 
+/**
+ * Deploy INDIVIDUAL soldiers. No squads are created here, by design: a squad is
+ * something the player draws with the pen, not something the game hands them.
+ * The men are simply set out in their zone, loose, waiting to be organised.
+ */
 for (const zone of level.deployment) {
   const list = ARMIES[zone.player];
-  for (let i = 0; i < list.squads.length; i++) {
-    const x = (zone.x + 4 + (i % 3) * 7) * TILE_SIZE;
-    const y = (zone.y + 5 + ((i / 3) | 0) * 10) * TILE_SIZE;
-    world.spawnSquad(zone.player, list.squads[i], x, y, zone.player === 0 ? 0 : PI);
+  let n = 0;
+  for (const type of list.squads) {
+    const spec = UNIT_TYPES[type];
+    const blockX = (zone.x + 3 + (n % 4) * 5) * TILE_SIZE;
+    const blockY = (zone.y + 4 + ((n / 4) | 0) * 9) * TILE_SIZE;
+    for (let i = 0; i < spec.soldiers; i++) {
+      world.spawnSoldier(
+        zone.player,
+        type,
+        blockX + (i % 5) * 14,
+        blockY + ((i / 5) | 0) * 14,
+        zone.player === 0 ? 0 : PI,
+      );
+    }
+    n++;
   }
 }
 
-// Deployment: the board is set out but the match has not begun. Drag a squad
-// anywhere inside your own zone; Enter gives the off.
+// The board is set out but the battle has not begun.
 world.deploying = true;
 const myZone = level.deployment.find((z) => z.player === PLAYER);
 function inDeploymentZone(x: number, y: number): boolean {
@@ -72,9 +85,9 @@ function inDeploymentZone(x: number, y: number): boolean {
 }
 
 const cam = new Camera(world.terrain.worldWidth, world.terrain.worldHeight);
-cam.x = level.deployment[0].x * TILE_SIZE + 500;
+cam.x = (myZone ? myZone.x + myZone.w / 2 : 20) * TILE_SIZE;
 cam.y = world.terrain.worldHeight * 0.5;
-cam.zoom = 0.85;
+cam.zoom = 1.1;
 
 const renderer = new Renderer(ctx, world.terrain);
 const controls = new CameraControls(canvas, cam);
@@ -97,14 +110,29 @@ function resize(): void {
 window.addEventListener("resize", resize);
 resize();
 
+/** State at the previous tick, for render interpolation. */
+const prev: Snapshot = {
+  x: new Float64Array(world.soldiers.capacity),
+  y: new Float64Array(world.soldiers.capacity),
+  facing: new Float64Array(world.soldiers.capacity),
+};
+function snapshotInto(t: Snapshot): void {
+  t.x.set(world.soldiers.x);
+  t.y.set(world.soldiers.y);
+  t.facing.set(world.soldiers.facing);
+}
+snapshotInto(prev);
+
 let paused = false;
+let showDebug = false;
 window.addEventListener("keydown", (e) => {
   if (e.code === "Enter" && world.deploying) {
     world.deploying = false;
     pen.lastAction = "battle begins";
-    return;
-  }
-  if (e.code === "Space") {
+  } else if (e.code === "F2") {
+    e.preventDefault();
+    showDebug = !showDebug;
+  } else if (e.code === "Space") {
     e.preventDefault();
     paused = !paused;
   } else if (e.code === "Period" && paused) {
@@ -112,27 +140,6 @@ window.addEventListener("keydown", (e) => {
     world.step();
   }
 });
-
-/** State at the previous tick, for render interpolation. */
-const prev: Snapshot = {
-  soldiers: {
-    x: new Float64Array(world.soldiers.x.length),
-    y: new Float64Array(world.soldiers.y.length),
-    facing: new Float64Array(world.soldiers.facing.length),
-  },
-  squads: new Map(),
-};
-
-function snapshotInto(target: Snapshot): void {
-  target.soldiers.x.set(world.soldiers.x);
-  target.soldiers.y.set(world.soldiers.y);
-  target.soldiers.facing.set(world.soldiers.facing);
-  target.squads.clear();
-  for (const q of world.squads) {
-    target.squads.set(q.id, { x: q.anchorX, y: q.anchorY, facing: q.facing });
-  }
-}
-snapshotInto(prev);
 
 if (import.meta.env.DEV) {
   (window as unknown as { war: unknown }).war = { world, cam, level, commander, pen, hashWorld, UNIT_TYPES };
@@ -143,9 +150,6 @@ let accumulator = 0;
 let fps = 0;
 let hudTimer = 0;
 let cachedHash = hashWorld(world);
-
-/** Beyond this many ticks in one frame, let the sim fall behind rather than
- *  spiral: a long stall must not turn into a freeze. */
 const MAX_STEPS_PER_FRAME = 5;
 
 function frame(now: number): void {
@@ -162,13 +166,38 @@ function frame(now: number): void {
     while (accumulator >= TICK_DT && steps < MAX_STEPS_PER_FRAME) {
       snapshotInto(prev);
       world.step();
-      // Events are cleared at the top of every tick, so they have to be taken
-      // now -- a frame that runs several ticks would otherwise see only the last.
+      // Events are cleared at the top of every tick, so a frame running several
+      // ticks would otherwise see only the last one's blows.
       effects.ingest(world.events, now / 1000);
       accumulator -= TICK_DT;
       steps++;
     }
     if (steps === MAX_STEPS_PER_FRAME) accumulator = 0;
+  }
+
+  // During deployment the pen drags men into position instead of ordering them.
+  if (world.deploying && pen.drawing && pen.points.length > 1 && commander.selected.length > 0) {
+    const tip = pen.points[pen.points.length - 1];
+    if (inDeploymentZone(tip.x, tip.y)) {
+      for (const handle of commander.selected) {
+        const g = world.groupById(handle);
+        const men = g ? g.members : [];
+        if (men.length === 0) continue;
+        let cx = 0;
+        let cy = 0;
+        for (const id of men) {
+          cx += world.soldiers.x[id];
+          cy += world.soldiers.y[id];
+        }
+        cx /= men.length;
+        cy /= men.length;
+        for (const id of men) {
+          world.soldiers.x[id] += tip.x - cx;
+          world.soldiers.y[id] += tip.y - cy;
+        }
+      }
+      snapshotInto(prev);
+    }
   }
 
   const alpha = paused ? 1 : Math.min(accumulator / TICK_DT, 1);
@@ -182,50 +211,50 @@ function frame(now: number): void {
     hudTimer = 0;
     cachedHash = hashWorld(world);
   }
-  // During deployment the pen places squads instead of issuing orders.
-  if (world.deploying && pen.drawing && pen.points.length > 1 && commander.selected.length > 0) {
-    const tip = pen.points[pen.points.length - 1];
-    if (inDeploymentZone(tip.x, tip.y)) {
-      for (const id of commander.selected) {
-        const q = world.squadById(id);
-        if (!q || q.player !== PLAYER) continue;
-        const dx = tip.x - q.anchorX;
-        const dy = tip.y - q.anchorY;
-        q.anchorX = tip.x;
-        q.anchorY = tip.y;
-        for (let i = 0; i < q.count; i++) {
-          world.soldiers.x[q.first + i] += dx;
-          world.soldiers.y[q.first + i] += dy;
-        }
-      }
-      snapshotInto(prev);
-    }
-  }
-
-  const t = world.tick / TICK_RATE;
-  const mine = world.squads.filter((q) => q.player === PLAYER);
-  const sel = commander.selected.length;
-  hud.textContent = [
-    level.name + (world.deploying ? "   [DEPLOY - drag squads, ENTER to begin]" : "") +
-      (paused ? "   [PAUSED]" : "") +
-      (world.outcome
-        ? "   " + (world.outcome.winner === PLAYER ? "VICTORY" : world.outcome.winner < 0 ? "DRAW" : "DEFEAT")
-        : ""),
-    "t      " + String(Math.floor(t / 60)).padStart(2, "0") + ":" +
-      (t % 60).toFixed(1).padStart(4, "0") + " / " + level.duration / 60 + ":00",
-    "tick   " + world.tick + "   " + cachedHash,
-    "squads " + mine.filter((q) => q.live > 0).length + "/" + mine.length +
-      "   men " + mine.reduce((n, q) => n + q.live, 0),
-    "morale " + (world.armyMorale(PLAYER) * 100).toFixed(0) + "%" +
-      "   enemy " + (world.armyMorale(1 - PLAYER) * 100).toFixed(0) + "%",
-    "seen   " + world.visibleEnemies(PLAYER).length + " enemy squads" +
-      (world.ai[0] ? "   foe: " + world.ai[0].style : ""),
-    "army   " + ARMIES[PLAYER].doctrine + "   " + validate(ARMIES[PLAYER]).spent + " pts",
-    "sel    " + (sel > 0 ? sel + " squad" + (sel > 1 ? "s" : "") : "none") +
-      (pen.lastAction ? "   > " + pen.lastAction : ""),
-    "zoom   " + cam.zoom.toFixed(2) + "   fps " + fps.toFixed(0),
-  ].join("\n");
-
+  drawHud();
   requestAnimationFrame(frame);
 }
+
+/**
+ * The whole interface, deliberately almost nothing.
+ *
+ * Your own army's nerve and numbers, the clock, and what the pen just did.
+ * Everything else -- tick counts, hashes, frame rate, the enemy's strength --
+ * is either a debugging aid or information you are supposed to earn by
+ * scouting, and neither belongs on the screen during a battle. F2 brings the
+ * diagnostics back when they are actually wanted.
+ */
+function drawHud(): void {
+  const t = world.tick / TICK_RATE;
+  const left = Math.max(0, world.duration - t);
+  const men = world.soldiersOf(PLAYER).length;
+  const morale = world.armyMorale(PLAYER);
+  const clock =
+    String(Math.floor(left / 60)).padStart(2, "0") + ":" +
+    String(Math.floor(left % 60)).padStart(2, "0");
+
+  const bars = 20;
+  const filled = Math.round(morale * bars);
+  const bar = "\u2588".repeat(filled) + "\u2591".repeat(bars - filled);
+
+  const lines = [
+    clock + "   " + men + " men",
+    bar + " " + (morale * 100).toFixed(0) + "%",
+  ];
+  if (world.deploying) lines.push("", "set out your men, then ENTER");
+  else if (world.outcome) {
+    lines.push("", world.outcome.winner === PLAYER ? "VICTORY" : world.outcome.winner < 0 ? "DRAW" : "DEFEAT");
+  } else if (pen.lastAction) lines.push("", pen.lastAction);
+
+  if (showDebug) {
+    lines.push(
+      "",
+      "tick " + world.tick + "  " + cachedHash,
+      "groups " + world.groups.length + "  fps " + fps.toFixed(0),
+      "zoom " + cam.zoom.toFixed(2) + "  foe " + (world.ai[0] ? world.ai[0].style : "-"),
+    );
+  }
+  hud.textContent = lines.join("\n");
+}
+
 requestAnimationFrame(frame);

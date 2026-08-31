@@ -12,7 +12,8 @@
  */
 
 import { imul } from "./math.ts";
-import { STANCES, type World } from "./world.ts";
+import type { World } from "./world.ts";
+import { STANCES } from "./entities.ts";
 import { FORMATION_SHAPES } from "./formations.ts";
 import type { TerrainGrid } from "./terrain.ts";
 import type { Rng } from "./rng.ts";
@@ -44,50 +45,53 @@ export function hashWorld(world: World): string {
   h = mixU32(h, world.tick);
   h = mixU32(h, world.seed);
   h = mixU32(h, world.terrain.revision);
-  h = mixU32(h, world.squads.length);
+  h = mixU32(h, world.groups.length);
 
-  for (const q of world.squads) {
-    h = mixU32(h, q.id);
-    h = mixU32(h, q.player);
-    h = mixF64(h, q.anchorX);
-    h = mixF64(h, q.anchorY);
-    h = mixF64(h, q.facing);
-    h = mixF64(h, q.morale);
-    h = mixU32(h, q.target);
-    h = mixU32(h, q.path.length);
-    for (const p of q.path) h = mixF64(h, p);
-
-    // Orders and intent, not just position. Two worlds can hold identical
-    // positions while one squad is outbound on patrol leg 3 and the other is
-    // inbound on the same leg -- they only separate seconds later. Hashing
-    // enum state and leg counters catches that divergence at the tick it
-    // happens, which is what a desync detector is for.
-    h = mixU32(h, STANCES.indexOf(q.stance));
-    h = mixU32(h, FORMATION_SHAPES.indexOf(q.shape));
-    h = mixF64(h, q.holdX);
-    h = mixF64(h, q.holdY);
-    h = mixF64(h, q.holdRadius);
-    h = mixU32(h, q.recoverUntil);
-    h = mixU32(h, q.spellReady);
-    h = mixU32(h, (q.seenBy[0] ? 1 : 0) | (q.seenBy[1] ? 2 : 0));
-    h = mixU32(h, q.patrolLeg);
-    h = mixU32(h, q.patrolForward ? 1 : 0);
-    h = mixU32(h, q.patrol.length);
-    for (const p of q.patrol) h = mixF64(h, p);
+  // Groups are drawn by the player, so their membership is genuine state: two
+  // peers that grouped different men would command different armies.
+  for (const g of world.groups) {
+    h = mixU32(h, g.id);
+    h = mixU32(h, g.player);
+    h = mixF64(h, g.anchorX);
+    h = mixF64(h, g.anchorY);
+    h = mixF64(h, g.facing);
+    h = mixU32(h, g.target);
+    h = mixU32(h, STANCES.indexOf(g.stance));
+    h = mixU32(h, FORMATION_SHAPES.indexOf(g.shape));
+    h = mixU32(h, g.recoverUntil);
+    h = mixU32(h, g.spellReady);
+    h = mixF64(h, g.holdX);
+    h = mixF64(h, g.holdY);
+    h = mixF64(h, g.holdRadius);
+    h = mixU32(h, g.patrolLeg);
+    h = mixU32(h, g.patrolForward ? 1 : 0);
+    h = mixU32(h, (g.seenBy[0] ? 1 : 0) | (g.seenBy[1] ? 2 : 0));
+    h = mixU32(h, g.members.length);
+    for (const m of g.members) h = mixU32(h, m);
+    h = mixU32(h, g.path.length);
+    for (const p of g.path) h = mixF64(h, p);
+    h = mixU32(h, g.patrol.length);
+    for (const p of g.patrol) h = mixF64(h, p);
   }
 
   // Soldiers are the bulk of the state and the thing most likely to drift, so
   // they are hashed individually rather than via a squad-level summary.
+  // Soldiers are the entities, and the bulk of the state.
   const s = world.soldiers;
   h = mixU32(h, s.count);
   for (let i = 0; i < s.count; i++) {
     h = mixU32(h, s.alive[i]);
     if (s.alive[i] !== 1) continue;
+    h = mixU32(h, s.player[i]);
+    h = mixU32(h, s.type[i]);
+    h = mixU32(h, s.group[i]);
     h = mixU32(h, s.slot[i]);
     h = mixF64(h, s.x[i]);
     h = mixF64(h, s.y[i]);
     h = mixF64(h, s.facing[i]);
     h = mixF64(h, s.hp[i]);
+    h = mixF64(h, s.morale[i]);
+    h = mixF64(h, s.cooldown[i]);
   }
 
   // Workings alter damage and morale, so they are state, not decoration.

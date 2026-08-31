@@ -29,15 +29,24 @@ import type { FormationShape } from "../sim/formations.ts";
 
 export type Point = { readonly x: number; readonly y: number };
 
+/**
+ * A thing the pen can act on.
+ *
+ * There are no inherent squads, so this is either a group the player has drawn
+ * or a single loose soldier standing on his own -- the pen does not distinguish
+ * between them, and neither does the recognizer. The Commander owns the mapping
+ * back to the soldiers underneath.
+ */
 export type SquadView = {
+  /** Opaque handle. The Commander decides what it refers to. */
   readonly id: number;
   readonly player: number;
   readonly x: number;
   readonly y: number;
-  /** Formation radius in world units. */
+  /** Footprint radius in world units; a lone soldier's is small. */
   readonly radius: number;
   readonly facing: number;
-  /** False for enemies currently hidden by fog (Phase 4). */
+  /** False for enemies currently hidden by fog. */
   readonly visible: boolean;
 };
 
@@ -76,7 +85,9 @@ export type Recognized =
   /** Cordon and sweep a circular area rather than trace a drawn circuit. */
   | { kind: "patrolArea"; squads: number[]; x: number; y: number; radius: number }
   /** Stand down and recover. Costs 30 seconds of total vulnerability. */
-  | { kind: "recover"; squads: number[] };
+  | { kind: "recover"; squads: number[] }
+  /** A loop drawn around loose men, with nothing selected: gather them up. */
+  | { kind: "lasso"; squads: number[] };
 
 // -- tuning, all in world units ------------------------------------------------
 
@@ -348,7 +359,17 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
     const tapped = anchorSquad(ctx, start);
     return { kind: "select", squads: tapped !== null ? [tapped] : [] };
   }
-  if (subjects.length === 0) return null;
+  // Nothing selected and a closed stroke: this is a lasso, the only way a
+  // group ever comes into existence. Everything the loop encloses is gathered.
+  if (subjects.length === 0) {
+    if (!closed) return null;
+    const inside: number[] = [];
+    for (const u of ctx.squads) {
+      if (u.player !== ctx.player) continue;
+      if (pointInPolygon(u.x, u.y, raw)) inside.push(u.id);
+    }
+    return inside.length > 0 ? { kind: "lasso", squads: inside } : null;
+  }
 
   const subject = squadById(ctx, subjects[0]);
   const scale = subject ? Math.max(subject.radius, 20) : 30;
@@ -447,6 +468,8 @@ export function gestureLabel(r: Recognized | null): string {
       return "patrol area";
     case "recover":
       return "recover";
+    case "lasso":
+      return "group " + r.squads.length;
     default:
       return r.kind;
   }
@@ -654,4 +677,23 @@ function enclosedAreaOf(pts: readonly Point[]): number {
     a += p.x * q.y - q.x * p.y;
   }
   return Math.abs(a) / 2;
+}
+
+/**
+ * Even-odd point-in-polygon against the raw stroke.
+ *
+ * Deliberately the RAW points rather than the simplified ones: a lasso is drawn
+ * to enclose particular men, and simplifying first can cut a corner across
+ * someone the player deliberately curved around.
+ */
+export function pointInPolygon(px: number, py: number, poly: readonly Point[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i];
+    const b = poly[j];
+    if (a.y > py !== b.y > py && px < ((b.x - a.x) * (py - a.y)) / (b.y - a.y) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }

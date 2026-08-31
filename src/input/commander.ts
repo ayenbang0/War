@@ -29,6 +29,22 @@ const ORDER_DELAY = 1;
  */
 const PAIR_WINDOW_MS = 1200;
 
+/** Footprint of a lone soldier, for hit-testing the pen against him. */
+const LOOSE_RADIUS = 9;
+
+/** Loose soldiers get negative handles so they never collide with group ids. */
+function looseHandle(soldier: number): number {
+  return -(soldier + 1);
+}
+
+function isLoose(handle: number): boolean {
+  return handle < 0;
+}
+
+function looseSoldier(handle: number): number {
+  return -handle - 1;
+}
+
 export class Commander {
   selected: number[] = [];
   /** What the recognizer currently reads the in-progress stroke as. */
@@ -68,18 +84,42 @@ export class Commander {
     this.pendingDeadline = 0;
   }
 
-  /** Snapshot of what the player can see, as the recognizer needs it. */
+  /**
+   * Snapshot of what the player can see, as the recognizer needs it.
+   *
+   * Groups and lone soldiers are presented identically -- the pen does not care
+   * which it is acting on. Handles are group ids as they stand, and negative
+   * ids for loose soldiers, so the two never collide and this class can map
+   * back without a second lookup table.
+   */
   context(): GestureContext {
-    const squads: SquadView[] = this.world.squads.map((q) => ({
-      id: q.id,
-      player: q.player,
-      x: q.anchorX,
-      y: q.anchorY,
-      radius: q.radius,
-      facing: q.facing,
-      // Your own squads are always visible; enemies only through the fog.
-      visible: q.player === this.player || q.seenBy[this.player],
-    }));
+    const w = this.world;
+    const squads: SquadView[] = [];
+    for (const g of w.groups) {
+      if (w.liveCount(g) === 0) continue;
+      squads.push({
+        id: g.id,
+        player: g.player,
+        x: g.anchorX,
+        y: g.anchorY,
+        radius: g.radius,
+        facing: g.facing,
+        visible: g.player === this.player || g.seenBy[this.player],
+      });
+    }
+    const s = w.soldiers;
+    for (let i = 0; i < s.count; i++) {
+      if (s.alive[i] !== 1 || s.group[i] >= 0) continue;
+      squads.push({
+        id: looseHandle(i),
+        player: s.player[i],
+        x: s.x[i],
+        y: s.y[i],
+        radius: LOOSE_RADIUS,
+        facing: s.facing[i],
+        visible: s.player[i] === this.player || w.canSee(this.player, i),
+      });
+    }
     // Home is the map edge the player deployed on: it is what separates a
     // fighting withdrawal from an ordinary reposition.
     const homeX = this.player === 0 ? 0 : this.world.terrain.worldWidth;
@@ -92,10 +132,45 @@ export class Commander {
     };
   }
 
-  /** A recovering squad has stood down and will not accept orders. */
+  /** A recovering group has stood down and will not accept orders. */
   private locked(id: number): boolean {
-    const q = this.world.squadById(id);
+    const q = this.world.groupById(id);
     return q !== undefined && q.recoverUntil > this.world.tick;
+  }
+
+  /** Soldier ids behind a set of handles, groups expanded to their members. */
+  private soldiersBehind(handles: readonly number[]): number[] {
+    const out: number[] = [];
+    for (const h of handles) {
+      if (isLoose(h)) {
+        out.push(looseSoldier(h));
+        continue;
+      }
+      const g = this.world.groupById(h);
+      if (g) for (const m of g.members) out.push(m);
+    }
+    return out;
+  }
+
+  /**
+   * Turn handles into commandable groups.
+   *
+   * Loose soldiers cannot be ordered directly -- an order is given to a group --
+   * so acting on them forms one. That is the whole model: the squad exists
+   * because the player just commanded these men together.
+   */
+  private materialise(handles: readonly number[]): number[] {
+    const out: number[] = [];
+    const loose: number[] = [];
+    for (const h of handles) {
+      if (isLoose(h)) loose.push(looseSoldier(h));
+      else if (this.world.groupById(h)) out.push(h);
+    }
+    if (loose.length > 0) {
+      const g = this.world.createGroup(this.player, loose);
+      if (g) out.push(g.id);
+    }
+    return out;
   }
 
   /** Re-read an in-progress stroke. Pure and cheap, so it runs every move. */
@@ -117,6 +192,16 @@ export class Commander {
       this.clearPending();
       this.selected = r.squads.slice();
       return r.squads.length > 0 ? "selected" : "cleared";
+    }
+
+    // A lasso is the ONLY way a group is ever born. Everything enclosed is
+    // gathered into one, replacing whatever groups those men were in before.
+    if (r.kind === "lasso") {
+      this.clearPending();
+      const men = this.soldiersBehind(r.squads);
+      const g = this.world.createGroup(this.player, men);
+      this.selected = g ? [g.id] : [];
+      return g ? "grouped " + g.members.length : "";
     }
 
     // -- group verbs ---------------------------------------------------------
@@ -186,16 +271,17 @@ export class Commander {
 
     this.clearPending();
 
-    // Acting on a squad also selects it, so the next gesture can follow up
-    // without re-targeting.
-    this.selected = r.squads.slice();
+    // Acting on loose men gathers them first: an order needs something to be
+    // given to, and that something is a group the player just implicitly drew.
+    const handles = this.materialise(r.squads);
+    this.selected = handles;
     const tick = this.world.tick + ORDER_DELAY;
-    const n = r.squads.length;
+    const n = handles.length;
 
-    r.squads.forEach((id, i) => {
+    handles.forEach((id, i) => {
       // Several squads told to go to one point would pile onto the same spot
       // and grind against each other. Fan them out perpendicular to the route.
-      const q = this.world.squadById(id);
+      const q = this.world.groupById(id);
       const spread = q ? q.radius * 2.4 : 80;
       const lateral = n > 1 ? (i - (n - 1) / 2) * spread : 0;
 

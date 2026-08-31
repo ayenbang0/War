@@ -17,20 +17,8 @@
     pointer-events: none;
     white-space: pre;
   }
-  #hud { left: 12px; top: 12px; }
-  #legend { left: 12px; bottom: 12px; opacity: 0.72; font-size: 10px; line-height: 1.5; }
-  #legend b { font-weight: 600; color: #2f2718; }
+  #hud { left: 12px; top: 12px; font-size: 13px; line-height: 1.5; letter-spacing: 0.02em; }
 </style>
 <canvas id="stage"></canvas>
 <div id="hud" class="panel"></div>
-<div id="legend" class="panel"><b>PEN</b>  left-drag. a stroke begun on your squad always commands that squad.
-  line out <b>move</b>     end on enemy <b>attack</b>     back toward home <b>retreat</b>
-  small loop <b>hold</b>   large circuit <b>patrol</b>    tap squad <b>select</b>, tap ground <b>clear</b>
-  glyph drawn ON a squad re-forms it:  across <b>line</b>  along <b>column</b>  chevron <b>wedge</b>  box <b>square</b>
-<b>GROUP</b> (2+ selected, drawn on open ground)
-  straight line <b>split</b> the selection, keeping squads left of the stroke
-  a second parallel line within 1.2s instead lays them out in <b>rows and columns</b>
-  large circle <b>patrol that area</b>    heart <b>recover</b> - 30s of healing, and 30s helpless
-<b>DEPLOY</b> before the off: tap a squad, then drag inside your own zone to place it.  <b>ENTER</b> begins the battle.
-<b>CAMERA</b>  middle/right-drag or WASD pan   wheel zoom   space pause   . step   esc cancel stroke</div>
 <script type="module" src="/src/main.ts"></script>
