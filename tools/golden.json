@@ -1,4 +1,10 @@
 {
-  "ticks": 1800,
-  "final": "f57db420"
+  "world": {
+    "ticks": 1800,
+    "final": "1bcfc920"
+  },
+  "stable": {
+    "terrain": "163f678c",
+    "rng": "713c8bba-e6e3a1b4-953d5b38-7b2e8fed"
+  }
 }

@@ -11,15 +11,27 @@
  * grows, the tick contract does not.
  */
 
-import { atan2, clamp, dist, rotateToward, TAU } from "./math.ts";
+import { atan2, clamp, dist, min, rotateToward, TAU } from "./math.ts";
 import { Rng, Stream } from "./rng.ts";
 import { OrderQueue, type Order, type FormationShape } from "./orders.ts";
-import { generateTerrain, TerrainGrid, TERRAIN_INFO } from "./terrain.ts";
+import { generateTerrain, TerrainGrid, TERRAIN_INFO, TILE_SIZE } from "./terrain.ts";
 
 /** Simulation ticks per second. Slow, deliberate pacing needs no more than this. */
 export const TICK_RATE = 20;
 /** Seconds of simulated time per tick. */
 export const TICK_DT = 1 / TICK_RATE;
+
+/**
+ * A unit may never advance more than half a tile without the ground beneath it
+ * being re-tested. Without this bound, a path whose waypoints fall inside one
+ * tick's step budget gets consumed whole and the unit lands wherever the
+ * waypoint points -- river included. That is not a hypothetical: a drawn pen
+ * stroke is a dense polyline, so Phase 2 would have produced exactly that path.
+ */
+const MAX_SUBSTEP = TILE_SIZE * 0.5;
+
+/** Distance below which two points count as coincident. */
+const EPS = 1e-9;
 
 export type Unit = {
   readonly id: number;
@@ -154,30 +166,30 @@ export class World {
       }
 
       let remaining = speed * TICK_DT;
-      // Consume waypoints until the step budget runs out.
-      while (remaining > 0 && u.path.length >= 2) {
+      // Walk the path in bounded increments, testing the ground at every
+      // landing point. Never consume a waypoint whole without checking it.
+      while (remaining > EPS && u.path.length >= 2) {
         const wx = u.path[0];
         const wy = u.path[1];
         const d = dist(u.x, u.y, wx, wy);
-        if (d <= remaining) {
-          u.x = wx;
-          u.y = wy;
-          remaining -= d;
+        if (d <= EPS) {
           u.path.splice(0, 2);
-        } else {
-          const t = remaining / d;
-          const nx = u.x + (wx - u.x) * t;
-          const ny = u.y + (wy - u.y) * t;
-          // Refuse to walk into impassable terrain; hold position instead of
-          // clipping through a river.
-          if (TERRAIN_INFO[this.terrain.typeAtWorld(nx, ny)].moveScale <= 0) {
-            u.path.length = 0;
-          } else {
-            u.x = nx;
-            u.y = ny;
-          }
-          remaining = 0;
+          continue;
         }
+        const stepLen = min(remaining, d, MAX_SUBSTEP);
+        const t = stepLen / d;
+        const nx = u.x + (wx - u.x) * t;
+        const ny = u.y + (wy - u.y) * t;
+        // Refuse to walk into impassable terrain; drop the order and hold
+        // position rather than clipping through a river.
+        if (TERRAIN_INFO[this.terrain.typeAtWorld(nx, ny)].moveScale <= 0) {
+          u.path.length = 0;
+          break;
+        }
+        u.x = nx;
+        u.y = ny;
+        remaining -= stepLen;
+        if (stepLen >= d - EPS) u.path.splice(0, 2);
       }
 
       u.x = clamp(u.x, 0, this.terrain.worldWidth);

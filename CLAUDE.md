@@ -30,15 +30,19 @@ The sim is deterministic lockstep so netplay, replays, and regression tests stay
 Fixed sim tick at 20 Hz. Render at rAF (~60fps) interpolating between the last two sim states. Orders are serializable commands queued to the next tick boundary — never applied mid-tick.
 
 ## Testing
-`npm test` runs the purity scan and then `tools/headless.ts`, which exercises the sim with no browser at all.
+`npm test` runs the purity scan and then `tools/headless.ts`, which exercises the sim with no browser at all. 28 checks across math, rng, replay, terrain and movement.
 
-The regression suite is a command log plus a state hash. `tools/golden.json` pins the final hash of a scripted 90-second run. If it moves and you did not mean to change the simulation, something drifted — investigate before regenerating. When a phase intentionally changes sim behaviour, regenerate deliberately:
+The regression suite is a command log plus state hashes, kept in `tools/golden.json` in **two deliberately separate tiers**:
 
-```bash
-UPDATE_GOLDEN=1 node tools/headless.ts
-```
+- **`world`** — the full state hash after a scripted 1800-tick match. This is *expected* to move whenever a phase changes movement, combat or morale. Regenerate with `UPDATE_GOLDEN=1 node tools/headless.ts` and say why in the commit message.
+- **`stable`** — the terrain generator's output and the four PRNG streams. No later phase should change these. A move here is a bug until proven otherwise, and needs `UPDATE_STABLE=1` to rewrite.
 
-and say so in the commit message. The same hash function detects netplay desync in Phase 10.
+The split exists because a single anchor that legitimately moves every commit trains everyone to regenerate reflexively, and then it stops catching anything. Keep the tiers apart.
+
+The same hash function detects netplay desync in Phase 10, and the stable tier tells you which layer drifted.
+
+## Movement invariant
+A unit may never advance more than half a tile without re-testing the ground beneath it (`MAX_SUBSTEP` in `world.ts`). Consuming a whole waypoint unchecked lets a unit land wherever the waypoint points — including mid-river — whenever that waypoint falls inside one tick's step budget. Dense paths are not hypothetical: a drawn pen stroke is a dense polyline. Any future pathing layer must keep this bounded-substep shape.
 
 ## Art direction
 Map-table wargame aesthetic: parchment ground, relief shading, topographic contours, unit counters, ink-drawn strokes. All procedurally drawn — there are no sprite assets in this project.

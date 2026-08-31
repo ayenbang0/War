@@ -14,7 +14,7 @@
  */
 
 import { World, TICK_RATE } from "../src/sim/world.ts";
-import { hashWorld } from "../src/sim/hash.ts";
+import { hashWorld, hashTerrain, hashRngStream } from "../src/sim/hash.ts";
 import { Rng, Stream } from "../src/sim/rng.ts";
 import * as M from "../src/sim/math.ts";
 import { provingGround } from "../src/content/levels/proving-ground.ts";
@@ -213,21 +213,67 @@ function replay(log: Order[]): { hashes: string[]; final: string } {
     moved + "/16 moved",
   );
 
-  // Golden hash: the cross-session anchor. If this moves and you did not mean
-  // to change the simulation, something drifted. Regenerate deliberately with
-  // `UPDATE_GOLDEN=1 node tools/headless.ts` when a phase intentionally alters
-  // sim behaviour, and say so in the commit message.
+  // Two tiers of golden hash, deliberately separated.
+  //
+  // The WORLD hash is expected to move: every phase that touches movement,
+  // combat or morale legitimately changes it. Regenerate with
+  //   UPDATE_GOLDEN=1 node tools/headless.ts
+  // and say why in the commit message.
+  //
+  // The STABLE hashes pin the terrain generator and the PRNG arithmetic, which
+  // no later phase should alter. Keeping them apart is the point: if the only
+  // anchor were the world hash, regenerating would become reflexive and the
+  // suite would quietly stop catching anything. A move in a stable hash is a
+  // bug until proven otherwise, and needs UPDATE_STABLE=1 to rewrite.
   const goldenPath = fileURLToPath(new URL("./golden.json", import.meta.url));
-  if (process.env.UPDATE_GOLDEN) {
-    writeFileSync(goldenPath, JSON.stringify({ ticks: TICKS, final: liveFinal }, null, 2));
+  type Golden = {
+    world: { ticks: number; final: string };
+    stable: { terrain: string; rng: string };
+  };
+
+  const stableTerrain = hashTerrain(
+    generateTerrain(provingGround.tilesWide, provingGround.tilesHigh, provingGround.seed),
+  );
+  const stableRng = [Stream.Combat, Stream.Morale, Stream.Ai, Stream.Spawn]
+    .map((st) => hashRngStream(Rng.create(provingGround.seed, st), 10000))
+    .join("-");
+
+  const existing: Golden | null = existsSync(goldenPath)
+    ? (JSON.parse(readFileSync(goldenPath, "utf8")) as Golden)
+    : null;
+
+  const next: Golden = {
+    world: {
+      ticks: TICKS,
+      final: process.env.UPDATE_GOLDEN || !existing ? liveFinal : existing.world.final,
+    },
+    stable: {
+      terrain: process.env.UPDATE_STABLE || !existing ? stableTerrain : existing.stable.terrain,
+      rng: process.env.UPDATE_STABLE || !existing ? stableRng : existing.stable.rng,
+    },
+  };
+
+  if (process.env.UPDATE_GOLDEN || process.env.UPDATE_STABLE || !existing) {
+    writeFileSync(goldenPath, JSON.stringify(next, null, 2));
     console.log("");
-    console.log("  golden hash updated -> " + liveFinal);
-  } else if (existsSync(goldenPath)) {
-    const golden = JSON.parse(readFileSync(goldenPath, "utf8")) as { ticks: number; final: string };
+    console.log("  golden file written");
+  }
+
+  if (existing) {
     check(
-      "matches committed golden hash",
-      golden.ticks === TICKS && golden.final === liveFinal,
-      "expected " + golden.final + ", got " + liveFinal,
+      "terrain generator unchanged (stable)",
+      existing.stable.terrain === stableTerrain,
+      "expected " + existing.stable.terrain + ", got " + stableTerrain,
+    );
+    check(
+      "rng streams unchanged (stable)",
+      existing.stable.rng === stableRng,
+      "expected " + existing.stable.rng + ", got " + stableRng,
+    );
+    check(
+      "world state matches golden",
+      existing.world.ticks === TICKS && existing.world.final === liveFinal,
+      "expected " + existing.world.final + ", got " + liveFinal + " (UPDATE_GOLDEN=1 if intended)",
     );
   }
 
@@ -300,6 +346,69 @@ console.log("terrain");
     console.log("  " + TERRAIN_INFO[t as 0].name.padEnd(14) + String(n).padStart(7) +
       "  " + ((n / total) * 100).toFixed(1) + "%");
   }
+}
+
+
+// -- 5. movement integrity -----------------------------------------------------
+
+console.log("");
+console.log("movement");
+{
+  // A unit must never end a tick standing on impassable terrain, no matter
+  // where its waypoints sit. The dangerous case is a waypoint the unit can
+  // reach within a single tick's step budget: a naive loop consumes that
+  // waypoint whole and lands wherever it points, river or not.
+  const w = new World({
+    seed: provingGround.seed,
+    tilesWide: provingGround.tilesWide,
+    tilesHigh: provingGround.tilesHigh,
+  });
+  const g = w.terrain;
+
+  let crossings = 0;
+  let trials = 0;
+
+  for (let ty = 4; ty < g.height - 4 && trials < 400; ty += 3) {
+    for (let tx = 4; tx < g.width - 4 && trials < 400; tx += 3) {
+      if (g.typeAt(tx, ty) !== Terrain.Water) continue;
+      // Need land on both banks along this row.
+      let west = tx - 1;
+      while (west > 0 && g.typeAt(west, ty) === Terrain.Water) west--;
+      let east = tx + 1;
+      while (east < g.width - 1 && g.typeAt(east, ty) === Terrain.Water) east++;
+      if (!g.passableAt(west, ty) || !g.passableAt(east, ty)) continue;
+      if (g.typeAt(west, ty) === Terrain.Bridge || g.typeAt(east, ty) === Terrain.Bridge) continue;
+
+      trials++;
+      const startX = (west + 1) * 32 - 0.5; // hard against the water's edge
+      const startY = (ty + 0.5) * 32;
+
+      // Case A: one distant waypoint on the far bank. The step budget cannot
+      // reach it, so the partial-step branch runs.
+      const a = w.spawnUnit(0, startX, startY, 0);
+      w.orders.issue(
+        { kind: "move", unit: a.id, path: [(east + 0.5) * 32, startY] },
+        0,
+        w.tick,
+      );
+
+      // Case B: a dense polyline crossing the river, every point inside a
+      // single tick's step budget. This is what a drawn pen stroke looks like
+      // after simplification, and it is the case that skips terrain checks.
+      const b = w.spawnUnit(0, startX, startY, 0);
+      const dense: number[] = [];
+      for (let step = 1; step <= 220; step++) dense.push(startX + step, startY);
+      w.orders.issue({ kind: "move", unit: b.id, path: dense }, 0, w.tick);
+
+      for (let k = 0; k < 40; k++) w.step();
+      if (g.typeAtWorld(a.x, a.y) === Terrain.Water) crossings++;
+      if (g.typeAtWorld(b.x, b.y) === Terrain.Water) crossings++;
+    }
+  }
+
+  check("found river crossings to test", trials > 20, trials + " trials");
+  check("both cases were exercised", w.units.length === trials * 2);
+  check("units never end a tick standing on water", crossings === 0, crossings + "/" + trials * 2 + " walked onto water");
 }
 
 console.log(

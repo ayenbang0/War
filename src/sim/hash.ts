@@ -13,6 +13,8 @@
 
 import { imul } from "./math.ts";
 import type { World } from "./world.ts";
+import type { TerrainGrid } from "./terrain.ts";
+import type { Rng } from "./rng.ts";
 
 const scratch = new DataView(new ArrayBuffer(8));
 
@@ -63,5 +65,36 @@ export function hashWorld(world: World): string {
     h = mixU32(h, s.d);
   }
 
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Fingerprint of the terrain generator's output alone.
+ *
+ * Deliberately separate from the world hash. World state is *expected* to change
+ * as phases add movement, combat and morale, so its golden gets regenerated
+ * often -- which would train everyone to regenerate reflexively. Terrain
+ * generation is not expected to change, so a move here is unambiguously a bug
+ * (or a deliberate, loud generator change) rather than routine drift.
+ */
+export function hashTerrain(grid: TerrainGrid): string {
+  let h = FNV_OFFSET | 0;
+  h = mixU32(h, grid.width);
+  h = mixU32(h, grid.height);
+  h = mixU32(h, grid.revision);
+  for (let i = 0; i < grid.type.length; i++) h = mixU32(h, grid.type[i]);
+  for (let i = 0; i < grid.elevation.length; i++) h = mixU32(h, grid.elevation[i]);
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Fingerprint of a PRNG stream's first `pulls` outputs. Consumes the generator,
+ * so pass a freshly created one. Like hashTerrain, this must never change: it
+ * pins the arithmetic in rng.ts independently of any gameplay system, so a
+ * Phase 10 desync can be attributed to the right layer.
+ */
+export function hashRngStream(rng: Rng, pulls: number): string {
+  let h = FNV_OFFSET | 0;
+  for (let i = 0; i < pulls; i++) h = mixU32(h, rng.nextU32());
   return (h >>> 0).toString(16).padStart(8, "0");
 }

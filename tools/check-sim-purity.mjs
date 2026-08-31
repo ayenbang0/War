@@ -31,6 +31,8 @@ const BANNED_GLOBALS = [
   ["getContext", "no rendering in sim/"],
 ];
 
+const FORBIDDEN_LAYERS = /(^|\/)(render|input|net)\//;
+
 function walk(dir) {
   const out = [];
   for (const name of readdirSync(dir)) {
@@ -41,11 +43,14 @@ function walk(dir) {
   return out;
 }
 
-/** Strip comments and string literals so prose about a rule never trips it. */
-function stripNonCode(src) {
+/** Drop comments, so prose explaining a rule never trips that rule. */
+function stripComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+}
+
+/** Additionally blank string literals, for checks that scan for identifiers. */
+function stripStrings(src) {
   return src
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/\/\/[^\n]*/g, " ")
     .replace(/"[^"\n]*"/g, '""')
     .replace(/'[^'\n]*'/g, "''")
     .replace(/`[^`]*`/g, "``");
@@ -56,7 +61,11 @@ const files = walk(SIM_DIR);
 
 for (const file of files) {
   const raw = readFileSync(file, "utf8");
-  const code = stripNonCode(raw);
+  // Import specifiers live inside string literals, so the import scan must run
+  // on decommented-but-unblanked source. Scanning the fully stripped text
+  // silently matches nothing -- which is exactly how this check sat dead.
+  const decommented = stripComments(raw);
+  const code = stripStrings(decommented);
   const rel = relative(ROOT, file).split(sep).join("/");
   const isMathFile = file === MATH_FILE;
 
@@ -79,9 +88,9 @@ for (const file of files) {
     }
   }
 
-  for (const m of code.matchAll(/from\s+"([^"\n]+)"/g)) {
+  for (const m of decommented.matchAll(/\bfrom\s*["']([^"'\n]+)["']/g)) {
     const spec = m[1];
-    if (/\.\.\/(render|input|net)\//.test(spec)) {
+    if (FORBIDDEN_LAYERS.test(spec)) {
       violations.push(rel + ": imports " + spec + " -- sim/ must not depend on that layer");
     }
   }
