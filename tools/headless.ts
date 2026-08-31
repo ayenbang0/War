@@ -1328,6 +1328,103 @@ section("magic");
   })());
 }
 
+// -- 8j. destructible terrain --------------------------------------------------
+
+section("destruction");
+{
+  const w = buildWorld();
+  const g = w.terrain;
+
+  // Find a bridge, and the fortifications the map has none of yet -- so this
+  // exercises bridges and woods, which the generator does produce.
+  let bx = -1;
+  let by = -1;
+  for (let ty = 0; ty < g.height && bx < 0; ty++) {
+    for (let tx = 0; tx < g.width; tx++) {
+      if (g.typeAt(tx, ty) === Terrain.Bridge) { bx = tx; by = ty; break; }
+    }
+  }
+  check("found a bridge to break", bx >= 0);
+
+  const rev0 = g.revision;
+  let broke = false;
+  for (let i = 0; i < 40 && !broke; i++) broke = g.damage(bx, by, 40);
+  check("a bridge can be broken", broke && g.typeAt(bx, by) === Terrain.Water,
+    "now " + TERRAIN_INFO[g.typeAt(bx, by)].name);
+  check("breaking terrain bumps the revision", g.revision > rev0);
+  check("plain ground cannot be destroyed", !g.damage(1, 1, 9999) || g.typeAt(1, 1) !== Terrain.Water);
+
+  // Burning a wood must open the sightline it was blocking.
+  {
+    let fx = -1;
+    let fy = -1;
+    for (let ty = 6; ty < g.height - 6 && fx < 0; ty++) {
+      for (let tx = 6; tx < g.width - 6; tx++) {
+        if (g.typeAt(tx, ty) !== Terrain.Forest) continue;
+        let thick = true;
+        for (let d = -2; d <= 2 && thick; d++) if (g.typeAt(tx + d, ty) !== Terrain.Forest) thick = false;
+        if (thick) { fx = tx; fy = ty; break; }
+      }
+    }
+    const ax = (fx - 4) * TILE_SIZE;
+    const bxw = (fx + 4) * TILE_SIZE;
+    const yy = (fy + 0.5) * TILE_SIZE;
+    const before = hasLineOfSight(g, ax, yy, bxw, yy);
+    // Burn the whole span the sightline crosses, not just the thick middle.
+    for (let d = -5; d <= 5; d++) {
+      for (let i = 0; i < 40; i++) g.damage(fx + d, fy, 40);
+    }
+    check("a wood can be burnt away", !before && hasLineOfSight(g, ax, yy, bxw, yy),
+      "sight before " + before + ", after " + hasLineOfSight(g, ax, yy, bxw, yy));
+  }
+
+  // THE POINT OF ALL THIS: a squad whose road is destroyed must re-plan, not
+  // walk into the water, discover it, and stand there for the rest of the match.
+  {
+    const w2 = buildWorld();
+    const g2 = w2.terrain;
+    let cx = -1;
+    let cy = -1;
+    for (let ty = 0; ty < g2.height && cx < 0; ty++) {
+      for (let tx = 0; tx < g2.width; tx++) {
+        if (g2.typeAt(tx, ty) === Terrain.Bridge) { cx = tx; cy = ty; break; }
+      }
+    }
+    const q = w2.squads[0];
+    // Park it on the west bank and send it across that crossing.
+    q.anchorX = (cx - 12) * TILE_SIZE;
+    q.anchorY = (cy + 0.5) * TILE_SIZE;
+    for (let i = 0; i < q.count; i++) {
+      w2.soldiers.x[q.first + i] = q.anchorX;
+      w2.soldiers.y[q.first + i] = q.anchorY;
+    }
+    const goalX = (cx + 14) * TILE_SIZE;
+    w2.orders.issue({ kind: "move", squad: q.id, path: [goalX, q.anchorY] }, 0, w2.tick + 1);
+    for (let t = 0; t < TICK_RATE * 4; t++) w2.step();
+    const hadRoute = q.path.length >= 2;
+
+    // Blow the whole crossing while they are on their way.
+    for (let d = -3; d <= 3; d++) {
+      for (let row = -1; row <= 1; row++) {
+        for (let i = 0; i < 40; i++) w2.terrain.damage(cx + d, cy + row, 40);
+      }
+    }
+    w2.step();
+    const rerouted = q.pathRevision === w2.terrain.revision;
+
+    for (let t = 0; t < TICK_RATE * 40; t++) w2.step();
+    let inWater = 0;
+    for (let i = 0; i < q.count; i++) {
+      const id = q.first + i;
+      if (w2.soldiers.alive[id] !== 1) continue;
+      if (TERRAIN_INFO[g2.typeAtWorld(w2.soldiers.x[id], w2.soldiers.y[id])].moveScale <= 0) inWater++;
+    }
+    check("the squad had a route across before the crossing went", hadRoute);
+    check("destroying the road re-plans the route", rerouted);
+    check("nobody drowns when the bridge goes", inWater === 0, inWater + " in the water");
+  }
+}
+
 // -- 9. gestures ---------------------------------------------------------------
 
 section("gestures");

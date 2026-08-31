@@ -15,14 +15,14 @@
  * mush: soldiers either clump into a single point or smear along the route.
  */
 
-import { atan2, clamp, cos, dist, max, min, rotateToward, sin, sqrt, TAU } from "./math.ts";
+import { atan2, clamp, cos, dist, floor, max, min, rotateToward, sin, sqrt, TAU } from "./math.ts";
 import { Rng, Stream } from "./rng.ts";
 import { OrderQueue, type Order } from "./orders.ts";
-import { generateTerrain, TerrainGrid, TERRAIN_INFO } from "./terrain.ts";
+import { generateTerrain, Terrain, TerrainGrid, TERRAIN_INFO, TILE_SIZE } from "./terrain.ts";
 import { formationSlots, formationRadius, type FormationShape } from "./formations.ts";
 import { advanceToward } from "./movement.ts";
 import { SpatialHash } from "./spatial.ts";
-import { findPath } from "./pathfind.ts";
+import { clearLine, findPath } from "./pathfind.ts";
 import { UNIT_TYPES, type UnitTypeId } from "../content/unit-types.ts";
 import { DOCTRINES, type DoctrineId } from "../content/doctrines.ts";
 import { MELEE_RANGE, d2, hitDamage, isFlanking, nearestInSquad, spreadTarget } from "./combat.ts";
@@ -173,6 +173,8 @@ export type Squad = {
   recoverUntil: number;
   /** Tick at which this squad may work its spell again. */
   spellReady: number;
+  /** Terrain revision the current route was planned against. */
+  pathRevision: number;
   /** Living soldiers. Formation slots are re-derived from this as men fall. */
   live: number;
   /** Whether each player can currently see this squad, indexed by player. */
@@ -354,6 +356,7 @@ export class World {
       cohesion: 1,
       recoverUntil: 0,
       spellReady: 0,
+      pathRevision: 0,
       live: count,
       seenBy: [player === 0, player === 1],
       kills: 0,
@@ -512,6 +515,7 @@ export class World {
    * leg is re-routed by A* and the results concatenated.
    */
   private routeThrough(q: Squad, waypoints: readonly number[]): number[] {
+    q.pathRevision = this.terrain.revision;
     if (waypoints.length < 2) return [];
     const out: number[] = [];
     let cx = q.anchorX;
@@ -566,6 +570,7 @@ export class World {
   // -- layer 1: the squad anchor walks its route ------------------------------
 
   private updateSquadAnchors(): void {
+    this.revalidateRoutes();
     for (const q of this.squads) {
       if (q.stance === "recover") {
         this.recover(q);
@@ -635,6 +640,37 @@ export class World {
       const id = q.first + i;
       if (s.alive[id] !== 1) continue;
       if (s.hp[id] < maxHp) s.hp[id] = min(maxHp, s.hp[id] + heal);
+    }
+  }
+
+  /**
+   * Re-route anyone whose road has changed under them.
+   *
+   * The terrain revision invalidates cached render chunks for free, but a
+   * squad's route is just a list of points: blow the bridge it was crossing and
+   * it keeps walking a path that no longer exists, discovers the water, drops
+   * the order and stands there. Checking only when the revision moves keeps
+   * this off the hot path entirely -- terrain changes a handful of times a
+   * match, not a handful of times a tick.
+   */
+  private revalidateRoutes(): void {
+    const rev = this.terrain.revision;
+    for (const q of this.squads) {
+      if (q.pathRevision === rev) continue;
+      q.pathRevision = rev;
+      if (q.path.length < 2) continue;
+
+      let ok = clearLine(this.terrain, q.anchorX, q.anchorY, q.path[0], q.path[1]);
+      for (let i = 0; ok && i + 3 < q.path.length; i += 2) {
+        ok = clearLine(this.terrain, q.path[i], q.path[i + 1], q.path[i + 2], q.path[i + 3]);
+      }
+      if (ok) continue;
+
+      // The destination is still what the player asked for; only the way there
+      // has changed. Re-plan to the same place rather than abandoning it.
+      const goalX = q.path[q.path.length - 2];
+      const goalY = q.path[q.path.length - 1];
+      q.path = this.routeThrough(q, [goalX, goalY]);
     }
   }
 
@@ -980,8 +1016,11 @@ export class World {
 
     for (const q of this.squads) {
       if (q.live === 0) continue;
-      if (q.stats.range > MELEE_RANGE) this.aimRanged(q, q.stats.range);
-      else this.aimMelee(q);
+      if (q.stats.range > MELEE_RANGE) {
+        const shot = this.aimRanged(q, q.stats.range);
+        // Siege has nothing to shoot: put it to work on the enemy's structures.
+        if (!shot && UNIT_TYPES[q.type].siege) this.batter(q);
+      } else this.aimMelee(q);
     }
 
     this.applyDamage();
@@ -1026,7 +1065,66 @@ export class World {
    * 250-unit bow sweeping that grid would touch hundreds of cells per soldier
    * per tick. There are only ~30 squads, so scanning them is trivial.
    */
-  private aimRanged(q: Squad, range: number): void {
+  /**
+   * Batter the nearest destructible structure in range.
+   *
+   * Only siege does this, and only with no squad to shoot at: an army that
+   * spends its arrows demolishing a wall while cavalry rides it down has its
+   * priorities wrong.
+   */
+  private batter(q: Squad): void {
+    const reach = q.stats.range;
+    const t = this.terrain;
+    const tx0 = floor((q.anchorX - reach) / TILE_SIZE);
+    const tx1 = floor((q.anchorX + reach) / TILE_SIZE);
+    const ty0 = floor((q.anchorY - reach) / TILE_SIZE);
+    const ty1 = floor((q.anchorY + reach) / TILE_SIZE);
+
+    let bestX = -1;
+    let bestY = -1;
+    let bestD = reach * reach;
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        if (!t.inBounds(tx, ty) || !t.destructibleAt(tx, ty)) continue;
+        // Woods are not worth a siege engine's time; walls and bridges are.
+        const kind = t.typeAt(tx, ty);
+        if (kind !== Terrain.Fortification && kind !== Terrain.Bridge) continue;
+        const cx = (tx + 0.5) * TILE_SIZE;
+        const cy = (ty + 0.5) * TILE_SIZE;
+        const dd = d2(q.anchorX, q.anchorY, cx, cy);
+        if (dd < bestD) {
+          bestD = dd;
+          bestX = tx;
+          bestY = ty;
+        }
+      }
+    }
+    if (bestX < 0) return;
+
+    const s = this.soldiers;
+    for (let i = 0; i < q.count; i++) {
+      const id = q.first + i;
+      if (s.alive[id] !== 1) continue;
+      if (s.cooldown[id] > 0) {
+        s.cooldown[id] -= TICK_DT;
+        continue;
+      }
+      s.cooldown[id] = q.stats.attackInterval;
+      this.terrain.damage(bestX, bestY, q.stats.attack * 0.55);
+      this.events.push({
+        kind: "shot",
+        player: q.player,
+        x0: s.x[id],
+        y0: s.y[id],
+        x1: (bestX + 0.5) * TILE_SIZE,
+        y1: (bestY + 0.5) * TILE_SIZE,
+        lethal: false,
+        victim: -1,
+      });
+    }
+  }
+
+  private aimRanged(q: Squad, range: number): boolean {
     const s = this.soldiers;
 
     let target: Squad | null = null;
@@ -1045,7 +1143,7 @@ export class World {
         target = other;
       }
     }
-    if (!target) return;
+    if (!target) return false;
 
     for (let i = 0; i < q.count; i++) {
       const id = q.first + i;
@@ -1069,6 +1167,7 @@ export class World {
       }
       this.strike(q, id, victim, q.stats.attack, q.stats.attackInterval);
     }
+    return true;
   }
 
   /** Buffer one blow. Nothing dies until the whole tick has been resolved. */

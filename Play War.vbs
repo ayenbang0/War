@@ -32,6 +32,7 @@ url = ""
 For tries = 1 To 120
   WScript.Sleep 500
   If fso.FileExists(logPath) Then
+    txt = ""
     On Error Resume Next
     Set ts = fso.OpenTextFile(logPath, 1)
     If Err.Number = 0 Then
@@ -39,7 +40,7 @@ For tries = 1 To 120
       ts.Close
     End If
     On Error GoTo 0
-    url = FindUrl(txt)
+    url = FindUrl(StripAnsi(txt))
     If url <> "" Then Exit For
   End If
 Next
@@ -52,10 +53,35 @@ End If
 
 shell.Run url, 1, False
 
-' Pull the first localhost URL out of Vite's banner. Stops at whitespace or at
-' an ANSI escape, since the output is colourised.
+' Vite colourises its banner, and it wraps the PORT in its own escape sequence:
+' "http://localhost:" ESC[1m "5180". Parsing the raw text therefore yields an
+' address with no port at all, which opens a dead tab. Strip the escapes first.
+Function StripAnsi(text)
+  Dim out, i, ch
+  out = ""
+  i = 1
+  Do While i <= Len(text)
+    ch = Mid(text, i, 1)
+    If ch = Chr(27) Then
+      i = i + 1
+      Do While i <= Len(text)
+        ch = Mid(text, i, 1)
+        If (ch >= "A" And ch <= "Z") Or (ch >= "a" And ch <= "z") Then Exit Do
+        i = i + 1
+      Loop
+      i = i + 1
+    Else
+      out = out & ch
+      i = i + 1
+    End If
+  Loop
+  StripAnsi = out
+End Function
+
+' Pull the first localhost URL out of the banner, and insist it carries a port.
+' Returning a portless address is the one failure worth guarding against here.
 Function FindUrl(text)
-  Dim at, j, ch, acc
+  Dim at, j, ch, acc, digits
   FindUrl = ""
   If IsEmpty(text) Then Exit Function
   at = InStr(text, "http://localhost:")
@@ -63,8 +89,11 @@ Function FindUrl(text)
   acc = ""
   For j = at To Len(text)
     ch = Mid(text, j, 1)
-    If ch = " " Or ch = vbTab Or ch = vbCr Or ch = vbLf Or ch = Chr(27) Then Exit For
+    If ch = " " Or ch = vbTab Or ch = vbCr Or ch = vbLf Then Exit For
     acc = acc & ch
   Next
+  digits = Mid(acc, Len("http://localhost:") + 1)
+  If Len(digits) = 0 Then Exit Function
+  If Not IsNumeric(Left(digits, 1)) Then Exit Function
   FindUrl = acc
 End Function

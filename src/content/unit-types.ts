@@ -45,6 +45,8 @@ export type UnitType = {
   readonly maxPerArmy: number;
   /** Spell this unit works, if any (spec section 6.2). */
   readonly spell?: SpellId;
+  /** Can batter fortifications and bridges when there is nothing to shoot. */
+  readonly siege?: boolean;
 };
 
 export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
@@ -176,6 +178,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     defaultShape: "line",
     cost: 9,
     maxPerArmy: 2,
+    siege: true,
   },
 };
 

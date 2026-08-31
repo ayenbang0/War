@@ -89,8 +89,13 @@ export class TerrainGrid {
   readonly width: number;
   readonly height: number;
   readonly type: Uint8Array;
-  /** 0..255, purely cosmetic in Phase 0; drives range/LOS bonuses in Phase 4. */
+  /** 0..255, drives sight, ranged reach and movement bonuses. */
   readonly elevation: Uint8Array;
+  /**
+   * Structural integrity, 0..255. Only meaningful on destructible tiles;
+   * everything else simply stays at full and is never touched.
+   */
+  readonly integrity: Uint8Array;
   /** Bumped on any mutation so caches (paths, vision, render chunks) can invalidate. */
   revision = 0;
 
@@ -99,6 +104,7 @@ export class TerrainGrid {
     this.height = height;
     this.type = new Uint8Array(width * height);
     this.elevation = new Uint8Array(width * height);
+    this.integrity = new Uint8Array(width * height).fill(255);
   }
 
   get worldWidth(): number {
@@ -139,9 +145,53 @@ export class TerrainGrid {
   set(tx: number, ty: number, t: TerrainType): void {
     if (!this.inBounds(tx, ty)) return;
     this.type[ty * this.width + tx] = t;
+    this.integrity[ty * this.width + tx] = 255;
     this.revision++;
   }
+
+  /**
+   * Wear a tile down. Returns true if it collapsed into something else.
+   *
+   * What a ruined tile becomes matters as much as that it can be ruined: a
+   * broken bridge is water again and cuts the map in half, a burnt wood stops
+   * blocking sight, a breached wall is open ground. Each is a route or a
+   * sightline that did not exist a moment ago, which is the whole point.
+   */
+  damage(tx: number, ty: number, amount: number): boolean {
+    if (!this.inBounds(tx, ty)) return false;
+    const i = ty * this.width + tx;
+    const t = this.type[i] as TerrainType;
+    // `=== undefined`, not a truthiness test: forest and fortifications both
+    // collapse into Terrain.Plain, which is 0, so `!DESTRUCTIBLE[t]` quietly
+    // declared them indestructible. Only bridges worked, because Water is 3.
+    const ruined = DESTRUCTIBLE[t];
+    if (ruined === undefined) return false;
+
+    const left = this.integrity[i] - amount;
+    if (left > 0) {
+      this.integrity[i] = left;
+      return false;
+    }
+    this.type[i] = ruined;
+    this.integrity[i] = 255;
+    // Bumping the revision is what invalidates cached render chunks AND tells
+    // squads their route may no longer exist.
+    this.revision++;
+    return true;
+  }
+
+  /** True where a tile can be worn down at all. */
+  destructibleAt(tx: number, ty: number): boolean {
+    return DESTRUCTIBLE[this.typeAt(tx, ty)] !== undefined;
+  }
 }
+
+/** What each destructible terrain becomes when it fails. */
+const DESTRUCTIBLE: Partial<Record<TerrainType, TerrainType>> = {
+  [Terrain.Fortification]: Terrain.Plain,
+  [Terrain.Bridge]: Terrain.Water,
+  [Terrain.Forest]: Terrain.Plain,
+};
 
 /**
  * Generate a battlefield: a river splitting the map with bridge crossings,
