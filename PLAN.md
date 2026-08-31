@@ -86,9 +86,9 @@ Two subtleties: LOS ignores cover within half a tile of either endpoint, or a sq
 ### Phase 5 — AI — **DONE**
 Four postures (aggressive / defensive / maneuver / reactive) chosen from relative strength and morale, with hysteresis so a commander reads as having intent rather than twitching. Flanking swings, target selection that prefers already-weakened squads, withdrawal when a squad breaks, and standing down to recover when badly thinned.
 
-**The AI lives in  and issues Orders through the same queue the player uses.** Anywhere else and it mutates state outside the order stream, so a replay fed only that stream diverges the moment the AI acts — and lockstep netplay dies with it. It draws from , so adding a decision never shifts a combat or morale roll.
+**The AI lives in `sim/` and issues Orders through the same queue the player uses.** Anywhere else and it mutates state outside the order stream, so a replay fed only that stream diverges the moment the AI acts — and lockstep netplay dies with it. It draws from `rng.ai`, so adding a decision never shifts a combat or morale roll.
 
-It reads  and nothing else, and a test asserts it never *orders* an attack on a squad it cannot see at that moment. Losing sight mid-approach is memory, not cheating; it remembers the last known enemy position rather than forgetting them the instant they step behind a wood.
+It reads `visibleEnemies()` and nothing else, and a test asserts it never *orders* an attack on a squad it cannot see at that moment. Losing sight mid-approach is memory, not cheating; it remembers the last known enemy position rather than forgetting them the instant they step behind a wood.
 
 **Verified:** a full 15-minute AI-vs-AI match resolves with 347 casualties and all four postures used, and two matches from one seed stay hash-identical throughout with no orders supplied at all.
 
