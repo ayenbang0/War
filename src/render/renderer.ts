@@ -79,6 +79,7 @@ export class Renderer {
       }
     }
 
+    this.drawWorkings(world, cam, viewer, now);
     this.drawFog(world, cam, viewer);
   }
 
@@ -231,6 +232,42 @@ export class Renderer {
   }
 
   /** Zoomed-out stand-in: one wargame counter per squad. */
+  /**
+   * Workings on the field: a slow ring of the caster's colour, warm for the
+   * ones that help you and cold for the ones that do not. Drawn under the fog
+   * so a hex you have not spotted stays hidden.
+   */
+  private drawWorkings(world: World, cam: Camera, viewer: number, now: number): void {
+    if (world.workings.length === 0) return;
+    const ctx = this.ctx;
+    ctx.save();
+    for (const w of world.workings) {
+      const friendly = w.player === viewer;
+      const sx = cam.worldToScreenX(w.x);
+      const sy = cam.worldToScreenY(w.y);
+      const r = w.radius * cam.zoom;
+      if (sx < -r || sy < -r || sx > cam.viewW + r || sy > cam.viewH + r) continue;
+
+      const fade = Math.max(0, Math.min(1, (w.until - world.tick) / (TICK_RATE * 3)));
+      const pulse = 0.6 + 0.4 * Math.sin(now * 1.6 + w.x * 0.01);
+      ctx.globalAlpha = 0.32 * fade * pulse;
+      ctx.fillStyle = friendly ? "#5b7a5b" : "#7a4a68";
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.globalAlpha = 0.7 * fade;
+      ctx.strokeStyle = friendly ? "#456b45" : "#6b3a58";
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([5, 6]);
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.restore();
+  }
+
   private drawFog(world: World, cam: Camera, viewer: number): void {
     const fog = world.fog[viewer];
     paintFog(

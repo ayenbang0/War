@@ -30,6 +30,7 @@ import { globalMorale, nextMorale, ROUT_THRESHOLD } from "./morale.ts";
 import { evaluate, type ArmyState, type Outcome } from "./victory.ts";
 import { FogField, concealment, effectiveSight, hasLineOfSight, rangeFromHeight } from "./vision.ts";
 import { ArmyAI } from "./ai.ts";
+import { SPELLS, hexPenalty, mendRate, nerveShift, wardSoak, type Working } from "./magic.ts";
 
 /** Simulation ticks per second. Slow, deliberate pacing needs no more than this. */
 export const TICK_RATE = 20;
@@ -170,6 +171,8 @@ export type Squad = {
   cohesion: number;
   /** Tick at which a recovery lock lifts. 0 when the squad is free to act. */
   recoverUntil: number;
+  /** Tick at which this squad may work its spell again. */
+  spellReady: number;
   /** Living soldiers. Formation slots are re-derived from this as men fall. */
   live: number;
   /** Whether each player can currently see this squad, indexed by player. */
@@ -276,6 +279,8 @@ export class World {
   readonly fog: [FogField, FogField];
   /** Commanders the machine is running. Empty in a pure sandbox. */
   readonly ai: ArmyAI[] = [];
+  /** Workings currently standing on the field. */
+  readonly workings: Working[] = [];
   private readonly neighbours: Int32Array;
   private nextEntityId = 1;
 
@@ -348,6 +353,7 @@ export class World {
       morale: 1,
       cohesion: 1,
       recoverUntil: 0,
+      spellReady: 0,
       live: count,
       seenBy: [player === 0, player === 1],
       kills: 0,
@@ -428,7 +434,9 @@ export class World {
     this.rebuildHash();
     this.updateSoldiers();
     this.updateVision();
+    this.castSpells();
     this.resolveCombat();
+    this.applyWorkings();
     this.updateMorale();
     this.tick++;
     this.checkVictory();
@@ -836,6 +844,122 @@ export class World {
     return this.squads.filter((q) => q.player !== player && q.live > 0 && q.seenBy[player]);
   }
 
+  // -- magic ------------------------------------------------------------------
+
+  /**
+   * Adepts work whichever spell suits the order they already have.
+   *
+   * Deliberately no gesture of its own: the pen vocabulary is fourteen classes
+   * wide and provably diagonal, and every class added raises collision pressure
+   * on all the rest. Telling adepts to attack IS casting the hex.
+   */
+  private castSpells(): void {
+    for (const q of this.squads) {
+      if (q.live === 0 || this.tick < q.spellReady) continue;
+      const id = UNIT_TYPES[q.type].spell;
+      if (!id) continue;
+
+      let choose = id;
+      if (q.stance === "attack") choose = "hex";
+      else if (q.stance === "hold" || q.stance === "recover") choose = "ward";
+      else if (this.woundedNear(q)) choose = "mend";
+      else if (this.foeNear(q, SPELLS.hex.radius * 2.4)) choose = "hex";
+      else continue;
+
+      const spell = SPELLS[choose];
+      // A hex is thrown at the enemy; a ward and a mend settle on your own.
+      let tx = q.anchorX;
+      let ty = q.anchorY;
+      if (!spell.onAllies) {
+        const foe = this.nearestVisibleFoe(q);
+        if (!foe) continue;
+        tx = foe.anchorX;
+        ty = foe.anchorY;
+      }
+      this.workings.push({
+        spell: choose,
+        player: q.player,
+        x: tx,
+        y: ty,
+        radius: spell.radius,
+        until: this.tick + spell.duration * TICK_RATE,
+        power: q.stats.magic,
+      });
+      q.spellReady = this.tick + spell.cooldown * TICK_RATE;
+    }
+
+    // Retire faded workings. Iterating backwards keeps the splice cheap.
+    for (let i = this.workings.length - 1; i >= 0; i--) {
+      if (this.workings[i].until <= this.tick) this.workings.splice(i, 1);
+    }
+  }
+
+  private woundedNear(q: Squad): boolean {
+    for (const other of this.squads) {
+      if (other.player !== q.player || other.live === 0) continue;
+      if (d2(q.anchorX, q.anchorY, other.anchorX, other.anchorY) > SPELLS.mend.radius * SPELLS.mend.radius) {
+        continue;
+      }
+      if (other.live < other.count * 0.8) return true;
+    }
+    return false;
+  }
+
+  private foeNear(q: Squad, within: number): boolean {
+    return this.nearestVisibleFoe(q, within) !== null;
+  }
+
+  private nearestVisibleFoe(q: Squad, within = Infinity): Squad | null {
+    let best: Squad | null = null;
+    let bestD = within * within;
+    for (const other of this.squads) {
+      if (other.player === q.player || other.live === 0 || !other.seenBy[q.player]) continue;
+      const dd = d2(q.anchorX, q.anchorY, other.anchorX, other.anchorY);
+      if (dd < bestD || (dd === bestD && best !== null && other.id < best.id)) {
+        bestD = dd;
+        best = other;
+      }
+    }
+    return best;
+  }
+
+  /** Damage reduction and damage amplification a soldier stands in. */
+  private shelterAt(player: number, x: number, y: number): number {
+    let soak = 0;
+    for (const w of this.workings) {
+      if (w.spell !== "ward" || w.player !== player) continue;
+      if (d2(w.x, w.y, x, y) <= w.radius * w.radius) soak = max(soak, wardSoak(w.power));
+    }
+    for (const w of this.workings) {
+      if (w.spell !== "hex" || w.player === player) continue;
+      if (d2(w.x, w.y, x, y) <= w.radius * w.radius) soak -= hexPenalty(w.power);
+    }
+    return clamp(soak, -0.6, 0.6);
+  }
+
+  /** Healing and nerve, applied once a tick to whoever stands in a working. */
+  private applyWorkings(): void {
+    if (this.workings.length === 0) return;
+    const s = this.soldiers;
+    for (const q of this.squads) {
+      if (q.live === 0) continue;
+      for (const w of this.workings) {
+        const friendly = w.player === q.player;
+        if (SPELLS[w.spell].onAllies !== friendly) continue;
+        if (d2(w.x, w.y, q.anchorX, q.anchorY) > w.radius * w.radius) continue;
+
+        q.morale = clamp(q.morale + nerveShift(w.spell, w.power) * TICK_DT, 0, 1);
+        if (w.spell !== "mend") continue;
+        const heal = mendRate(w.power, q.stats.hp) * TICK_DT;
+        for (let i = 0; i < q.count; i++) {
+          const id = q.first + i;
+          if (s.alive[id] !== 1 || s.hp[id] >= q.stats.hp) continue;
+          s.hp[id] = min(q.stats.hp, s.hp[id] + heal);
+        }
+      }
+    }
+  }
+
   // -- combat -----------------------------------------------------------------
 
   /**
@@ -959,7 +1083,14 @@ export class World {
     const vq = this.squadOf(victim);
     if (!vq) return;
     const dmg = hitDamage(
-      this.rng.combat, attack, vq.stats.defence, 0, this.terrain, s.x[victim], s.y[victim],
+      this.rng.combat,
+      attack,
+      vq.stats.defence,
+      // Wards soak, hexes amplify. Negative shelter makes a blow land harder.
+      this.shelterAt(vq.player, s.x[victim], s.y[victim]),
+      this.terrain,
+      s.x[victim],
+      s.y[victim],
     );
     s.incoming[victim] += dmg;
     s.struckBy[victim] = this.ownerOf[attacker];

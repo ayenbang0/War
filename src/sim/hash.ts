@@ -68,6 +68,7 @@ export function hashWorld(world: World): string {
     h = mixF64(h, q.holdY);
     h = mixF64(h, q.holdRadius);
     h = mixU32(h, q.recoverUntil);
+    h = mixU32(h, q.spellReady);
     h = mixU32(h, (q.seenBy[0] ? 1 : 0) | (q.seenBy[1] ? 2 : 0));
     h = mixU32(h, q.patrolLeg);
     h = mixU32(h, q.patrolForward ? 1 : 0);
@@ -87,6 +88,17 @@ export function hashWorld(world: World): string {
     h = mixF64(h, s.y[i]);
     h = mixF64(h, s.facing[i]);
     h = mixF64(h, s.hp[i]);
+  }
+
+  // Workings alter damage and morale, so they are state, not decoration.
+  h = mixU32(h, world.workings.length);
+  for (const w of world.workings) {
+    h = mixU32(h, w.player);
+    h = mixU32(h, w.until);
+    h = mixF64(h, w.x);
+    h = mixF64(h, w.y);
+    h = mixF64(h, w.radius);
+    h = mixF64(h, w.power);
   }
 
   // The AI's posture and its memory of where the enemy was decide its future

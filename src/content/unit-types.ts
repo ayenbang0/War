@@ -6,8 +6,11 @@
  */
 
 import type { FormationShape } from "../sim/formations.ts";
+import type { SpellId } from "../sim/magic.ts";
 
-export type UnitTypeId = "line" | "skirmisher" | "archer" | "horse" | "guard";
+export type UnitTypeId =
+  | "line" | "skirmisher" | "archer" | "horse" | "guard"
+  | "mage" | "scout" | "siege";
 
 export type UnitType = {
   readonly id: UnitTypeId;
@@ -38,8 +41,10 @@ export type UnitType = {
   readonly sight: number;
   /** Point-buy cost (Phase 6). */
   readonly cost: number;
-  /** Maximum of this type in one army (Phase 6). */
+  /** Maximum of this type in one army. Special units are deliberately scarce. */
   readonly maxPerArmy: number;
+  /** Spell this unit works, if any (spec section 6.2). */
+  readonly spell?: SpellId;
 };
 
 export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
@@ -123,8 +128,57 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     cost: 7,
     maxPerArmy: 2,
   },
+  mage: {
+    id: "mage",
+    name: "Adepts",
+    soldiers: 8,
+    hp: 65,
+    speed: 30,
+    turnRate: 1.4,
+    attack: 10,
+    defence: 40,
+    range: 150,
+    attackInterval: 2.4,
+    sight: 460,
+    defaultShape: "tight",
+    cost: 8,
+    maxPerArmy: 2,
+    spell: "ward",
+  },
+  scout: {
+    id: "scout",
+    name: "Outriders",
+    soldiers: 6,
+    hp: 60,
+    speed: 78,
+    turnRate: 2.4,
+    attack: 9,
+    defence: 35,
+    range: 90,
+    attackInterval: 1.5,
+    sight: 900,
+    defaultShape: "loose",
+    cost: 3,
+    maxPerArmy: 3,
+  },
+  siege: {
+    id: "siege",
+    name: "Siege Engine",
+    soldiers: 4,
+    hp: 220,
+    speed: 14,
+    turnRate: 0.45,
+    attack: 90,
+    defence: 130,
+    range: 460,
+    attackInterval: 5.5,
+    sight: 380,
+    defaultShape: "line",
+    cost: 9,
+    maxPerArmy: 2,
+  },
 };
 
 export const UNIT_TYPE_IDS: readonly UnitTypeId[] = [
-  "line", "skirmisher", "archer", "horse", "guard",
+  "line", "skirmisher", "archer", "horse", "guard", "mage", "scout", "siege",
 ];

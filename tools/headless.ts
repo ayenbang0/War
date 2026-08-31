@@ -15,6 +15,8 @@ import { PLAYSTYLES } from "../src/sim/ai.ts";
 import { DOCTRINES, DOCTRINE_IDS } from "../src/content/doctrines.ts";
 import { DEFAULT_BUDGET, MAX_SQUADS, cost, defaultArmy, validate } from "../src/content/army.ts";
 import { statsFor } from "../src/sim/world.ts";
+import { SPELLS, SPELL_IDS, hexPenalty, wardSoak } from "../src/sim/magic.ts";
+import { hitDamage } from "../src/sim/combat.ts";
 import { ROUT_THRESHOLD } from "../src/sim/morale.ts";
 import { hashWorld, hashTerrain, hashRngStream, hashPaths } from "../src/sim/hash.ts";
 import { Rng, Stream } from "../src/sim/rng.ts";
@@ -23,7 +25,7 @@ import { provingGround } from "../src/content/levels/proving-ground.ts";
 import { generateTerrain, Terrain, TERRAIN_INFO, TILE_SIZE } from "../src/sim/terrain.ts";
 import { formationSlots, formationRadius, FORMATION_SHAPES } from "../src/sim/formations.ts";
 import { findPath } from "../src/sim/pathfind.ts";
-import { UNIT_TYPES, type UnitTypeId } from "../src/content/unit-types.ts";
+import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "../src/content/unit-types.ts";
 import type { Order } from "../src/sim/orders.ts";
 import { runConfusionMatrix, printMatrix } from "./test-gestures.ts";
 import { recognize, type GestureContext, type SquadView } from "../src/input/gestures.ts";
@@ -1225,6 +1227,105 @@ section("army");
     }
     check("overrunning soldier capacity throws instead of failing silently", threw);
   }
+}
+
+// -- 8i. magic and special units -----------------------------------------------
+
+section("magic");
+{
+  check("every spell is medium-intensity, not decisive",
+    SPELL_IDS.every((id) => SPELLS[id].radius < 260 && SPELLS[id].duration <= 15),
+    SPELL_IDS.map((id) => id + " r" + SPELLS[id].radius).join(", "));
+  check("a ward never reaches immunity", wardSoak(10) <= 0.4, wardSoak(10).toFixed(2));
+  check("a hex never becomes instantly fatal", hexPenalty(10) <= 0.5);
+  check("no spell can be worked continuously",
+    SPELL_IDS.every((id) => SPELLS[id].cooldown > SPELLS[id].duration),
+    SPELL_IDS.map((id) => id + " " + SPELLS[id].duration + "s/" + SPELLS[id].cooldown + "s").join(", "));
+
+  check("special units are scarce",
+    UNIT_TYPES.mage.maxPerArmy <= 2 && UNIT_TYPES.siege.maxPerArmy <= 2 && UNIT_TYPES.scout.maxPerArmy <= 3);
+  check("scouts see furthest of anything on the field",
+    UNIT_TYPE_IDS.every((id) => UNIT_TYPES[id].sight <= UNIT_TYPES.scout.sight));
+  check("siege outranges every other unit",
+    UNIT_TYPE_IDS.every((id) => UNIT_TYPES[id].range <= UNIT_TYPES.siege.range));
+  check("special units cost what they are worth",
+    UNIT_TYPES.mage.cost > UNIT_TYPES.line.cost && UNIT_TYPES.siege.cost > UNIT_TYPES.line.cost);
+
+  // Measure the ward directly rather than through a duel. Swapping the adepts
+  // for another unit to get a control also swaps in that unit's fighting,
+  // which swamps the effect being measured -- the first version of this test
+  // "showed" wards costing lives because the control was a skirmisher that
+  // simply killed the enemy faster.
+  {
+    const w = new World({ seed: 909, tilesWide: 40, tilesHigh: 40, soldierCapacity: 64 });
+    const rng = Rng.create(1, Stream.Combat);
+    const bare: number[] = [];
+    const shielded: number[] = [];
+    const hexed: number[] = [];
+    for (let i = 0; i < 400; i++) {
+      bare.push(hitDamage(rng, 40, 100, 0, w.terrain, 600, 600));
+      shielded.push(hitDamage(rng, 40, 100, wardSoak(1), w.terrain, 600, 600));
+      hexed.push(hitDamage(rng, 40, 100, -hexPenalty(1), w.terrain, 600, 600));
+    }
+    const mean = (a: number[]): number => a.reduce((x, y) => x + y, 0) / a.length;
+    check("a ward blunts incoming blows", mean(shielded) < mean(bare) * 0.85,
+      mean(shielded).toFixed(1) + " vs " + mean(bare).toFixed(1));
+    check("a hex makes blows land harder", mean(hexed) > mean(bare) * 1.1,
+      mean(hexed).toFixed(1) + " vs " + mean(bare).toFixed(1));
+    check("neither reaches an absurd extreme",
+      mean(shielded) > mean(bare) * 0.4 && mean(hexed) < mean(bare) * 2);
+  }
+
+  // A squad standing in a friendly ward should steady, and in an enemy hex
+  // should waver, with everything else held equal.
+  {
+    function nerveAfter(spell: "ward" | "hex" | null): number {
+      const w = new World({ seed: 77, tilesWide: 40, tilesHigh: 40, soldierCapacity: 64 });
+      const q = w.spawnSquad(0, "line", 600, 600, 0);
+      w.spawnSquad(1, "line", 1200, 600, M.PI);
+      q.morale = 0.5;
+      if (spell) {
+        w.workings.push({
+          spell,
+          player: spell === "ward" ? 0 : 1,
+          x: 600, y: 600, radius: 300,
+          until: 99999, power: 1,
+        });
+      }
+      for (let t = 0; t < TICK_RATE * 8; t++) w.step();
+      return q.morale;
+    }
+    const none = nerveAfter(null);
+    const warded = nerveAfter("ward");
+    const hexed = nerveAfter("hex");
+    check("a ward steadies the squad standing in it", warded > none,
+      warded.toFixed(3) + " vs " + none.toFixed(3));
+    check("an enemy hex saps nerve", hexed < none, hexed.toFixed(3) + " vs " + none.toFixed(3));
+  }
+
+  check("adepts on the field actually work spells", (() => {
+    const w = new World({ seed: 31, tilesWide: 40, tilesHigh: 40, soldierCapacity: 64 });
+    const m = w.spawnSquad(0, "mage", 500, 500, 0);
+    w.spawnSquad(1, "line", 900, 500, M.PI);
+    w.orders.issue({ kind: "attack", squad: m.id, target: w.squads[1].id, path: [900, 500] }, 0, 1);
+    let peak = 0;
+    for (let t = 0; t < TICK_RATE * 20 && !w.outcome; t++) {
+      w.step();
+      peak = Math.max(peak, w.workings.length);
+    }
+    return peak > 0;
+  })());
+
+  check("workings expire rather than accumulating forever", (() => {
+    const w = new World({ seed: 5, tilesWide: 40, tilesHigh: 40, soldierCapacity: 64 });
+    const q = w.spawnSquad(0, "mage", 500, 500, 0);
+    w.spawnSquad(1, "line", 1100, 500, M.PI);
+    w.orders.issue({ kind: "hold", squad: q.id, x: 500, y: 500, radius: 150 }, 0, 1);
+    for (let t = 0; t < TICK_RATE * 5; t++) w.step();
+    const during = w.workings.length;
+    for (let t = 0; t < TICK_RATE * 40; t++) w.step();
+    return during > 0 && w.workings.length <= during;
+  })());
 }
 
 // -- 9. gestures ---------------------------------------------------------------

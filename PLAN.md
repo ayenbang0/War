@@ -101,8 +101,12 @@ A test asserts **no doctrine is strictly better than another** across every stat
 
 `spawnSquad` now throws when the soldier store would overflow. Writing past a `Float64Array` is a silent no-op, so an over-large army would have produced squads whose soldiers all sat at (0, 0) with no error anywhere.
 
-### Phase 7 — Magic and special units
-Medium-intensity tactical spells: area buffs/debuffs, temporary cover, heal-over-time, morale boosts. Special units tied to doctrines (siege, elite guard, mage, scout).
+### Phase 7 — Magic and special units — **DONE**
+Three workings — ward (soaks damage, steadies nerve), hex (amplifies damage, saps nerve), mend (heals over time) — each capped so none is decisive, plus three special units: Adepts, Outriders (see furthest), Siege Engines (outrange everything). All scarce by `maxPerArmy`.
+
+**Magic deliberately gets no gesture of its own.** The pen vocabulary is fourteen classes wide and provably diagonal; every class added raises collision pressure on all the others, and a spell menu would breach the pen-only rule outright. Adepts work whichever spell suits the order they already have — told to attack they hex, told to hold they ward, left near wounded they mend. You cast by choosing where they stand and what they are told, which is what "tactical, not cinematic" should mean.
+
+A first attempt to test wards through a duel "showed" them costing lives: the control swapped the adepts for a skirmisher, whose fighting swamped the effect being measured. Wards and hexes are now measured directly on damage and morale.
 
 ### Phase 8 — Destructible terrain
 Damageable fortifications, burnable/clearable forest, destructible bridges, with pathing and vision invalidation on change.

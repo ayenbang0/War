@@ -44,7 +44,9 @@ export function hitDamage(
 ): number {
   const soak = DEFENCE_SCALE / (DEFENCE_SCALE + max(0, defence));
   const groundCover = TERRAIN_INFO[terrain.typeAtWorld(tx, ty)].cover;
-  const shelter = 1 - min(0.8, cover + groundCover);
+  // `cover` may be NEGATIVE: a hex makes blows land harder. Clamped both ways
+  // so nothing becomes immune and nothing becomes instantly fatal.
+  const shelter = 1 - max(-0.6, min(0.8, cover + groundCover));
   const spread = 1 + (rng.nextFloat() * 2 - 1) * DAMAGE_VARIANCE;
   return attack * soak * shelter * spread;
 }

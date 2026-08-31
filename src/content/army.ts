@@ -63,9 +63,10 @@ export function validate(list: ArmyList, budget = DEFAULT_BUDGET): Validation {
  */
 export function defaultArmy(doctrine: DoctrineId = "maneuver", budget = DEFAULT_BUDGET): ArmyList {
   const wish: UnitTypeId[] = [
-    "line", "line", "line", "archer", "skirmisher",
-    "line", "archer", "skirmisher", "horse", "line",
-    "skirmisher", "archer", "horse", "guard", "skirmisher",
+    "line", "line", "line", "archer", "scout",
+    "line", "archer", "skirmisher", "horse", "mage",
+    "skirmisher", "scout", "horse", "guard", "siege",
+    "skirmisher", "archer", "line",
   ];
   const squads: UnitTypeId[] = [];
   let spent = 0;
