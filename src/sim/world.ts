@@ -53,6 +53,14 @@ const IN_SLOT = 7;
 
 export type Stance = "idle" | "move" | "attack" | "hold" | "retreat" | "patrol";
 
+/**
+ * Fixed order, so a stance can be hashed as a stable index. Append only --
+ * reordering would silently invalidate every recorded replay and golden.
+ */
+export const STANCES: readonly Stance[] = [
+  "idle", "move", "attack", "hold", "retreat", "patrol",
+];
+
 export type Squad = {
   readonly id: number;
   readonly player: number;

@@ -277,6 +277,17 @@ section("pathfinding");
   }
   check("routes are reproducible across runs", stable);
 
+  // The forward loop always primes the shared scratch in the same sequence, so
+  // it cannot detect epoch or stamp leakage between searches. Walking the same
+  // probes backwards gives each search a different scratch history.
+  let orderIndependent = true;
+  const g3 = generateTerrain(provingGround.tilesWide, provingGround.tilesHigh, provingGround.seed);
+  for (let i = PATH_PROBES.length - 1; i >= 0; i--) {
+    const p = PATH_PROBES[i];
+    if (findPath(g3, p[0], p[1], p[2], p[3]).join() !== pathResults[i].join()) orderIndependent = false;
+  }
+  check("routes do not depend on search order", orderIndependent);
+
   // String pulling must actually pull: a raw grid path would have hundreds of
   // waypoints, one per tile.
   const avg = pathResults.reduce((n, r) => n + r.length / 2, 0) / pathResults.length;
@@ -479,6 +490,47 @@ section("movement");
   }
   check("dense paths were exercised against the river", placed >= 4, placed + " squads placed");
   check("soldiers never walk onto water either", crossed === 0, crossed + " soldiers crossed");
+}
+
+// -- 8b. the hash observes intent, not only position --------------------------
+
+section("state hash");
+{
+  // Positions alone are not the whole simulation. Two worlds can sit at
+  // identical coordinates while carrying different orders, and only separate
+  // seconds later -- so the hash has to see stance, shape and patrol state or
+  // the golden is a much slower net than it looks.
+  function twin(): World {
+    const w = buildWorld();
+    const q = w.squads[0];
+    q.patrol = [q.anchorX, q.anchorY, q.anchorX + 400, q.anchorY, q.anchorX + 400, q.anchorY + 400];
+    q.stance = "patrol";
+    return w;
+  }
+
+  const base = twin();
+  const same = twin();
+  check("identical worlds hash identically", hashWorld(base) === hashWorld(same));
+
+  const legDiff = twin();
+  legDiff.squads[0].patrolLeg = 2;
+  check("patrol leg is observed", hashWorld(legDiff) !== hashWorld(base));
+
+  const dirDiff = twin();
+  dirDiff.squads[0].patrolForward = false;
+  check("patrol direction is observed", hashWorld(dirDiff) !== hashWorld(base));
+
+  const stanceDiff = twin();
+  stanceDiff.squads[0].stance = "hold";
+  check("stance is observed", hashWorld(stanceDiff) !== hashWorld(base));
+
+  const shapeDiff = twin();
+  shapeDiff.squads[0].shape = "wedge";
+  check("formation shape is observed", hashWorld(shapeDiff) !== hashWorld(base));
+
+  const holdDiff = twin();
+  holdDiff.squads[0].holdRadius = 250;
+  check("hold zone is observed", hashWorld(holdDiff) !== hashWorld(base));
 }
 
 // -- 9. gestures ---------------------------------------------------------------
