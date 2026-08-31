@@ -3,6 +3,10 @@
     "ticks": 1800,
     "final": "60e53da0"
   },
+  "clash": {
+    "ticks": 2400,
+    "final": "f4e47a9e"
+  },
   "stable": {
     "terrain": "163f678c",
     "rng": "713c8bba-e6e3a1b4-953d5b38-7b2e8fed",

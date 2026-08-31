@@ -14,6 +14,7 @@ import { Camera } from "./camera.ts";
 import { TerrainLayer } from "./terrain-layer.ts";
 import { ink, inkFaint, inkSoft, parchment, playerColor, playerColorSoft } from "./palette.ts";
 import { RECOVER_LOCK_SECONDS, TICK_RATE } from "../sim/world.ts";
+import { UNIT_TYPES } from "../content/unit-types.ts";
 
 /** Matches the recover gesture ink, so the order and its aftermath read alike. */
 const RECOVER_COLOR = "#9c3f63";
@@ -22,6 +23,12 @@ const RECOVER_COLOR = "#9c3f63";
 const GRID_TILES = 8;
 /** Below this zoom, individual soldiers stop reading and become a counter. */
 const SOLDIER_LOD_ZOOM = 0.55;
+/** Amplitude of the idle fidget, in world units, per sine term. */
+const WANDER = 1.15;
+/** Fraction of an attack interval spent visibly swinging. */
+const LUNGE_WINDOW = 0.3;
+/** How far a soldier throws itself forward mid-blow, in world units. */
+const LUNGE_REACH = 5.5;
 
 export type SoldierSnapshot = { x: Float64Array; y: Float64Array; facing: Float64Array };
 export type SquadSnapshot = Map<number, { x: number; y: number; facing: number }>;
@@ -37,7 +44,15 @@ export class Renderer {
     this.terrainLayer = new TerrainLayer(terrain);
   }
 
-  draw(world: World, cam: Camera, prev: Snapshot, alpha: number, selected: readonly number[]): void {
+  draw(
+    world: World,
+    cam: Camera,
+    prev: Snapshot,
+    alpha: number,
+    selected: readonly number[],
+    /** Render clock in seconds; drives idle wander and attack lunges. */
+    now = 0,
+  ): void {
     const ctx = this.ctx;
     ctx.fillStyle = parchment;
     ctx.fillRect(0, 0, cam.viewW, cam.viewH);
@@ -51,7 +66,7 @@ export class Renderer {
       if (selected.includes(q.id)) this.drawSelection(q, cam, prev, alpha);
     }
 
-    if (cam.zoom >= SOLDIER_LOD_ZOOM) this.drawSoldiers(world, cam, prev, alpha);
+    if (cam.zoom >= SOLDIER_LOD_ZOOM) this.drawSoldiers(world, cam, prev, alpha, now);
     else for (const q of world.squads) this.drawCounter(q, cam, prev, alpha);
   }
 
@@ -120,7 +135,13 @@ export class Renderer {
    * 460 separate fill+stroke pairs would cost more than the entire rest of the
    * frame, and every mark is the same colour anyway.
    */
-  private drawSoldiers(world: World, cam: Camera, prev: Snapshot, alpha: number): void {
+  private drawSoldiers(
+    world: World,
+    cam: Camera,
+    prev: Snapshot,
+    alpha: number,
+    now: number,
+  ): void {
     const ctx = this.ctx;
     const s = world.soldiers;
     const size = Math.max(2.2, 4.2 * cam.zoom);
@@ -134,15 +155,43 @@ export class Renderer {
         if (q.anchorX < b.x0 - q.radius - margin || q.anchorX > b.x1 + q.radius + margin) continue;
         if (q.anchorY < b.y0 - q.radius - margin || q.anchorY > b.y1 + q.radius + margin) continue;
 
+        const spec = UNIT_TYPES[q.type];
+        // A settled squad fidgets. Standing perfectly still reads as a
+        // screenshot, and the spec asks for troops that look alive.
+        const settled = q.stance === "idle" || q.stance === "hold" || q.stance === "recover";
+
         for (let i = 0; i < q.count; i++) {
           const id = q.first + i;
           if (s.alive[id] !== 1) continue;
           const px = prev.soldiers.x[id];
           const py = prev.soldiers.y[id];
           const pf = prev.soldiers.facing[id];
-          const wx = px + (s.x[id] - px) * alpha;
-          const wy = py + (s.y[id] - py) * alpha;
-          const f = pf + shortestArc(pf, s.facing[id]) * alpha;
+          let wx = px + (s.x[id] - px) * alpha;
+          let wy = py + (s.y[id] - py) * alpha;
+          let f = pf + shortestArc(pf, s.facing[id]) * alpha;
+
+          // Idle wander. Deliberately RENDER-ONLY: nudging real positions would
+          // feed back into separation, cohesion, combat ranges and the state
+          // hash, so a purely cosmetic fidget would end up costing determinism
+          // and shaking formations apart. Two out-of-phase sines per axis, keyed
+          // off the soldier index, give an unsynchronised drift for free.
+          if (settled) {
+            const k = id * 0.618;
+            wx += (Math.sin(now * 0.6 + k) + Math.sin(now * 0.37 + k * 2.1)) * WANDER;
+            wy += (Math.cos(now * 0.53 + k * 1.7) + Math.cos(now * 0.41 + k)) * WANDER;
+            f += Math.sin(now * 0.31 + k * 3.3) * 0.14;
+          }
+
+          // Attack lunge. cooldown is reset to the full interval the instant a
+          // blow lands, so a freshly-struck soldier has a near-full cooldown --
+          // that is the animation trigger, with no extra sim state to carry.
+          const phase = s.cooldown[id] / Math.max(spec.attackInterval, 1e-6);
+          if (phase > 1 - LUNGE_WINDOW) {
+            const swing = (phase - (1 - LUNGE_WINDOW)) / LUNGE_WINDOW;
+            const push = Math.sin(swing * Math.PI) * LUNGE_REACH;
+            wx += Math.cos(f) * push;
+            wy += Math.sin(f) * push;
+          }
 
           const sx = cam.worldToScreenX(wx);
           const sy = cam.worldToScreenY(wy);

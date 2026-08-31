@@ -144,11 +144,22 @@ export function findPath(
     goalX = (gx + 0.5) * TILE_SIZE;
     goalY = (gy + 0.5) * TILE_SIZE;
   }
-  if (!grid.passableAt(sx, sy)) return [];
+  // A start on impassable ground is not a refusal to move -- it is a unit that
+  // needs to get out. Route from the nearest solid tile and let it wade there.
+  let escape: number[] | null = null;
+  let ssx = sx;
+  let ssy = sy;
+  if (!grid.passableAt(sx, sy)) {
+    const near = nearestPassable(grid, sx, sy);
+    if (near < 0) return [];
+    ssx = near % grid.width;
+    ssy = (near / grid.width) | 0;
+    escape = [(ssx + 0.5) * TILE_SIZE, (ssy + 0.5) * TILE_SIZE];
+  }
 
-  const start = sy * grid.width + sx;
+  const start = ssy * grid.width + ssx;
   const goal = gy * grid.width + gx;
-  if (start === goal) return [goalX, goalY];
+  if (start === goal) return escape ? escape.concat([goalX, goalY]) : [goalX, goalY];
 
   const s = scratchFor(grid);
   s.epoch++;
@@ -156,7 +167,7 @@ export function findPath(
 
   s.stamp[start] = s.epoch;
   s.gScore[start] = 0;
-  s.fScore[start] = heuristic(sx, sy, gx, gy);
+  s.fScore[start] = heuristic(ssx, ssy, gx, gy);
   s.cameFrom[start] = -1;
   s.state[start] = 1;
   heapPush(s, start);
@@ -164,7 +175,10 @@ export function findPath(
   let expansions = 0;
   while (s.heapSize > 0) {
     const current = heapPop(s);
-    if (current === goal) return reconstruct(grid, s, goal, goalX, goalY);
+    if (current === goal) {
+      const route = reconstruct(grid, s, goal, goalX, goalY);
+      return escape ? escape.concat(route) : route;
+    }
     if (s.state[current] === 2) continue;
     s.state[current] = 2;
     if (++expansions > MAX_EXPANSIONS) return [];

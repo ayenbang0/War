@@ -56,6 +56,16 @@ export function advanceToward(
 
   if (budget <= EPS) return result;
 
+  // A mover that is ALREADY on impassable ground must be allowed to leave it.
+  // The terrain test below refuses to enter water, and applied unconditionally
+  // it also refuses to move at all once you are in it -- every candidate step
+  // lands on water too, so the unit is paralysed forever. That is not
+  // hypothetical: Phase 8 changes terrain under standing units, a flooded or
+  // demolished tile would strand whoever was on it, and a mis-placed spawn
+  // would be stuck for the whole match. While stranded, movement is
+  // unrestricted; the ordinary rules resume the moment it reaches solid ground.
+  const stranded = TERRAIN_INFO[terrain.typeAtWorld(x, y)].moveScale <= 0;
+
   let remaining = budget;
   while (remaining > EPS) {
     const dx = tx - result.x;
@@ -70,7 +80,7 @@ export function advanceToward(
     const nx = result.x + dx * t;
     const ny = result.y + dy * t;
 
-    if (TERRAIN_INFO[terrain.typeAtWorld(nx, ny)].moveScale <= 0) {
+    if (!stranded && TERRAIN_INFO[terrain.typeAtWorld(nx, ny)].moveScale <= 0) {
       result.blocked = true;
       return result;
     }

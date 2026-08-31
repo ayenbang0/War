@@ -7,7 +7,10 @@
  * Phase 10 netplay.
  */
 
-import { World, TICK_RATE } from "../src/sim/world.ts";
+import { World, TICK_RATE, type Squad } from "../src/sim/world.ts";
+import { MELEE_RANGE } from "../src/sim/combat.ts";
+import { evaluate, score } from "../src/sim/victory.ts";
+import { ROUT_THRESHOLD } from "../src/sim/morale.ts";
 import { hashWorld, hashTerrain, hashRngStream, hashPaths } from "../src/sim/hash.ts";
 import { Rng, Stream } from "../src/sim/rng.ts";
 import * as M from "../src/sim/math.ts";
@@ -18,6 +21,7 @@ import { findPath } from "../src/sim/pathfind.ts";
 import { UNIT_TYPES, type UnitTypeId } from "../src/content/unit-types.ts";
 import type { Order } from "../src/sim/orders.ts";
 import { runConfusionMatrix, printMatrix } from "./test-gestures.ts";
+import { recognize, type GestureContext, type SquadView } from "../src/input/gestures.ts";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -326,6 +330,41 @@ function buildWorld(): World {
   return w;
 }
 
+/**
+ * A second scenario that actually fights.
+ *
+ * The march run above never brings the armies into contact -- they start some
+ * 4500 world units apart and cover a third of that in 90 seconds -- so on its
+ * own it pins movement and pathing while leaving every line of combat, morale
+ * and victory code unhashed. This one deploys the two armies within bowshot in
+ * the open and orders them straight at each other.
+ */
+function buildClash(): World {
+  const w = new World({
+    seed: provingGround.seed ^ 0x1d,
+    tilesWide: provingGround.tilesWide,
+    tilesHigh: provingGround.tilesHigh,
+    duration: 15 * 60,
+  });
+  // Open plain, well clear of the river, so terrain does not decide the fight.
+  for (let i = 0; i < ARMY.length; i++) {
+    const row = i % 5;
+    const col = (i / 5) | 0;
+    w.spawnSquad(0, ARMY[i], 1500 - col * 150, 1500 + row * 150, 0);
+    w.spawnSquad(1, ARMY[i], 2150 + col * 150, 1500 + row * 150, M.PI);
+  }
+  for (const q of w.squads) {
+    const foe = w.squads.find((o) => o.player !== q.player && o.live > 0);
+    if (!foe) continue;
+    w.orders.issue(
+      { kind: "attack", squad: q.id, target: foe.id, path: [foe.anchorX, foe.anchorY] },
+      q.player,
+      2 + (q.id % 4),
+    );
+  }
+  return w;
+}
+
 /** Scripted opening: both sides advance on the river, then wheel. */
 function scriptOrders(w: World): Order[] {
   const log: Order[] = [];
@@ -489,6 +528,43 @@ section("movement");
     if (TERRAIN_INFO[g.typeAtWorld(w2.soldiers.x[i], w2.soldiers.y[i])].moveScale <= 0) crossed++;
   }
   check("dense paths were exercised against the river", placed >= 4, placed + " squads placed");
+
+  // A unit that somehow ENDS UP on impassable ground -- a spawn error today, a
+  // flooded tile once Phase 8 can change terrain underfoot -- must be able to
+  // walk out. Refusing every step that touches water also refuses every step
+  // out of it, which strands the unit permanently.
+  {
+    const w4 = buildWorld();
+    const g4 = w4.terrain;
+    let wx = -1;
+    let wy = -1;
+    for (let ty = 20; ty < g4.height - 20 && wx < 0; ty += 7) {
+      for (let tx = 10; tx < g4.width - 10; tx++) {
+        if (g4.typeAt(tx, ty) === Terrain.Water) {
+          wx = (tx + 0.5) * TILE_SIZE;
+          wy = (ty + 0.5) * TILE_SIZE;
+          break;
+        }
+      }
+    }
+    const stuck = w4.squads[0];
+    stuck.anchorX = wx;
+    stuck.anchorY = wy;
+    for (let i = 0; i < stuck.count; i++) {
+      w4.soldiers.x[stuck.first + i] = wx;
+      w4.soldiers.y[stuck.first + i] = wy;
+    }
+    w4.orders.issue({ kind: "move", squad: stuck.id, path: [wx - 400, wy] }, 0, w4.tick + 1);
+    for (let t = 0; t < TICK_RATE * 25; t++) w4.step();
+    let stillWet = 0;
+    for (let i = 0; i < stuck.count; i++) {
+      const id = stuck.first + i;
+      if (w4.soldiers.alive[id] !== 1) continue;
+      if (TERRAIN_INFO[g4.typeAtWorld(w4.soldiers.x[id], w4.soldiers.y[id])].moveScale <= 0) stillWet++;
+    }
+    check("a unit stranded on impassable ground can walk out",
+      wx > 0 && stillWet === 0, stillWet + " soldiers still in the river");
+  }
   check("soldiers never walk onto water either", crossed === 0, crossed + " soldiers crossed");
 }
 
@@ -591,6 +667,215 @@ section("recover");
   check("orders are accepted once the term ends", q.stance === "move");
 }
 
+// -- 8c2. a real battle --------------------------------------------------------
+
+const CLASH_TICKS = TICK_RATE * 120;
+
+section("battle");
+const clashFinal = (() => {
+  const w = buildClash();
+  const startMen = w.squads.reduce((n, q) => n + q.live, 0);
+  const t0 = Date.now();
+  for (let t = 0; t < CLASH_TICKS && !w.outcome; t++) w.step();
+  const elapsed = Date.now() - t0;
+
+  const endMen = w.squads.reduce((n, q) => n + q.live, 0);
+  const losses = [0, 1].map((p) =>
+    w.squads.filter((q) => q.player === p).reduce((n, q) => n + q.losses, 0),
+  );
+  const morale = [w.armyMorale(0), w.armyMorale(1)];
+
+  check("the armies actually engaged", endMen < startMen, startMen - endMen + " casualties");
+  check("both sides took losses", losses[0] > 0 && losses[1] > 0, losses.join(" vs "));
+  // Mirrored armies on open ground should trade roughly evenly. A large,
+  // consistent skew would mean one side is getting a systematic first strike.
+  check("a mirrored fight trades roughly evenly",
+    Math.abs(losses[0] - losses[1]) < Math.max(losses[0], losses[1]) * 0.5,
+    losses.join(" vs "));
+  check("morale fell as men died", morale[0] < 1 && morale[1] < 1,
+    morale.map((m) => m.toFixed(2)).join(" / "));
+  check("kills are credited to squads",
+    w.squads.reduce((n, q) => n + q.kills, 0) === losses[0] + losses[1],
+    w.squads.reduce((n, q) => n + q.kills, 0) + " credited vs " + (losses[0] + losses[1]) + " dead");
+
+  console.log("");
+  console.log("  casualties  " + losses[0] + " / " + losses[1] + "  of " + startMen + " men");
+  console.log("  morale      " + morale.map((m) => (m * 100).toFixed(0) + "%").join(" / "));
+  console.log("  battle cost " + (elapsed / CLASH_TICKS).toFixed(3) + " ms/tick");
+  if (w.outcome) console.log("  outcome     " + w.outcome.reason + ": " + w.outcome.detail);
+
+  return hashWorld(w);
+})();
+
+// -- 8d. combat ----------------------------------------------------------------
+
+section("combat");
+{
+  /** Move a squad out of the way without killing it -- wiping out a whole
+   *  army trips the annihilation outcome and freezes the world mid-test. */
+  function park(w: World, q: Squad, x: number, y: number): void {
+    q.anchorX = x;
+    q.anchorY = y;
+    q.stance = "idle";
+    q.path.length = 0;
+    for (let i = 0; i < q.count; i++) {
+      w.soldiers.x[q.first + i] = x;
+      w.soldiers.y[q.first + i] = y;
+    }
+  }
+
+  /** Reduce a squad to n living soldiers, parked on a point. */
+  function trim(w: World, q: Squad, n: number, x: number, y: number, hp: number): void {
+    for (let i = 0; i < q.count; i++) {
+      const id = q.first + i;
+      const keep = i < n;
+      w.soldiers.alive[id] = keep ? 1 : 0;
+      w.soldiers.hp[id] = keep ? hp : 0;
+      w.soldiers.x[id] = x + i * 2;
+      w.soldiers.y[id] = y;
+      w.soldiers.cooldown[id] = 0;
+    }
+    q.live = n;
+    q.anchorX = x;
+    q.anchorY = y;
+    q.stance = "idle";
+    q.path.length = 0;
+  }
+
+  // SIMULTANEITY. Two soldiers who can each kill the other in one blow must
+  // BOTH die. Resolve in index order and player 0, who holds the lower
+  // indices, always strikes first and walks away -- a bias no replay test
+  // would ever catch, because it is perfectly deterministic.
+  {
+    const w = buildWorld();
+    const a = w.squads.find((q) => q.player === 0 && q.type === "line") as Squad;
+    const b = w.squads.find((q) => q.player === 1 && q.type === "line") as Squad;
+    trim(w, a, 1, 2000, 2000, 1);
+    trim(w, b, 1, 2000 + MELEE_RANGE * 0.5, 2000, 1);
+    for (let t = 0; t < 3 && (a.live > 0 && b.live > 0); t++) w.step();
+    check("mutual kills are simultaneous, not index-ordered", a.live === 0 && b.live === 0,
+      "player0 left " + a.live + ", player1 left " + b.live);
+  }
+
+  // Reach decides how a unit fights, and archers must not have to close.
+  {
+    const w = buildWorld();
+    const archer = w.squads.find((q) => q.player === 0 && q.type === "archer") as Squad;
+    const victim = w.squads.find((q) => q.player === 1 && q.type === "line") as Squad;
+    let corner = 0;
+    for (const q of w.squads) {
+      if (q === archer || q === victim) continue;
+      park(w, q, 200 + (corner % 4) * 90, 3600 + ((corner / 4) | 0) * 90);
+      corner++;
+    }
+    trim(w, archer, 16, 2000, 2000, 100);
+    trim(w, victim, 20, 2000 + 200, 2000, 100);
+    let shots = 0;
+    const victims = new Set<number>();
+    for (let t = 0; t < TICK_RATE * 20; t++) {
+      w.step();
+      // Events are cleared every tick, so they must be collected as they happen.
+      for (const e of w.events) {
+        if (e.kind !== "shot") continue;
+        shots++;
+        victims.add(e.victim);
+      }
+    }
+    check("archers engage at range without closing", shots > 0 && victim.live < 20,
+      shots + " shots, target down to " + victim.live + "/20");
+    check("ranged fire spreads across several targets", victims.size > 1, victims.size + " distinct targets");
+    check("archers stayed at range", Math.abs(archer.anchorX - 2000) < 40,
+      "moved " + (archer.anchorX - 2000).toFixed(0));
+  }
+
+  // Casualties must re-flow the formation, or the squad keeps holes where its
+  // dead stood while cohesion still reads 1.00 because it only counts survivors.
+  {
+    const w = buildWorld();
+    const q = w.squads[0];
+    let n = 0;
+    for (const other of w.squads) {
+      if (other === q) continue;
+      park(w, other, 300 + (n % 5) * 80, 3500 + ((n / 5) | 0) * 80);
+      n++;
+    }
+    trim(w, q, 20, 2000, 2000, 100);
+    w.step();
+    const slotsBefore = q.radius;
+    for (let i = 0; i < 12; i++) {
+      w.soldiers.alive[q.first + i] = 0;
+      w.soldiers.hp[q.first + i] = 0;
+    }
+    q.live = 8;
+    w.orders.issue({ kind: "formation", squad: q.id, shape: "line" }, 0, w.tick + 1);
+    for (let t = 0; t < TICK_RATE * 6; t++) w.step();
+    const slots = new Set<number>();
+    for (let i = 0; i < q.count; i++) {
+      if (w.soldiers.alive[q.first + i] === 1) slots.add(w.soldiers.slot[q.first + i]);
+    }
+    check("survivors occupy a formation sized for them",
+      slots.size === 8 && Math.max(...slots) < 8, "slots used: " + [...slots].sort((x, y) => x - y).join(","));
+    check("the formation tightens as the squad shrinks", q.radius < slotsBefore,
+      q.radius.toFixed(1) + " vs " + slotsBefore.toFixed(1));
+    check("cohesion still reads true after losses", q.cohesion > 0.85, q.cohesion.toFixed(2));
+  }
+}
+
+// -- 8e. morale and victory ----------------------------------------------------
+
+section("victory");
+{
+  const full = { morale: 1, strength: 200, roster: 200 };
+  check("a running match has no outcome", evaluate([full, full], 60, 900) === null);
+
+  const broken = { morale: ROUT_THRESHOLD - 0.01, strength: 150, roster: 200 };
+  const routed = evaluate([broken, full], 60, 900);
+  check("an army below the rout threshold loses at once",
+    routed !== null && routed.winner === 1 && routed.reason === "rout");
+
+  const wiped = { morale: 1, strength: 0, roster: 200 };
+  const dead = evaluate([wiped, full], 60, 900);
+  check("annihilation ends the match", dead !== null && dead.winner === 1 && dead.reason === "annihilated");
+
+  // THE TURTLING PROBLEM. An army that hid in a corner kept perfect morale and
+  // inflicted nothing. Under morale alone it would win on time; the tiebreak
+  // adds the share of the enemy destroyed, so doing nothing earns nothing.
+  // The turtle avoided contact: perfect morale, and it inflicted nothing, so
+  // the fighter's roster is untouched. The fighter paid morale for its attacks
+  // and destroyed a third of the turtle's army.
+  const turtle = { morale: 1.0, strength: 133, roster: 200 };
+  const fighter = { morale: 0.8, strength: 200, roster: 200 };
+  const timed = evaluate([turtle, fighter], 900, 900);
+  check("turtling does not win on the timer",
+    timed !== null && timed.reason === "timer" && timed.winner === 1,
+    "turtle " + score(turtle, fighter).toFixed(3) + " vs fighter " + score(fighter, turtle).toFixed(3));
+  check("an army that inflicted nothing scores only its morale",
+    Math.abs(score(turtle, fighter) - turtle.morale) < 1e-9);
+
+  // But morale still matters: an army that traded evenly and held up wins.
+  const steady = { morale: 0.9, strength: 170, roster: 200 };
+  const shaken = { morale: 0.35, strength: 170, roster: 200 };
+  const onMorale = evaluate([steady, shaken], 900, 900);
+  check("morale still decides an even trade", onMorale !== null && onMorale.winner === 0);
+
+  // A live match must actually reach a decision when one side is destroyed.
+  {
+    const w = buildWorld();
+    for (const q of w.squads) {
+      if (q.player !== 1) continue;
+      for (let i = 0; i < q.count; i++) w.soldiers.alive[q.first + i] = 0;
+      q.live = 0;
+    }
+    w.step();
+    check("the world stops once the match is decided",
+      w.outcome !== null && w.outcome.winner === 0, w.outcome ? w.outcome.detail : "no outcome");
+    const frozen = w.tick;
+    w.step();
+    w.step();
+    check("a decided world does not keep ticking", w.tick === frozen);
+  }
+}
+
 // -- 9. gestures ---------------------------------------------------------------
 
 section("gestures");
@@ -604,6 +889,67 @@ section("gestures");
   console.log("");
   console.log("  accuracy    " + report.correct + "/" + report.total +
     " (" + ((report.correct / report.total) * 100).toFixed(1) + "%)");
+}
+
+// -- 9b. selection context -----------------------------------------------------
+
+section("selection");
+{
+  // The same stroke has to mean different things depending on what is selected.
+  // This is context, not shape, so the confusion matrix cannot test it: every
+  // case below is the SAME geometry read against a different selection.
+  const R = 58;
+  const squads: SquadView[] = [
+    { id: 1, player: 0, x: 900, y: 900, radius: R, facing: 0, visible: true },
+    { id: 2, player: 0, x: 1100, y: 900, radius: R, facing: 0, visible: true },
+    { id: 3, player: 0, x: 900, y: 1100, radius: R, facing: 0, visible: true },
+    { id: 4, player: 0, x: 1100, y: 1100, radius: R, facing: 0, visible: true },
+    { id: 9, player: 1, x: 2600, y: 1000, radius: R, facing: Math.PI, visible: true },
+  ];
+  const ctx = (selected: number[]): GestureContext =>
+    ({ player: 0, squads, selected, homeX: 0, pendingLine: null });
+
+  // One straight line on open ground, well clear of every squad.
+  const cut = [{ x: 1000, y: 500 }, { x: 1000, y: 1500 }];
+
+  const withGroup = recognize(cut, ctx([1, 2, 3, 4]));
+  const withOne = recognize(cut, ctx([1]));
+  const withNone = recognize(cut, ctx([]));
+
+  check("with a group selected, a line splits the group", withGroup?.kind === "split",
+    withGroup ? withGroup.kind : "null");
+  check("with one squad selected, the same line is a move", withOne?.kind === "move",
+    withOne ? withOne.kind : "null");
+  check("with nothing selected, the same line commands nothing", withNone === null,
+    withNone ? withNone.kind : "null");
+
+  // A stroke begun ON a squad always commands that squad, group or not.
+  const fromSquad = [{ x: 900, y: 900 }, { x: 1500, y: 640 }, { x: 1900, y: 700 }];
+  const anchored = recognize(fromSquad, ctx([1, 2, 3, 4]));
+  check("a stroke begun on a squad still moves that squad", anchored?.kind === "move");
+  check("and it narrows the selection to that squad",
+    anchored !== null && anchored.squads.length === 1 && anchored.squads[0] === 1);
+
+  // Tapping empty ground clears the selection; tapping a squad selects it.
+  const tapEmpty = recognize([{ x: 1700, y: 1700 }, { x: 1702, y: 1701 }], ctx([1, 2, 3, 4]));
+  check("tapping outside a selected group deselects it",
+    tapEmpty?.kind === "select" && tapEmpty.squads.length === 0,
+    tapEmpty ? tapEmpty.kind + " -> " + JSON.stringify(tapEmpty.squads) : "null");
+
+  const tapSquad = recognize([{ x: 1100, y: 1100 }, { x: 1102, y: 1101 }], ctx([1]));
+  check("tapping a squad selects just it",
+    tapSquad?.kind === "select" && tapSquad.squads.length === 1 && tapSquad.squads[0] === 4);
+
+  // Group verbs must stay locked away behind an actual group.
+  const bigRing: { x: number; y: number }[] = [];
+  for (let i = 0; i <= 40; i++) {
+    const t = (i / 40) * Math.PI * 2;
+    bigRing.push({ x: 1000 + Math.cos(t) * 520, y: 1000 + Math.sin(t) * 520 });
+  }
+  check("a large ring is a patrol AREA for a group",
+    recognize(bigRing, ctx([1, 2, 3, 4]))?.kind === "patrolArea");
+  check("the same ring is a patrol CIRCUIT for a lone squad",
+    recognize(bigRing, ctx([1]))?.kind === "patrol");
 }
 
 // -- 10. golden hashes ---------------------------------------------------------
@@ -625,6 +971,7 @@ section("goldens");
   const goldenPath = fileURLToPath(new URL("./golden.json", import.meta.url));
   type Golden = {
     world: { ticks: number; final: string };
+    clash: { ticks: number; final: string };
     stable: { terrain: string; rng: string; paths: string };
   };
 
@@ -644,6 +991,10 @@ section("goldens");
     world: {
       ticks: TICKS,
       final: process.env.UPDATE_GOLDEN || !existing ? liveFinal : existing.world.final,
+    },
+    clash: {
+      ticks: CLASH_TICKS,
+      final: process.env.UPDATE_GOLDEN || !existing ? clashFinal : existing.clash.final,
     },
     stable: {
       terrain: process.env.UPDATE_STABLE || !existing ? stableTerrain : existing.stable.terrain,
@@ -665,10 +1016,14 @@ section("goldens");
       "expected " + existing.stable.paths + ", got " + stablePaths);
     check("world state matches golden", existing.world.ticks === TICKS && existing.world.final === liveFinal,
       "expected " + existing.world.final + ", got " + liveFinal + " (UPDATE_GOLDEN=1 if intended)");
+    check("battle state matches golden",
+      existing.clash.ticks === CLASH_TICKS && existing.clash.final === clashFinal,
+      "expected " + existing.clash.final + ", got " + clashFinal + " (UPDATE_GOLDEN=1 if intended)");
   }
 
   console.log("");
   console.log("  seed        0x" + provingGround.seed.toString(16));
+  console.log("  clash hash  " + clashFinal);
   console.log("  ticks       " + TICKS + " (" + TICKS / TICK_RATE + "s)");
   console.log("  world hash  " + liveFinal);
 }

@@ -17,6 +17,7 @@ import { UNIT_TYPES, type UnitTypeId } from "./content/unit-types.ts";
 import { Camera } from "./render/camera.ts";
 import { Renderer, type Snapshot } from "./render/renderer.ts";
 import { drawInk } from "./render/ink.ts";
+import { Effects } from "./render/effects.ts";
 import { CameraControls } from "./input/camera-controls.ts";
 import { Commander } from "./input/commander.ts";
 import { Pen } from "./input/pen.ts";
@@ -59,6 +60,7 @@ cam.zoom = 0.85;
 
 const renderer = new Renderer(ctx, world.terrain);
 const controls = new CameraControls(canvas, cam);
+const effects = new Effects();
 const commander = new Commander(world, PLAYER);
 const pen = new Pen(canvas, cam, commander);
 
@@ -137,6 +139,9 @@ function frame(now: number): void {
     while (accumulator >= TICK_DT && steps < MAX_STEPS_PER_FRAME) {
       snapshotInto(prev);
       world.step();
+      // Events are cleared at the top of every tick, so they have to be taken
+      // now -- a frame that runs several ticks would otherwise see only the last.
+      effects.ingest(world.events, now / 1000);
       accumulator -= TICK_DT;
       steps++;
     }
@@ -144,7 +149,9 @@ function frame(now: number): void {
   }
 
   const alpha = paused ? 1 : Math.min(accumulator / TICK_DT, 1);
-  renderer.draw(world, cam, prev, alpha, commander.selected);
+  const clock = now / 1000;
+  renderer.draw(world, cam, prev, alpha, commander.selected, clock);
+  effects.draw(ctx, cam, clock);
   drawInk(ctx, cam, pen.points, commander.preview, commander.pendingRail);
 
   hudTimer += dtReal;
@@ -156,11 +163,17 @@ function frame(now: number): void {
   const mine = world.squads.filter((q) => q.player === PLAYER);
   const sel = commander.selected.length;
   hud.textContent = [
-    level.name + (paused ? "   [PAUSED]" : ""),
+    level.name + (paused ? "   [PAUSED]" : "") +
+      (world.outcome
+        ? "   " + (world.outcome.winner === PLAYER ? "VICTORY" : world.outcome.winner < 0 ? "DRAW" : "DEFEAT")
+        : ""),
     "t      " + String(Math.floor(t / 60)).padStart(2, "0") + ":" +
       (t % 60).toFixed(1).padStart(4, "0") + " / " + level.duration / 60 + ":00",
     "tick   " + world.tick + "   " + cachedHash,
-    "squads " + mine.length + "   soldiers " + world.soldiers.count,
+    "squads " + mine.filter((q) => q.live > 0).length + "/" + mine.length +
+      "   men " + mine.reduce((n, q) => n + q.live, 0),
+    "morale " + (world.armyMorale(PLAYER) * 100).toFixed(0) + "%" +
+      "   enemy " + (world.armyMorale(1 - PLAYER) * 100).toFixed(0) + "%",
     "sel    " + (sel > 0 ? sel + " squad" + (sel > 1 ? "s" : "") : "none") +
       (pen.lastAction ? "   > " + pen.lastAction : ""),
     "zoom   " + cam.zoom.toFixed(2) + "   fps " + fps.toFixed(0),

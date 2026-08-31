@@ -62,10 +62,19 @@ Three rules earned their keep and should not be relaxed:
 
 Hearts are told from rings by **convex hull fill**, not by counting concave corners. Corner counting is the obvious approach and it does not survive RDP: the notch is a fine feature, the simplification tolerance scales with stroke size, and on a large heart the cusp is smoothed away entirely — so the same gesture read as a heart at one size and a ring at another. Measured over the corpus, rings fill 0.983–1.000 of their hull and hearts 0.926–0.932.
 
-### Phase 3 — Combat, morale, victory — NEXT
+### Phase 3 — Combat, morale, victory — **DONE**
 Per-soldier melee/ranged resolution, frontline engagement and rear ranks, formation deformation under contact and re-forming after, squad morale (casualties, flanking, outnumbering, terrain), global morale aggregation, rout, 15-minute timer, win/loss.
 **Runnable:** a complete match against a placeholder AI.
-*Known design hole to revisit here:* "higher global morale at timer" rewards turtling. Likely fix is morale decay out of contact, or a different tiebreak. Flagged, not solved.
+**Turtling: settled.** Morale only ever falls through fighting, so "higher morale at the timer" made not fighting the dominant strategy. Rout is untouched — it is still the instant loss you chose. The timer tiebreak now scores morale **plus the share of the enemy army destroyed**, weighted equally: at parity, wiping out the enemy is worth exactly as much as ending the match untroubled, and an army that inflicted nothing scores its morale and nothing else. A "tiebreak nudge" weight does not work, because any weight small enough to be a nudge leaves hiding dominant.
+
+Three things here would have passed a naive suite and still been wrong:
+- **Damage is buffered and applied simultaneously.** Resolving in index order lets player 0, who holds the lower soldier indices, strike first in every mutual engagement and win coin-flip trades — deterministic, reproducible, and silently unfair.
+- **Formation slots re-derive from the LIVING count** on every casualty. Otherwise a squad keeps gaps where its dead stood while cohesion still reads 1.00, because cohesion only ever counts survivors.
+- **Army morale weights squads by their original roster, not current strength.** Weight by strength and a squad that is wiped out drops to zero morale and zero weight at the same instant, falling clean out of the average — so destroying an enemy squad outright barely moves their army morale.
+
+Ranged attacks pick a target **squad** first and only then a soldier. The soldier spatial hash has 14-unit cells sized for separation distance; a 250-unit bow sweeping that grid would touch hundreds of cells per soldier per tick.
+
+**Verified:** 97 checks. A mirrored 120-second battle trades 65 vs 80 casualties with morale falling to 93%/84%; mutual kills land simultaneously; archers engage without closing; survivors re-form into a tightened line.
 
 ### Phase 4 — Terrain and vision
 Forest/hill/river/plain/fortification behaviors, elevation effects on range and speed, bridges as chokepoints, per-unit vision radius, line-of-sight blocking, fog of war for both sides.
