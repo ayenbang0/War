@@ -12,12 +12,16 @@ import { buildCorpus, type Case } from "./gesture-corpus.ts";
 const LABELS = [
   "select", "move", "attack", "hold", "patrol", "retreat",
   "formation:line", "formation:column", "formation:wedge", "formation:square",
+  "split", "grid", "patrolArea", "recover",
 ] as const;
 
 function actualLabel(c: Case): string {
   const r = recognize(c.points, c.ctx);
   if (!r) return "none";
   if (r.kind === "formation") return "formation:" + r.shape;
+  if (r.kind === "split" || r.kind === "grid" || r.kind === "patrolArea" || r.kind === "recover") {
+    return r.kind;
+  }
   return gestureLabel(r);
 }
 

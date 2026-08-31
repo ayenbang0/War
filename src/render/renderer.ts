@@ -13,6 +13,10 @@ import { TerrainGrid, TILE_SIZE } from "../sim/terrain.ts";
 import { Camera } from "./camera.ts";
 import { TerrainLayer } from "./terrain-layer.ts";
 import { ink, inkFaint, inkSoft, parchment, playerColor, playerColorSoft } from "./palette.ts";
+import { RECOVER_LOCK_SECONDS, TICK_RATE } from "../sim/world.ts";
+
+/** Matches the recover gesture ink, so the order and its aftermath read alike. */
+const RECOVER_COLOR = "#9c3f63";
 
 /** Map grid drawn every N tiles, like the reference squares on a paper map. */
 const GRID_TILES = 8;
@@ -42,7 +46,7 @@ export class Renderer {
     this.drawGrid(world.terrain, cam);
     this.drawWorldEdge(world.terrain, cam);
 
-    for (const q of world.squads) this.drawOrder(q, cam, prev, alpha);
+    for (const q of world.squads) this.drawOrder(q, cam, prev, alpha, world.tick);
     for (const q of world.squads) {
       if (selected.includes(q.id)) this.drawSelection(q, cam, prev, alpha);
     }
@@ -204,11 +208,34 @@ export class Renderer {
    * attacks are solid and end in a cross, hold is a ring on the ground, patrol
    * is a closed circuit, retreat is chevroned backwards.
    */
-  private drawOrder(q: Squad, cam: Camera, prev: Snapshot, alpha: number): void {
+  private drawOrder(q: Squad, cam: Camera, prev: Snapshot, alpha: number, tick: number): void {
     if (q.stance === "idle") return;
     const ctx = this.ctx;
     const a = this.anchor(q, prev, alpha);
     const color = playerColor[q.player] ?? ink;
+
+    // A recovering squad is helpless for a fixed term, which is the whole cost
+    // of the gesture. Draw the remaining term as a closing arc so the exposure
+    // is impossible to lose track of.
+    if (q.stance === "recover") {
+      const left = Math.max(0, q.recoverUntil - tick) / (RECOVER_LOCK_SECONDS * TICK_RATE);
+      const sx = cam.worldToScreenX(a.x);
+      const sy = cam.worldToScreenY(a.y);
+      const r = Math.max(14, (q.radius + 20) * cam.zoom);
+      ctx.save();
+      ctx.strokeStyle = RECOVER_COLOR;
+      ctx.lineWidth = 3;
+      ctx.globalAlpha = 0.3;
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 0.95;
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * left);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
 
     ctx.save();
     ctx.strokeStyle = color;

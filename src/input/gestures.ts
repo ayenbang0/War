@@ -41,6 +41,9 @@ export type SquadView = {
   readonly visible: boolean;
 };
 
+/** A straight line held briefly, waiting to see if a parallel one follows. */
+export type PendingLine = { readonly a: Point; readonly b: Point } | null;
+
 export type GestureContext = {
   readonly player: number;
   readonly squads: readonly SquadView[];
@@ -48,7 +51,14 @@ export type GestureContext = {
   readonly selected: readonly number[];
   /** World x of the player's own baseline; retreat means "back toward this". */
   readonly homeX: number;
+  /** Set while a split line is awaiting a possible parallel partner. */
+  readonly pendingLine?: PendingLine;
 };
+
+/** Two or more selected squads form a GROUP, which unlocks the group verbs. */
+export function isGroup(ctx: GestureContext): boolean {
+  return ctx.selected.length >= 2;
+}
 
 export type Recognized =
   | { kind: "select"; squads: number[] }
@@ -57,7 +67,16 @@ export type Recognized =
   | { kind: "hold"; squads: number[]; x: number; y: number; radius: number }
   | { kind: "formation"; squads: number[]; shape: FormationShape }
   | { kind: "retreat"; squads: number[]; path: number[] }
-  | { kind: "patrol"; squads: number[]; path: number[] };
+  | { kind: "patrol"; squads: number[]; path: number[] }
+  // -- group verbs, available only while two or more squads are selected --
+  /** Cut the selection: squads left of the drawn direction stay selected. */
+  | { kind: "split"; squads: number[]; keep: number[]; drop: number[]; line: number[] }
+  /** Two parallel lines: lay the group out in rows and columns. */
+  | { kind: "grid"; squads: number[]; places: number[]; rows: number[] }
+  /** Cordon and sweep a circular area rather than trace a drawn circuit. */
+  | { kind: "patrolArea"; squads: number[]; x: number; y: number; radius: number }
+  /** Stand down and recover. Costs 30 seconds of total vulnerability. */
+  | { kind: "recover"; squads: number[] };
 
 // -- tuning, all in world units ------------------------------------------------
 
@@ -75,6 +94,15 @@ const HOLD_SPAN_RADII = 6.5;
 const HOLD_SPAN_MAX = 420;
 /** Retreat must gain at least this much ground from the nearest enemy. */
 const RETREAT_GAIN = 60;
+/** Endpoint gap over path length below which an open stroke counts as straight. */
+const STRAIGHT_RATIO = 0.9;
+/** Two lines within this angle of each other count as parallel. */
+const PARALLEL_TOLERANCE = 0.35;
+/**
+ * A closed shape filling less than this much of its convex hull has a real
+ * notch cut into it, i.e. it is a heart rather than a ring. See hullFill.
+ */
+const HEART_HULL_FILL = 0.96;
 /** ...and point at least this much homeward, as a cosine (about 63 degrees). */
 const RETREAT_HOMEWARD = 0.45;
 
@@ -294,28 +322,51 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
   const end = raw[raw.length - 1];
   const total = pathLength(raw);
 
+  const span = bboxSpan(raw);
+  const simple = simplify(raw, Math.max(6, span * 0.09));
+  const gap = Math.hypot(end.x - start.x, end.y - start.y);
+  const closed = total > 1e-6 && gap / total < CLOSED_RATIO;
+
   // Subject: the squad the stroke starts on, else whatever is selected.
-  const anchored = anchorSquad(ctx, start);
+  //
+  // The anchor is deliberately NOT applied to a large closed stroke. The rule
+  // exists so that drawing FROM a squad TO somewhere is one motion, which is
+  // about open strokes going places. A ring or a heart drawn across your own
+  // line inevitably starts on top of some squad, and letting that hijack the
+  // subject turned "recover this group" into "that one squad, patrol". Small
+  // closed strokes still anchor, because a drawn box is how a formation glyph
+  // is written.
+  let anchored = anchorSquad(ctx, start);
+  if (anchored !== null && closed) {
+    const on = squadById(ctx, anchored);
+    if (on && span > on.radius * 4.5) anchored = null;
+  }
   const subjects = anchored !== null ? [anchored] : ctx.selected.slice();
 
   // 0. Tap. Selects the squad under the pen, or clears the selection.
   if (total < TAP_LENGTH) {
-    return { kind: "select", squads: anchored !== null ? [anchored] : [] };
+    const tapped = anchorSquad(ctx, start);
+    return { kind: "select", squads: tapped !== null ? [tapped] : [] };
   }
   if (subjects.length === 0) return null;
 
   const subject = squadById(ctx, subjects[0]);
   const scale = subject ? Math.max(subject.radius, 20) : 30;
-  const span = bboxSpan(raw);
-  const simple = simplify(raw, Math.max(6, span * 0.09));
-  const gap = Math.hypot(end.x - start.x, end.y - start.y);
-  const closed = total > 1e-6 && gap / total < CLOSED_RATIO;
 
   // 1. Attack. An endpoint on an enemy is hard evidence and beats every
   //    shape-based reading, so it is resolved before shape is considered.
   const target = enemyAt(ctx, end);
   if (target !== null) {
     return { kind: "attack", squads: subjects, target, path: toPath(simple) };
+  }
+
+  // 1b. Group verbs. Available only with two or more squads selected, and only
+  //     for strokes that did NOT start on a squad -- the subject rule wins, so
+  //     drawing from a squad is always that squad's own order and a group can
+  //     still be sent somewhere one squad at a time.
+  if (isGroup(ctx) && anchored === null) {
+    const group = groupVerb(raw, ctx, simple, closed, span, subjects);
+    if (group) return group;
   }
 
   // 2. Formation. Only when the stroke is centred on the subject: a glyph is
@@ -388,7 +439,219 @@ export function gestureLabel(r: Recognized | null): string {
       return r.squads.length > 0 ? "select" : "clear";
     case "formation":
       return "form " + r.shape;
+    case "split":
+      return "split " + r.keep.length + "/" + r.squads.length;
+    case "grid":
+      return "rows and columns";
+    case "patrolArea":
+      return "patrol area";
+    case "recover":
+      return "recover";
     default:
       return r.kind;
   }
+}
+
+// -- group-verb geometry -------------------------------------------------------
+
+/**
+ * Convex hull by monotone chain. Used only to measure how much of a shape's
+ * own hull it fails to fill.
+ */
+function convexHull(pts: readonly Point[]): Point[] {
+  if (pts.length < 3) return pts.slice();
+  const s = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  const cross = (o: Point, a: Point, b: Point): number =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: Point[] = [];
+  for (const p of s) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper: Point[] = [];
+  for (let i = s.length - 1; i >= 0; i--) {
+    const p = s[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+/**
+ * How much of its own convex hull a closed shape actually fills.
+ *
+ * This is what separates a heart from a circle, and it is measured on the RAW
+ * stroke rather than the simplified one on purpose. Counting concave corners
+ * was the obvious approach and it does not survive contact with RDP: the notch
+ * between a heart's lobes is a fine feature, the simplification tolerance
+ * scales with stroke size, and on a large heart the cusp is smoothed away
+ * entirely -- so the same gesture read as a heart at one size and a circle at
+ * another. Hull deficiency has no such cliff.
+ *
+ * Measured over the corpus: circles (hold, patrol, patrol-area) fill 0.983 to
+ * 1.000 of their hull; hearts fill 0.926 to 0.932. The threshold sits in the
+ * gap, with about five percentage points of margin on either side.
+ */
+function hullFill(pts: readonly Point[]): number {
+  const hull = convexHull(pts);
+  if (hull.length < 3) return 1;
+  const hullArea = enclosedAreaOfLocal(hull);
+  if (hullArea < 1e-6) return 1;
+  return enclosedAreaOfLocal(pts) / hullArea;
+}
+
+function enclosedAreaOfLocal(pts: readonly Point[]): number {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const q = pts[(i + 1) % pts.length];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return Math.abs(a) / 2;
+}
+
+/** Are two segments parallel (in either direction) within tolerance? */
+function isParallel(a0: Point, a1: Point, b0: Point, b1: Point): boolean {
+  const h1 = Math.atan2(a1.y - a0.y, a1.x - a0.x);
+  const h2 = Math.atan2(b1.y - b0.y, b1.x - b0.x);
+  return axisDelta(h1, h2) < PARALLEL_TOLERANCE;
+}
+
+/**
+ * Which side of the directed line a-to-b a point falls on.
+ *
+ * World y grows downward, as on any canvas, so the sign is the opposite of the
+ * textbook convention: NEGATIVE is the visually left-hand side of travel. Worth
+ * stating, because "keep the left half" has to mean what the player sees.
+ */
+function sideOf(a: Point, b: Point, px: number, py: number): number {
+  return (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x);
+}
+
+/**
+ * Lay squads out on the two drawn lines: one rank per line, evenly spaced along
+ * it. The lines are the drawing, so the arrangement is literally where the
+ * player put them rather than a computed guess at what they meant.
+ */
+function gridPlaces(
+  ctx: GestureContext,
+  ids: readonly number[],
+  a0: Point,
+  a1: Point,
+  b0: Point,
+  b1: Point,
+): { places: number[]; rows: number[] } {
+  // Match the second line's direction to the first so ranks do not read reversed.
+  let c0 = b0;
+  let c1 = b1;
+  const d1x = a1.x - a0.x;
+  const d1y = a1.y - a0.y;
+  if (d1x * (b1.x - b0.x) + d1y * (b1.y - b0.y) < 0) {
+    c0 = b1;
+    c1 = b0;
+  }
+
+  const n = ids.length;
+  const perRow = Math.ceil(n / 2);
+  const places: number[] = [];
+  const rows: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const row = Math.floor(i / perRow);
+    const inRow = row === 1 ? n - perRow : Math.min(perRow, n);
+    const j = i - row * perRow;
+    const t = inRow <= 1 ? 0.5 : (j + 0.5) / inRow;
+    const s0 = row === 0 ? a0 : c0;
+    const s1 = row === 0 ? a1 : c1;
+    places.push(s0.x + (s1.x - s0.x) * t, s0.y + (s1.y - s0.y) * t);
+    rows.push(row);
+  }
+  void ctx;
+  return { places, rows };
+}
+
+/**
+ * The group vocabulary, tried before the single-squad table.
+ *
+ * Closed strokes split three ways here rather than two: a heart stands down and
+ * recovers, a large ring becomes a patrolled area rather than a traced circuit,
+ * and a small loop still means hold. Straight open strokes become a cut through
+ * the selection -- or, if one is already waiting, the second rail of a grid.
+ */
+function groupVerb(
+  raw: readonly Point[],
+  ctx: GestureContext,
+  simple: readonly Point[],
+  closed: boolean,
+  span: number,
+  subjects: readonly number[],
+): Recognized | null {
+  const scale = 60;
+
+  if (closed) {
+    // A heart is the one closed shape with a genuine notch cut into it, which
+    // shows up as a shape that fails to fill its own convex hull.
+    if (span > scale && hullFill(raw) < HEART_HULL_FILL) {
+      return { kind: "recover", squads: subjects.slice() };
+    }
+    if (span > Math.min(scale * HOLD_SPAN_RADII, HOLD_SPAN_MAX)) {
+      const c = centroidOf(raw);
+      const radius = Math.max(scale, Math.sqrt(Math.max(enclosedAreaOf(raw), 1) / Math.PI));
+      return { kind: "patrolArea", squads: subjects.slice(), x: c.x, y: c.y, radius };
+    }
+    return null; // small loop: fall through to the ordinary hold reading
+  }
+
+  // Straight open strokes only. A curved stroke is not a rail or a cut, so it
+  // falls through to the normal move/retreat reading.
+  const a = raw[0];
+  const b = raw[raw.length - 1];
+  const gap = Math.hypot(b.x - a.x, b.y - a.y);
+  const total = pathLength(raw);
+  if (total < 1e-6 || gap / total < STRAIGHT_RATIO || simple.length !== 2) return null;
+
+  const pending = ctx.pendingLine ?? null;
+  if (pending && isParallel(pending.a, pending.b, a, b)) {
+    const { places, rows } = gridPlaces(ctx, subjects, pending.a, pending.b, a, b);
+    return { kind: "grid", squads: subjects.slice(), places, rows };
+  }
+
+  // Cut the selection. Squads on the visually LEFT side of the stroke are kept,
+  // so drawing the same line the other way keeps the other half -- one gesture,
+  // both outcomes, no modifier.
+  //
+  // A line that misses the group entirely still returns a split with nothing
+  // dropped. That is deliberate: the grid gesture's two rails are naturally
+  // drawn where you want the ranks to END UP, which is often clear of the
+  // group, and if a rail that cuts nothing were rejected here it could never
+  // become the first half of a pair.
+  const keep: number[] = [];
+  const drop: number[] = [];
+  for (const id of subjects) {
+    const q = squadById(ctx, id);
+    if (!q) continue;
+    (sideOf(a, b, q.x, q.y) < 0 ? keep : drop).push(id);
+  }
+  return { kind: "split", squads: subjects.slice(), keep, drop, line: [a.x, a.y, b.x, b.y] };
+}
+
+function centroidOf(pts: readonly Point[]): Point {
+  let x = 0;
+  let y = 0;
+  for (const p of pts) {
+    x += p.x;
+    y += p.y;
+  }
+  return { x: x / pts.length, y: y / pts.length };
+}
+
+function enclosedAreaOf(pts: readonly Point[]): number {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const q = pts[(i + 1) % pts.length];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return Math.abs(a) / 2;
 }

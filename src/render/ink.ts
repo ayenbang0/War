@@ -24,6 +24,10 @@ const GESTURE_COLOR: Record<string, string> = {
   patrol: "#4a6b52",
   retreat: "#7a5230",
   formation: "#5b4a7a",
+  split: "#8a5a2b",
+  grid: "#3f6b74",
+  patrolArea: "#4a6b52",
+  recover: "#9c3f63",
 };
 
 export function drawInk(
@@ -31,7 +35,22 @@ export function drawInk(
   cam: Camera,
   points: readonly Point[],
   preview: Recognized | null,
+  pendingRail: { a: Point; b: Point } | null = null,
 ): void {
+  // A held split rail stays on the map so the player can see what a second,
+  // parallel line would pair with.
+  if (pendingRail) {
+    ctx.save();
+    ctx.strokeStyle = GESTURE_COLOR.split;
+    ctx.globalAlpha = 0.7;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(cam.worldToScreenX(pendingRail.a.x), cam.worldToScreenY(pendingRail.a.y));
+    ctx.lineTo(cam.worldToScreenX(pendingRail.b.x), cam.worldToScreenY(pendingRail.b.y));
+    ctx.stroke();
+    ctx.restore();
+  }
   if (points.length === 0) return;
   const color = preview ? (GESTURE_COLOR[preview.kind] ?? ink) : ink;
 
@@ -68,7 +87,49 @@ function drawGhost(
   ctx.lineWidth = 2;
   ctx.globalAlpha = 0.95;
 
-  if (preview.kind === "hold") {
+  if (preview.kind === "patrolArea") {
+    ctx.setLineDash([9, 6]);
+    ctx.beginPath();
+    ctx.arc(
+      cam.worldToScreenX(preview.x),
+      cam.worldToScreenY(preview.y),
+      Math.max(12, preview.radius * cam.zoom),
+      0,
+      Math.PI * 2,
+    );
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(
+      cam.worldToScreenX(preview.x),
+      cam.worldToScreenY(preview.y),
+      Math.max(8, preview.radius * 0.62 * cam.zoom),
+      0,
+      Math.PI * 2,
+    );
+    ctx.globalAlpha = 0.4;
+    ctx.stroke();
+    ctx.globalAlpha = 0.95;
+  } else if (preview.kind === "split") {
+    // Draw the cut, and ring the squads that survive it.
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(cam.worldToScreenX(preview.line[0]), cam.worldToScreenY(preview.line[1]));
+    ctx.lineTo(cam.worldToScreenX(preview.line[2]), cam.worldToScreenY(preview.line[3]));
+    ctx.stroke();
+  } else if (preview.kind === "grid") {
+    ctx.setLineDash([]);
+    for (let i = 0; i < preview.places.length; i += 2) {
+      const px = cam.worldToScreenX(preview.places[i]);
+      const py = cam.worldToScreenY(preview.places[i + 1]);
+      ctx.beginPath();
+      ctx.arc(px, py, 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(px, py, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (preview.kind === "hold") {
     ctx.setLineDash([7, 5]);
     ctx.beginPath();
     ctx.arc(

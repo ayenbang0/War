@@ -129,6 +129,7 @@ function frame(now: number): void {
   fps += (1 / Math.max(dtReal, 1e-6) - fps) * 0.1;
 
   controls.update(dtReal);
+  commander.flushPending(now);
 
   if (!paused) {
     accumulator += dtReal;
@@ -144,7 +145,7 @@ function frame(now: number): void {
 
   const alpha = paused ? 1 : Math.min(accumulator / TICK_DT, 1);
   renderer.draw(world, cam, prev, alpha, commander.selected);
-  drawInk(ctx, cam, pen.points, commander.preview);
+  drawInk(ctx, cam, pen.points, commander.preview, commander.pendingRail);
 
   hudTimer += dtReal;
   if (hudTimer > 0.5) {

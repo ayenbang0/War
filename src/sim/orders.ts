@@ -27,12 +27,14 @@ export type OrderBody =
   /** Disengage and fall back along the route. */
   | { kind: "retreat"; squad: number; path: readonly number[] }
   /** Walk the circuit forever, reversing at the ends of an open route. */
-  | { kind: "patrol"; squad: number; path: readonly number[] };
+  | { kind: "patrol"; squad: number; path: readonly number[] }
+  /** Stand down, close ranks, regain morale and hit points. */
+  | { kind: "recover"; squad: number };
 
 export type OrderKind = OrderBody["kind"];
 
 export const ORDER_KINDS: readonly OrderKind[] = [
-  "move", "attack", "hold", "formation", "retreat", "patrol",
+  "move", "attack", "hold", "formation", "retreat", "patrol", "recover",
 ];
 
 export type Order = OrderBody & {

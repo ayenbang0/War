@@ -45,8 +45,22 @@ Formation glyphs, drawn centred on the squad: a stroke **across** its front
 forms line, **along** its axis forms column, a **chevron** forms wedge, a
 **box** forms square.
 
+With **two or more squads selected**, strokes drawn clear of any squad command
+the group as a whole:
+
+| Draw | Order |
+|---|---|
+| A straight line | **split** the selection — squads left of the stroke are kept, so draw it the other way to keep the other half |
+| A second parallel line within 1.2s | lay the group out in **rows and columns** on the two rails |
+| A large circle | **patrol that area** — the squads spread around one ring as a cordon |
+| A heart | **recover** — 30s of healing, and 30s completely helpless |
+
+Recovery is a commitment. A recovering squad accepts no orders at all until the
+term ends, and the simulation enforces that, not the interface.
+
 The interpretation appears as a labelled ghost while you draw — release to
-commit, `esc` to abandon.
+commit, `esc` to abandon. A stroke begun on one of your squads always commands
+that squad, which is how a group can still be sent somewhere one squad at a time.
 
 Camera: middle or right drag, WASD/arrows, or push the screen edge; wheel zooms
 about the cursor. `space` pauses, `.` single-steps while paused.

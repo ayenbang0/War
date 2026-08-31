@@ -53,9 +53,14 @@ Pointer-event capture on the left button (world-space from the first sample), RD
 
 **Verified:** the confusion matrix over 85 synthetic jittered strokes is **fully diagonal** — all six gestures plus four formation glyphs and selection, across seven squad facings. All six drive the sim end-to-end through the real pointer path.
 
-Two rules earned their keep and should not be relaxed:
+**Group verbs** (added on request): with two or more squads selected and the stroke drawn clear of any squad, a straight line **splits** the selection (squads visually left of the stroke are kept, so drawing it the other way keeps the other half); a second parallel line within 1.2s instead lays the group out in **rows and columns**; a large circle becomes a **patrolled area** with the squads spread around one ring as a cordon; and a heart is **recover** — 30 seconds of morale and hit-point regeneration during which the squad accepts no orders at all. The lock is enforced in the simulation, not the UI, so it binds the AI and replayed order logs equally.
+
+Three rules earned their keep and should not be relaxed:
 - **The subject rule.** A stroke starting on one of your squads takes that squad as subject and selects it, so ordering is one motion. Anchor tolerance is in **world units, never screen pixels** — otherwise the same stroke means different things at different zooms. Ties break on squad id.
 - **Formation glyphs are recognized only when centred ON the squad.** That is what keeps a drawn box from meaning both "form square" and "hold this area". Frontage is deliberately *not* encoded in stroke length: extent is already the hold/patrol discriminator, and overloading it would make a slightly-too-long line flip between two orders.
+- **The anchor never claims a large closed stroke.** A ring or a heart drawn across your own line inevitably begins on top of some squad; letting that set the subject turned "recover this group" into "that one squad, patrol". Small closed strokes still anchor, because a drawn box is how a formation glyph is written.
+
+Hearts are told from rings by **convex hull fill**, not by counting concave corners. Corner counting is the obvious approach and it does not survive RDP: the notch is a fine feature, the simplification tolerance scales with stroke size, and on a large heart the cusp is smoothed away entirely — so the same gesture read as a heart at one size and a ring at another. Measured over the corpus, rings fill 0.983–1.000 of their hull and hearts 0.926–0.932.
 
 ### Phase 3 — Combat, morale, victory — NEXT
 Per-soldier melee/ranged resolution, frontline engagement and rear ranks, formation deformation under contact and re-forming after, squad morale (casualties, flanking, outnumbering, terrain), global morale aggregation, rout, 15-minute timer, win/loss.

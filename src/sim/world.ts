@@ -50,15 +50,26 @@ const SEPARATION_WEIGHT = 1.35;
 const CATCHUP = 2.6;
 /** Within this distance a soldier counts as standing in its slot. */
 const IN_SLOT = 7;
+/** Morale regained per second while recovering. Roughly 17s from broken to full. */
+const RECOVER_MORALE_PER_SEC = 0.06;
+/** Fraction of a soldier's maximum hit points healed per second while recovering. */
+const RECOVER_HP_FRACTION_PER_SEC = 0.04;
+/**
+ * Recovery is a commitment, not a free heal: the squad is locked for this long
+ * and will not accept any order, including another recover. That is the whole
+ * cost of the gesture -- a squad standing down is a squad that cannot react,
+ * so calling it in the wrong place should lose you the squad.
+ */
+export const RECOVER_LOCK_SECONDS = 30;
 
-export type Stance = "idle" | "move" | "attack" | "hold" | "retreat" | "patrol";
+export type Stance = "idle" | "move" | "attack" | "hold" | "retreat" | "patrol" | "recover";
 
 /**
  * Fixed order, so a stance can be hashed as a stable index. Append only --
  * reordering would silently invalidate every recorded replay and golden.
  */
 export const STANCES: readonly Stance[] = [
-  "idle", "move", "attack", "hold", "retreat", "patrol",
+  "idle", "move", "attack", "hold", "retreat", "patrol", "recover",
 ];
 
 export type Squad = {
@@ -94,6 +105,8 @@ export type Squad = {
   morale: number;
   /** 0..1 fraction of soldiers standing in their slots. */
   cohesion: number;
+  /** Tick at which a recovery lock lifts. 0 when the squad is free to act. */
+  recoverUntil: number;
 };
 
 /**
@@ -201,6 +214,7 @@ export class World {
       patrolForward: true,
       morale: 1,
       cohesion: 1,
+      recoverUntil: 0,
     };
     formationSlots(squad.shape, count, squad.slots);
     squad.radius = formationRadius(squad.slots, count);
@@ -250,6 +264,10 @@ export class World {
   private applyOrder(order: Order): void {
     const q = this.squadById(order.squad);
     if (!q) return;
+    // A recovering squad has stood down and is not taking orders. Enforced here
+    // rather than in the UI so it holds for the AI and for replayed order logs
+    // too -- the lock is a rule of the simulation, not a disabled button.
+    if (q.recoverUntil > this.tick) return;
     switch (order.kind) {
       case "move":
         q.stance = "move";
@@ -284,6 +302,13 @@ export class World {
         return;
       case "formation":
         this.reshape(q, order.shape);
+        return;
+      case "recover":
+        // Halt where you stand, close ranks, and get your breath back.
+        q.stance = "recover";
+        q.target = -1;
+        q.path.length = 0;
+        q.recoverUntil = this.tick + RECOVER_LOCK_SECONDS * TICK_RATE;
         return;
     }
   }
@@ -350,6 +375,10 @@ export class World {
 
   private updateSquadAnchors(): void {
     for (const q of this.squads) {
+      if (q.stance === "recover") {
+        this.recover(q);
+        continue;
+      }
       if (q.stance === "idle") continue;
 
       if (q.path.length < 2) {
@@ -390,6 +419,30 @@ export class World {
       }
 
       q.facing = ((q.facing % TAU) + TAU) % TAU;
+    }
+  }
+
+  /**
+   * Rally and heal. The squad stands, re-forms (its soldiers are already
+   * pulling toward their slots every tick), and regains morale and hit points.
+   * It holds this stance until given another order, so a recovering squad stays
+   * recovering rather than silently reverting to idle at full strength.
+   */
+  private recover(q: Squad): void {
+    if (this.tick >= q.recoverUntil) {
+      // The full term is served whether or not morale and health topped out.
+      q.stance = "idle";
+      q.recoverUntil = 0;
+      return;
+    }
+    q.morale = min(1, q.morale + RECOVER_MORALE_PER_SEC * TICK_DT);
+    const maxHp = UNIT_TYPES[q.type].hp;
+    const heal = maxHp * RECOVER_HP_FRACTION_PER_SEC * TICK_DT;
+    const s = this.soldiers;
+    for (let i = 0; i < q.count; i++) {
+      const id = q.first + i;
+      if (s.alive[id] !== 1) continue;
+      if (s.hp[id] < maxHp) s.hp[id] = min(maxHp, s.hp[id] + heal);
     }
   }
 

@@ -51,7 +51,13 @@ The same hash function detects netplay desync in Phase 10, and the stable tier t
 ## Pen control
 The **left pointer button is the pen** and nothing else may bind it. Strokes are converted to world space at capture time, and every recognizer threshold is in world units — a stroke must mean the same thing at zoom 0.35 and at 2.4.
 
-`input/gestures.ts` is pure (no DOM, no state) so the whole discrimination table is testable headless. The corpus in `tools/gesture-corpus.ts` feeds a **confusion matrix** that must stay diagonal; per-case tests hide exactly the pair collisions that matter (hold/patrol, formation/hold, move/retreat). Add strokes to the corpus when adding a gesture.
+`input/gestures.ts` is pure (no DOM, no state) so the whole discrimination table is testable headless. The corpus in `tools/gesture-corpus.ts` feeds a **confusion matrix** that must stay diagonal; per-case tests hide exactly the pair collisions that matter (hold/patrol, formation/hold, move/retreat, heart/ring). Add strokes to the corpus when adding a gesture — and add them in a scene where the *competing* vocabulary is also live, or the test hands the classifier its answer.
+
+The matrix is necessary but not sufficient: it feeds the recognizer contexts you construct by hand, so it cannot catch a subject-resolution bug. Three of the group verbs shipped broken past a 100% matrix and were only caught by driving real strokes through the browser. Do both.
+
+Two rules the recognizer depends on:
+- **Anchoring is in world units**, never screen pixels — a stroke must mean the same thing at every zoom — and ties break on squad id, since footprints overlap constantly.
+- **A large closed stroke is never claimed by the anchor.** A ring or heart drawn over your own line always begins on top of some squad; letting that set the subject turns a group order into a single-squad one.
 
 ## Art direction
 Map-table wargame aesthetic: parchment ground, relief shading, topographic contours, unit counters, ink-drawn strokes. All procedurally drawn — there are no sprite assets in this project.

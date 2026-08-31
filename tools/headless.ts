@@ -531,6 +531,64 @@ section("state hash");
   const holdDiff = twin();
   holdDiff.squads[0].holdRadius = 250;
   check("hold zone is observed", hashWorld(holdDiff) !== hashWorld(base));
+
+  const lockDiff = twin();
+  lockDiff.squads[0].recoverUntil = 400;
+  check("recovery lock is observed", hashWorld(lockDiff) !== hashWorld(base));
+}
+
+// -- 8c. recovery is a commitment ----------------------------------------------
+
+section("recover");
+{
+  const w = buildWorld();
+  const q = w.squads[0];
+  const other = w.squads[1];
+  q.morale = 0.3;
+  for (let i = 0; i < q.count; i++) w.soldiers.hp[q.first + i] = 20;
+  const startX = q.anchorX;
+
+  w.orders.issue({ kind: "recover", squad: q.id }, 0, w.tick + 1);
+  w.step();
+  w.step();
+  check("recover sets the stance", q.stance === "recover", q.stance);
+  check("recover locks the squad for 30s",
+    q.recoverUntil - w.tick > TICK_RATE * 29 && q.recoverUntil - w.tick <= TICK_RATE * 30,
+    (q.recoverUntil - w.tick) / TICK_RATE + "s remaining");
+
+  // The lock is the entire cost of the gesture, so it has to actually hold.
+  w.orders.issue({ kind: "move", squad: q.id, path: [startX + 900, q.anchorY] }, 0, w.tick + 1);
+  w.orders.issue({ kind: "formation", squad: q.id, shape: "wedge" }, 0, w.tick + 1);
+  w.orders.issue({ kind: "recover", squad: q.id }, 0, w.tick + 1);
+  const shapeBefore = q.shape;
+  for (let t = 0; t < TICK_RATE * 5; t++) w.step();
+  check("a recovering squad refuses movement orders", q.stance === "recover" && q.path.length === 0);
+  check("a recovering squad refuses formation orders", q.shape === shapeBefore, q.shape);
+  check("a recovering squad does not drift", Math.abs(q.anchorX - startX) < 1, (q.anchorX - startX).toFixed(2));
+
+  // Other squads are unaffected.
+  w.orders.issue({ kind: "move", squad: other.id, path: [other.anchorX + 400, other.anchorY] }, 0, w.tick + 1);
+  w.step();
+  w.step();
+  check("the lock is per squad, not army-wide", other.stance === "move");
+
+  const moraleMid = q.morale;
+  const hpMid = w.soldiers.hp[q.first];
+  check("morale climbs while recovering", moraleMid > 0.3, moraleMid.toFixed(3));
+  check("hit points climb while recovering", hpMid > 20, hpMid.toFixed(1));
+
+  // Run out the clock.
+  for (let t = 0; t < TICK_RATE * 26; t++) w.step();
+  check("the lock lifts and the squad stands to", q.stance === "idle" && q.recoverUntil === 0,
+    q.stance + " / until " + q.recoverUntil);
+  check("morale recovered over the full term", q.morale > 0.9 && q.morale <= 1, q.morale.toFixed(3));
+  check("wounded soldiers healed", w.soldiers.hp[q.first] > 40, w.soldiers.hp[q.first].toFixed(1));
+
+  // And orders are accepted again.
+  w.orders.issue({ kind: "move", squad: q.id, path: [startX + 500, q.anchorY] }, 0, w.tick + 1);
+  w.step();
+  w.step();
+  check("orders are accepted once the term ends", q.stance === "move");
 }
 
 // -- 9. gestures ---------------------------------------------------------------

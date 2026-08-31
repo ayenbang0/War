@@ -8,7 +8,7 @@
  */
 
 import type { World } from "../sim/world.ts";
-import { recognize, gestureLabel, type GestureContext, type Point, type Recognized, type SquadView } from "./gestures.ts";
+import { recognize, gestureLabel, type GestureContext, type PendingLine, type Point, type Recognized, type SquadView } from "./gestures.ts";
 
 /**
  * Ticks between issuing an order and it taking effect. One tick keeps orders
@@ -17,10 +17,27 @@ import { recognize, gestureLabel, type GestureContext, type Point, type Recogniz
  */
 const ORDER_DELAY = 1;
 
+/**
+ * How long a split line waits for a parallel partner before committing.
+ *
+ * The two-line grid gesture is defined as two consecutive strokes, but the
+ * first of them is already a valid split on its own. Rather than applying a
+ * split and then visibly undoing it, the first line is held for this long with
+ * a ghost saying what a second line would do. Real milliseconds, not ticks:
+ * this is interface pacing, and it never reaches the simulation -- only the
+ * resulting order does, stamped with its own tick.
+ */
+const PAIR_WINDOW_MS = 1200;
+
 export class Commander {
   selected: number[] = [];
   /** What the recognizer currently reads the in-progress stroke as. */
   preview: Recognized | null = null;
+
+  /** A split line waiting to see whether a parallel one follows. */
+  private pendingLine: PendingLine = null;
+  private pendingKeep: number[] = [];
+  private pendingDeadline = 0;
 
   private readonly world: World;
   private readonly player: number;
@@ -28,6 +45,27 @@ export class Commander {
   constructor(world: World, player: number) {
     this.world = world;
     this.player = player;
+  }
+
+  /** The held rail, so the renderer can show what a second line would pair with. */
+  get pendingRail(): PendingLine {
+    return this.pendingLine;
+  }
+
+  /**
+   * Resolve an expired pair window. Called every frame with real milliseconds;
+   * a held split commits on its own if no parallel line arrives.
+   */
+  flushPending(nowMs: number): void {
+    if (this.pendingLine === null || nowMs < this.pendingDeadline) return;
+    this.selected = this.pendingKeep.slice();
+    this.clearPending();
+  }
+
+  private clearPending(): void {
+    this.pendingLine = null;
+    this.pendingKeep = [];
+    this.pendingDeadline = 0;
   }
 
   /** Snapshot of what the player can see, as the recognizer needs it. */
@@ -45,7 +83,19 @@ export class Commander {
     // Home is the map edge the player deployed on: it is what separates a
     // fighting withdrawal from an ordinary reposition.
     const homeX = this.player === 0 ? 0 : this.world.terrain.worldWidth;
-    return { player: this.player, squads, selected: this.selected, homeX };
+    return {
+      player: this.player,
+      squads,
+      selected: this.selected,
+      homeX,
+      pendingLine: this.pendingLine,
+    };
+  }
+
+  /** A recovering squad has stood down and will not accept orders. */
+  private locked(id: number): boolean {
+    const q = this.world.squadById(id);
+    return q !== undefined && q.recoverUntil > this.world.tick;
   }
 
   /** Re-read an in-progress stroke. Pure and cheap, so it runs every move. */
@@ -64,9 +114,77 @@ export class Commander {
     if (!r) return "";
 
     if (r.kind === "select") {
+      this.clearPending();
       this.selected = r.squads.slice();
       return r.squads.length > 0 ? "selected" : "cleared";
     }
+
+    // -- group verbs ---------------------------------------------------------
+
+    if (r.kind === "split") {
+      // Held, not applied: a parallel line drawn within the window turns this
+      // into a grid instead, and applying-then-undoing would flicker the board.
+      this.pendingLine = { a: { x: r.line[0], y: r.line[1] }, b: { x: r.line[2], y: r.line[3] } };
+      this.pendingKeep = r.keep.slice();
+      this.pendingDeadline = nowMs() + PAIR_WINDOW_MS;
+      // A line clear of the group cuts nothing; it is purely a rail awaiting a
+      // partner, and saying "split 0/6" would read as a mistake.
+      return r.keep.length === 0 || r.drop.length === 0
+        ? "rail set  (draw a parallel line for rows)"
+        : "split " + r.keep.length + "/" + r.squads.length + "  (parallel line = rows)";
+    }
+
+    if (r.kind === "grid") {
+      this.clearPending();
+      const tick = this.world.tick + ORDER_DELAY;
+      let issued = 0;
+      r.squads.forEach((id, i) => {
+        if (this.locked(id)) return;
+        this.world.orders.issue(
+          { kind: "move", squad: id, path: [r.places[i * 2], r.places[i * 2 + 1]] },
+          this.player,
+          tick,
+        );
+        issued++;
+      });
+      return issued > 0 ? "rows and columns" : "locked (recovering)";
+    }
+
+    if (r.kind === "patrolArea") {
+      this.clearPending();
+      const tick = this.world.tick + ORDER_DELAY;
+      const n = r.squads.length;
+      let issued = 0;
+      r.squads.forEach((id, i) => {
+        if (this.locked(id)) return;
+        // Spread the squads around one ring rather than stacking them on the
+        // same circuit: a cordon, not a conga line.
+        const phase = (i / n) * Math.PI * 2;
+        const ring = r.radius * 0.62;
+        const path: number[] = [];
+        for (let k = 0; k < 6; k++) {
+          const a = phase + (k / 6) * Math.PI * 2;
+          path.push(r.x + Math.cos(a) * ring, r.y + Math.sin(a) * ring);
+        }
+        this.world.orders.issue({ kind: "patrol", squad: id, path }, this.player, tick);
+        issued++;
+      });
+      return issued > 0 ? "patrol area" : "locked (recovering)";
+    }
+
+    if (r.kind === "recover") {
+      this.clearPending();
+      const tick = this.world.tick + ORDER_DELAY;
+      let issued = 0;
+      for (const id of r.squads) {
+        if (this.locked(id)) continue;
+        this.world.orders.issue({ kind: "recover", squad: id }, this.player, tick);
+        issued++;
+      }
+      return issued > 0 ? "recover (30s, cannot act)" : "already recovering";
+    }
+
+    this.clearPending();
 
     // Acting on a squad also selects it, so the next gesture can follow up
     // without re-targeting.
@@ -135,6 +253,11 @@ export class Commander {
 
     return gestureLabel(r);
   }
+}
+
+/** Real wall-clock milliseconds, used only for interface pacing. */
+function nowMs(): number {
+  return typeof performance !== "undefined" ? performance.now() : 0;
 }
 
 /** Shift a whole route sideways, keeping its shape. */
