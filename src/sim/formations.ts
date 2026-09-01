@@ -10,7 +10,7 @@
  * same squad always produces the same slots and a re-form is never a reshuffle.
  */
 
-import { ceil, sqrt, floor } from "./math.ts";
+import { ceil, floor, max, round, sqrt } from "./math.ts";
 
 export type FormationShape = "line" | "column" | "wedge" | "square" | "loose" | "tight";
 
@@ -30,25 +30,55 @@ const KIND_GRID = 0;
 const KIND_WEDGE = 1;
 
 /**
+ * Widest a formation may be relative to its depth.
+ *
+ * Frontage was previously a fixed number of ranks -- two for a line -- which is
+ * fine for twenty men and absurd for a hundred: a single rank fifty men wide is
+ * not a formation, it is a queue. It cannot turn without the wings sprinting,
+ * it presents no depth, and it looks nothing like a body of troops. Capping the
+ * ASPECT instead means a shape keeps its character at any size and simply gains
+ * ranks as it grows.
+ */
+const MAX_ASPECT: Record<FormationShape, number> = {
+  line: 4,     // broad and shallow, but not a thread
+  loose: 4,
+  tight: 3,
+  square: 1,   // as deep as it is wide, by definition
+  column: 0.4, // deeper than wide: a marching column
+  wedge: 1,
+};
+
+/**
+ * Files and ranks for a given headcount at a target width-to-depth ratio.
+ *
+ * Solving files/ranks = aspect with files*ranks >= count gives
+ * files = sqrt(count * aspect). RANK_SCALE is folded in because ranks stand
+ * closer together than files do, so counting bodies alone overstates the
+ * depth and the shape comes out wider on the ground than asked for.
+ */
+function proportion(count: number, aspect: number): number {
+  return max(1, round(sqrt(count * aspect * RANK_SCALE)));
+}
+
+/**
  * Frontage and spacing per shape. loose and tight are line variants at
  * different spacing -- they are not reachable from a drawn glyph (stroke extent
  * already carries meaning in the gesture table) and exist for doctrines and
  * content presets.
  */
 function layoutFor(shape: FormationShape, count: number): Layout {
+  const files = proportion(count, MAX_ASPECT[shape]);
   switch (shape) {
     case "line":
-      return { files: ceil(count / 2), spacing: BASE_SPACING, kind: KIND_GRID };
+      return { files, spacing: BASE_SPACING, kind: KIND_GRID };
     case "loose":
-      return { files: ceil(count / 2), spacing: BASE_SPACING * 1.75, kind: KIND_GRID };
+      return { files, spacing: BASE_SPACING * 1.75, kind: KIND_GRID };
     case "tight":
-      return { files: ceil(count / 3), spacing: BASE_SPACING * 0.72, kind: KIND_GRID };
+      return { files, spacing: BASE_SPACING * 0.72, kind: KIND_GRID };
     case "column":
-      return { files: 2, spacing: BASE_SPACING, kind: KIND_GRID };
-    case "square": {
-      const side = ceil(sqrt(count));
-      return { files: side, spacing: BASE_SPACING, kind: KIND_GRID };
-    }
+      return { files, spacing: BASE_SPACING, kind: KIND_GRID };
+    case "square":
+      return { files, spacing: BASE_SPACING, kind: KIND_GRID };
     case "wedge":
       return { files: 0, spacing: BASE_SPACING, kind: KIND_WEDGE };
   }

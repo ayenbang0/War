@@ -99,8 +99,16 @@ export const ANCHOR_SLACK = 26;
 const ATTACK_SLACK = 34;
 /** Ratio of endpoint gap to path length below which a stroke reads as closed. */
 const CLOSED_RATIO = 0.3;
-/** A hold zone is at most this many squad-radii across. Beyond it, patrol. */
-const HOLD_SPAN_RADII = 6.5;
+/**
+ * A hold zone is at most this far across before it reads as a patrol circuit.
+ *
+ * Mostly a fixed world size, with only a modest term for the group's own
+ * footprint. Scaling it purely by footprint meant re-forming a group -- from a
+ * line into a square, say -- silently changed what an identical drawn loop
+ * meant, which is not something a player can be expected to track.
+ */
+const HOLD_SPAN_BASE = 300;
+const HOLD_SPAN_PER_RADIUS = 2.5;
 /** Absolute ceiling so a hold drawn by a huge squad is still a hold. */
 const HOLD_SPAN_MAX = 420;
 /** Retreat must gain at least this much ground from the nearest enemy. */
@@ -403,7 +411,7 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
 
   // 3. Closed strokes: hold versus patrol, split by how much ground is enclosed.
   if (closed) {
-    const holdSpan = Math.min(scale * HOLD_SPAN_RADII, HOLD_SPAN_MAX);
+    const holdSpan = Math.min(HOLD_SPAN_BASE + scale * HOLD_SPAN_PER_RADIUS, HOLD_SPAN_MAX);
     if (span <= holdSpan) {
       const c = centroid(raw);
       // Radius from enclosed area, not bbox: a scrawled loop's bbox overstates it.
@@ -618,7 +626,7 @@ function groupVerb(
     if (span > scale && hullFill(raw) < HEART_HULL_FILL) {
       return { kind: "recover", squads: subjects.slice() };
     }
-    if (span > Math.min(scale * HOLD_SPAN_RADII, HOLD_SPAN_MAX)) {
+    if (span > Math.min(HOLD_SPAN_BASE + scale * HOLD_SPAN_PER_RADIUS, HOLD_SPAN_MAX)) {
       const c = centroidOf(raw);
       const radius = Math.max(scale, Math.sqrt(Math.max(enclosedAreaOf(raw), 1) / Math.PI));
       return { kind: "patrolArea", squads: subjects.slice(), x: c.x, y: c.y, radius };

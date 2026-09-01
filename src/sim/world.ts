@@ -106,6 +106,8 @@ export type WorldConfig = {
   readonly soldierCapacity?: number;
   readonly duration?: number;
   readonly aiPlayers?: readonly number[];
+  /** How well those commanders are run. Not what they can see or field. */
+  readonly aiTuning?: { think: number; commit: number; focus: number };
 };
 
 export { statsFor, typeAt, typeIndex, STANCES } from "./entities.ts";
@@ -175,7 +177,7 @@ export class World {
       ai: Rng.create(this.seed, Stream.Ai),
       spawn: Rng.create(this.seed, Stream.Spawn),
     };
-    for (const p of config.aiPlayers ?? []) this.ai.push(new ArmyAI(p));
+    for (const p of config.aiPlayers ?? []) this.ai.push(new ArmyAI(p, config.aiTuning));
   }
 
   // -- soldiers ---------------------------------------------------------------
@@ -249,7 +251,11 @@ export class World {
       anchorX: 0,
       anchorY: 0,
       facing: 0,
-      shape: this.stats(members[0]).shape,
+      // Square by default, whatever the men are. A group the player has just
+      // drawn around a mixed handful has no obvious frontage, and a square is
+      // the shape that reads as "a body of troops" at any size and in any
+      // direction. A specific shape is a decision the player makes with a glyph.
+      shape: "square",
       slots: new Float64Array(members.length * 2),
       radius: 0,
       path: [],
@@ -342,18 +348,38 @@ export class World {
     formationSlots(g.shape, living.length, g.slots);
     g.radius = formationRadius(g.slots, living.length);
 
-    // Greedy nearest-slot assignment. Without it a re-form makes every soldier
-    // walk to the slot with its own index, crossing the whole formation through
-    // itself. Slots in index order, ties on soldier id, so it stays deterministic.
+    // Ranks are filled front to back, and the front belongs to whoever fights
+    // hand to hand. Archers and engines shooting over their own front rank is
+    // the whole point of having one; leaving placement to proximity alone
+    // scatters bowmen through the melee, where they are useless and die first.
+    const order: number[] = [];
+    for (let i = 0; i < living.length; i++) order.push(i);
+    order.sort((a, b) => {
+      const ra = this.stats(living[a]).range > MELEE_RANGE ? 1 : 0;
+      const rb = this.stats(living[b]).range > MELEE_RANGE ? 1 : 0;
+      if (ra !== rb) return ra - rb;
+      return living[a] - living[b];
+    });
+    // Slots front-first: +x is forward, so descending dx walks the ranks back.
+    const bySlot: number[] = [];
+    for (let i = 0; i < living.length; i++) bySlot.push(i);
+    bySlot.sort((a, b) => g.slots[b * 2] - g.slots[a * 2] || a - b);
+
+    // Within a rank, still pick the nearest man so a re-form does not drag
+    // everyone across the formation through itself.
     const taken = new Uint8Array(living.length);
-    for (let slot = 0; slot < living.length; slot++) {
+    let cursor = 0;
+    for (const slot of bySlot) {
       const c = cos(g.facing);
       const sn = sin(g.facing);
       const wx = g.anchorX + g.slots[slot * 2] * c - g.slots[slot * 2 + 1] * sn;
       const wy = g.anchorY + g.slots[slot * 2] * sn + g.slots[slot * 2 + 1] * c;
+      // Candidates are the next few in role order, so role wins over distance
+      // but men do not cross the whole line to reach an equivalent spot.
       let best = -1;
       let bestD = Infinity;
-      for (let i = 0; i < living.length; i++) {
+      for (let k = cursor; k < min(cursor + 6, order.length); k++) {
+        const i = order[k];
         if (taken[i] === 1) continue;
         const d = dist(s.x[living[i]], s.y[living[i]], wx, wy);
         if (d < bestD) {
@@ -361,9 +387,24 @@ export class World {
           best = i;
         }
       }
+      // The window can be entirely spoken for. Falling through here would
+      // leave the slot empty AND the man slotless, which reads as a formation
+      // that never finishes forming up -- so widen the search rather than skip.
+      if (best < 0) {
+        for (let k = 0; k < order.length; k++) {
+          const i = order[k];
+          if (taken[i] === 1) continue;
+          const d = dist(s.x[living[i]], s.y[living[i]], wx, wy);
+          if (d < bestD) {
+            bestD = d;
+            best = i;
+          }
+        }
+      }
       if (best < 0) continue;
       taken[best] = 1;
       s.slot[living[best]] = slot;
+      while (cursor < order.length && taken[order[cursor]] === 1) cursor++;
     }
   }
 

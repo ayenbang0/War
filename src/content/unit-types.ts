@@ -15,6 +15,8 @@ export type UnitTypeId =
 export type UnitType = {
   readonly id: UnitTypeId;
   readonly name: string;
+  /** One line on what this unit is for, shown when composing an army. */
+  readonly role: string;
   /** Soldiers in a full-strength squad. */
   readonly soldiers: number;
   /** Per-soldier hit points. */
@@ -53,6 +55,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
   line: {
     id: "line",
     name: "Line Infantry",
+    role: "Holds ground and absorbs a charge. Slow, armoured, and the front rank of any real formation.",
     soldiers: 20,
     hp: 100,
     speed: 30,
@@ -69,6 +72,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
   skirmisher: {
     id: "skirmisher",
     name: "Skirmishers",
+    role: "Fast, lightly armed harassers. Good at reaching a flank, bad at standing still.",
     soldiers: 12,
     hp: 70,
     speed: 46,
@@ -85,6 +89,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
   archer: {
     id: "archer",
     name: "Archers",
+    role: "Kills at two hundred paces and folds instantly in melee. Wants a line in front of it.",
     soldiers: 16,
     hp: 70,
     speed: 32,
@@ -101,6 +106,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
   horse: {
     id: "horse",
     name: "Horse",
+    role: "Fastest thing on the field. Devastating into a flank, wasted against a braced square.",
     soldiers: 10,
     hp: 130,
     speed: 62,
@@ -117,6 +123,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
   guard: {
     id: "guard",
     name: "Elite Guard",
+    role: "Elite heavy foot. Expensive, few, and very hard to break.",
     soldiers: 14,
     hp: 170,
     speed: 27,
@@ -133,6 +140,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
   mage: {
     id: "mage",
     name: "Adepts",
+    role: "Adepts. Ward their own, hex the enemy, mend the wounded. Helpless alone.",
     soldiers: 8,
     hp: 65,
     speed: 30,
@@ -150,6 +158,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
   scout: {
     id: "scout",
     name: "Outriders",
+    role: "Sees furthest of anything on the field. Buy these or fight in the dark.",
     soldiers: 6,
     hp: 60,
     speed: 78,
@@ -166,6 +175,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
   siege: {
     id: "siege",
     name: "Siege Engine",
+    role: "Outranges everything and batters fortifications. Nearly immobile.",
     soldiers: 4,
     hp: 220,
     speed: 14,

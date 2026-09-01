@@ -13,7 +13,10 @@ import { hashWorld } from "./sim/hash.ts";
 import { PI } from "./sim/math.ts";
 import { TILE_SIZE } from "./sim/terrain.ts";
 import { provingGround } from "./content/levels/proving-ground.ts";
-import { defaultArmy, validate } from "./content/army.ts";
+import { DEFAULT_BUDGET, validate, type ArmyList } from "./content/army.ts";
+import { DIFFICULTIES } from "./content/difficulty.ts";
+import { type UnitTypeId } from "./content/unit-types.ts";
+import { openMenu } from "./ui/menu.ts";
 import { UNIT_TYPES } from "./content/unit-types.ts";
 import { Camera } from "./render/camera.ts";
 import { Renderer, type Snapshot } from "./render/renderer.ts";
@@ -31,27 +34,52 @@ const ctx: CanvasRenderingContext2D = ctx2d;
 
 const PLAYER = 0;
 const level = provingGround;
+
+// Nothing can be built until the player has chosen: the world needs their
+// doctrine, and the enemy's army depends on the difficulty they picked.
+const setup = await openMenu(document.getElementById("menu") as HTMLElement);
+const diff = DIFFICULTIES[setup.difficulty];
+
+/**
+ * The enemy's army, drawn to its own budget.
+ *
+ * Composed greedily from a fixed preference order rather than copied from the
+ * player, so a difficulty that affords more men fields a genuinely different
+ * force, and the list stays legal if costs are ever retuned.
+ */
+function enemyArmy(budget: number): ArmyList {
+  const wish: UnitTypeId[] = [
+    "line", "archer", "line", "scout", "horse", "line", "skirmisher",
+    "archer", "guard", "line", "horse", "mage", "skirmisher", "siege", "archer",
+  ];
+  const squads: UnitTypeId[] = [];
+  for (const id of wish) {
+    squads.push(id);
+    if (!validate({ doctrine: "aggressive", squads }, budget).ok) squads.pop();
+  }
+  return { doctrine: "aggressive", squads };
+}
+
+const ARMIES: readonly ArmyList[] = [
+  setup.army,
+  enemyArmy(Math.round(DEFAULT_BUDGET * diff.budget)),
+];
+
 const world = new World({
   seed: level.seed,
   tilesWide: level.tilesWide,
   tilesHigh: level.tilesHigh,
   duration: level.duration,
-  soldierCapacity: 2048,
+  soldierCapacity: 4096,
   aiPlayers: [1],
+  aiTuning: { think: diff.thinkInterval, commit: diff.commitTicks, focus: diff.focus },
 });
-
-const ARMIES = [defaultArmy("maneuver"), defaultArmy("aggressive")] as const;
-for (const list of ARMIES) {
-  const v = validate(list);
-  if (!v.ok) throw new Error("illegal army list: " + v.problems.join("; "));
-}
 world.doctrine[0] = ARMIES[0].doctrine;
 world.doctrine[1] = ARMIES[1].doctrine;
 
 /**
- * Deploy INDIVIDUAL soldiers. No squads are created here, by design: a squad is
+ * Deploy INDIVIDUAL soldiers. No groups are created here, by design: a group is
  * something the player draws with the pen, not something the game hands them.
- * The men are simply set out in their zone, loose, waiting to be organised.
  */
 for (const zone of level.deployment) {
   const list = ARMIES[zone.player];
@@ -62,10 +90,8 @@ for (const zone of level.deployment) {
     const blockY = (zone.y + 4 + ((n / 4) | 0) * 9) * TILE_SIZE;
     for (let i = 0; i < spec.soldiers; i++) {
       world.spawnSoldier(
-        zone.player,
-        type,
-        blockX + (i % 5) * 14,
-        blockY + ((i / 5) | 0) * 14,
+        zone.player, type,
+        blockX + (i % 5) * 14, blockY + ((i / 5) | 0) * 14,
         zone.player === 0 ? 0 : PI,
       );
     }

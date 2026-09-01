@@ -19,10 +19,10 @@ import type { Group, World } from "./world.ts";
 const THINK_INTERVAL = 20;
 /** Ticks a squad is left alone after being given an order. */
 const COMMIT_TICKS = 60;
-/** Ticks a posture is held before it may change again. */
-const STYLE_DWELL = THINK_INTERVAL * 12;
 /** Upper size for a machine-formed group. Beyond this a formation is unwieldy. */
 const MAX_GROUP = 20;
+/** Two enemy groups within this distance count as supporting each other. */
+const SUPPORT_RANGE = 420;
 
 export type Playstyle = "aggressive" | "defensive" | "maneuver" | "reactive";
 
@@ -32,6 +32,10 @@ export const PLAYSTYLES: readonly Playstyle[] = [
 
 export class ArmyAI {
   readonly player: number;
+  /** How well this commander is run. Never what it can see or what it fields. */
+  private think = THINK_INTERVAL;
+  private commit = COMMIT_TICKS;
+  private focus = 0.5;
   style: Playstyle = "reactive";
   /** Tick at which the current posture was adopted. */
   private styleSince = 0;
@@ -42,13 +46,18 @@ export class ArmyAI {
   private lastKnownY = 0;
   private hasContact = false;
 
-  constructor(player: number) {
+  constructor(player: number, tuning?: { think: number; commit: number; focus: number }) {
     this.player = player;
+    if (tuning) {
+      this.think = tuning.think;
+      this.commit = tuning.commit;
+      this.focus = tuning.focus;
+    }
   }
 
   /** Called once per tick from World.step, before orders are drained. */
   update(world: World): void {
-    if (world.tick % THINK_INTERVAL !== 0) return;
+    if (world.tick % this.think !== 0) return;
     // With no inherent squads, the machine must organise its own men before it
     // can command them -- exactly as the player does with the pen.
     this.formGroups(world);
@@ -74,7 +83,7 @@ export class ArmyAI {
       if (q.recoverUntil > world.tick) continue;
       if (world.tick < (this.committedUntil.get(q.id) ?? 0)) continue;
       if (this.orderGroup(world, q, foes)) {
-        this.committedUntil.set(q.id, world.tick + COMMIT_TICKS);
+        this.committedUntil.set(q.id, world.tick + this.commit);
       }
     }
   }
@@ -86,7 +95,7 @@ export class ArmyAI {
    * as noise rather than intent, so a style is held for a spell once adopted.
    */
   private chooseStyle(world: World): void {
-    if (world.tick - this.styleSince < STYLE_DWELL) return;
+    if (world.tick - this.styleSince < this.think * 12) return;
 
     const me = world.armyState(this.player);
     const foe = world.armyState(1 - this.player);
@@ -245,8 +254,21 @@ export class ArmyAI {
       const dx = f.anchorX - q.anchorX;
       const dy = f.anchorY - q.anchorY;
       const d = sqrt(dx * dx + dy * dy);
-      // A squad already down to half strength is worth walking further for.
-      const s = d * (0.6 + f.members.length * 0.04);
+      // Divide and conquer: prefer whoever is unsupported. A group with no
+      // friends within supporting distance can be destroyed before help
+      // arrives, which is worth walking a long way for -- and is the whole
+      // difference between an army that trades evenly and one that beats you in
+      // detail. How strongly it weighs is what difficulty actually changes.
+      let support = 0;
+      for (const other of foes) {
+        if (other === f) continue;
+        const ox = other.anchorX - f.anchorX;
+        const oy = other.anchorY - f.anchorY;
+        if (ox * ox + oy * oy < SUPPORT_RANGE * SUPPORT_RANGE) support++;
+      }
+      const isolation = 1 / (1 + support);
+      const weakness = f.members.length * 0.04;
+      const s = d * (0.6 + weakness) * (1 - this.focus * 0.6 * isolation);
       if (s < bestScore || (s === bestScore && best !== null && f.id < best.id)) {
         bestScore = s;
         best = f;
