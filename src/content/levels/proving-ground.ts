@@ -1,8 +1,14 @@
 /**
- * Levels are data, never code paths. Phase 9 turns this shape into a full
- * config (objectives, AI doctrine, magic intensity, point budget); for now it
- * carries what Phase 0 needs plus the deployment zones Phase 6 will place into.
+ * Levels are data, never code paths.
+ *
+ * A level names the ground, the clock, the budget, how the match is won and how
+ * the machine opens. Adding one is adding a row -- nothing here branches, and
+ * nothing in sim/ knows which level it is running.
  */
+
+import type { ControlPoint, VictoryConfig } from "../../sim/victory.ts";
+import type { DoctrineId } from "../doctrines.ts";
+import type { DifficultyId } from "../difficulty.ts";
 
 export type DeploymentZone = {
   readonly player: number;
@@ -22,11 +28,25 @@ export type LevelDef = {
   /** Match length in seconds. */
   readonly duration: number;
   readonly deployment: readonly DeploymentZone[];
+  /** One line on the ground and what the fight over it is like. */
+  readonly brief: string;
+  /** How this match is won. */
+  readonly victory: VictoryConfig;
+  /** Ground worth standing on. Empty for a straight battle. */
+  readonly controlPoints: readonly ControlPoint[];
+  /** Points each side may spend composing an army. */
+  readonly budget: number;
+  /** What the machine fields and how hard it opens. */
+  readonly enemyDoctrine: DoctrineId;
+  readonly suggestedDifficulty: DifficultyId;
+  /** Multiplier on spell strength, for levels that want more or less magic. */
+  readonly magic: number;
 };
 
 export const provingGround: LevelDef = {
   id: "proving-ground",
   name: "Proving Ground",
+  brief: "A wide valley split by a river. Room to manoeuvre and time to think.",
   seed: 0x5eed1234,
   tilesWide: 192,
   tilesHigh: 128,
@@ -35,4 +55,10 @@ export const provingGround: LevelDef = {
     { player: 0, x: 6, y: 34, w: 26, h: 60 },
     { player: 1, x: 160, y: 34, w: 26, h: 60 },
   ],
+  victory: { mode: "rout" },
+  controlPoints: [],
+  budget: 55,
+  enemyDoctrine: "aggressive",
+  suggestedDifficulty: "captain",
+  magic: 1,
 };

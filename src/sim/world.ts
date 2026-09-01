@@ -32,7 +32,7 @@ import { type DoctrineId } from "../content/doctrines.ts";
 import { Soldiers, statsFor, typeAt, typeIndex, type Group, type Stats } from "./entities.ts";
 import { MELEE_RANGE, d2, hitDamage, isFlanking } from "./combat.ts";
 import { globalMorale, nextMorale } from "./morale.ts";
-import { evaluate, type ArmyState, type Outcome } from "./victory.ts";
+import { DEFAULT_VICTORY, evaluate, type ArmyState, type ControlPoint, type Outcome, type VictoryConfig } from "./victory.ts";
 import { FogField, concealment, effectiveSight, hasLineOfSight, rangeFromHeight } from "./vision.ts";
 import { ArmyAI } from "./ai.ts";
 import { SPELLS, hexPenalty, mendRate, nerveShift, wardSoak, type Working } from "./magic.ts";
@@ -108,6 +108,10 @@ export type WorldConfig = {
   readonly aiPlayers?: readonly number[];
   /** How well those commanders are run. Not what they can see or field. */
   readonly aiTuning?: { think: number; commit: number; focus: number };
+  /** How this match is won. Defaults to breaking the enemy's nerve. */
+  readonly victory?: VictoryConfig;
+  /** Ground worth standing on, for the objective and point modes. */
+  readonly controlPoints?: readonly ControlPoint[];
 };
 
 export { statsFor, typeAt, typeIndex, STANCES } from "./entities.ts";
@@ -140,6 +144,13 @@ export class World {
 
   /** Soldiers deployed by each army, kept so morale can hold the dead on the books. */
   readonly roster: [number, number] = [0, 0];
+  readonly victory: VictoryConfig;
+  readonly controlPoints: readonly ControlPoint[];
+  /** Which player holds each point, by index. -1 for contested or empty. */
+  readonly heldBy: Int8Array;
+  /** Cumulative seconds each side has spent holding enough ground. */
+  readonly holdSeconds: [number, number] = [0, 0];
+  readonly points: [number, number] = [0, 0];
 
   private readonly hash: SpatialHash;
   /**
@@ -159,6 +170,9 @@ export class World {
   constructor(config: WorldConfig) {
     this.seed = config.seed | 0;
     this.duration = config.duration ?? 15 * 60;
+    this.victory = config.victory ?? DEFAULT_VICTORY;
+    this.controlPoints = config.controlPoints ?? [];
+    this.heldBy = new Int8Array(this.controlPoints.length).fill(-1);
     this.terrain = generateTerrain(config.tilesWide, config.tilesHigh, this.seed);
     const capacity = config.soldierCapacity ?? 1024;
     this.soldiers = new Soldiers(capacity);
@@ -467,12 +481,15 @@ export class World {
     this.resolveCombat();
     this.applyWorkings();
     this.updateMorale();
+    this.updateObjectives();
     this.tick++;
-    this.outcome = evaluate(
-      [this.armyState(0), this.armyState(1)],
-      this.tick / TICK_RATE,
-      this.duration,
-    );
+    this.outcome = evaluate(this.victory, {
+      armies: [this.armyState(0), this.armyState(1)],
+      elapsed: this.tick / TICK_RATE,
+      duration: this.duration,
+      holdSeconds: this.holdSeconds,
+      points: this.points,
+    });
   }
 
   private applyOrders(): void {
@@ -1191,6 +1208,10 @@ export class World {
         kg.kills++;
         kg.killsThisTick++;
       }
+      if (this.victory.mode === "points" && killer >= 0) {
+        const side = s.player[killer] === 0 ? 0 : 1;
+        this.points[side] += this.victory.perKill;
+      }
       const vg = this.groupOf(id);
       if (vg) {
         vg.losses++;
@@ -1210,6 +1231,65 @@ export class World {
       const g = this.groupById(gid);
       if (g && g.members.length > 0) this.reflow(g);
     }
+  }
+
+  // -- objectives ---------------------------------------------------------------
+
+  /**
+   * Who stands on what, and what that earns them.
+   *
+   * A point is held by whoever has more living men inside it -- not merely
+   * whoever arrived first, and not by anyone while it is contested. Counting
+   * bodies rather than groups matters here: a single scout should not be able to
+   * hold a hilltop against a company just by being grouped.
+   */
+  private updateObjectives(): void {
+    if (this.controlPoints.length === 0) return;
+    const s = this.soldiers;
+    const held: [number, number] = [0, 0];
+
+    for (let p = 0; p < this.controlPoints.length; p++) {
+      const cp = this.controlPoints[p];
+      let a = 0;
+      let b = 0;
+      const n = this.sightHash.query(cp.x, cp.y, cp.radius, this.watchers);
+      for (let k = 0; k < n; k++) {
+        const id = this.watchers[k];
+        if (s.alive[id] !== 1) continue;
+        if (d2(cp.x, cp.y, s.x[id], s.y[id]) > cp.radius * cp.radius) continue;
+        if (s.player[id] === 0) a++;
+        else b++;
+      }
+      // Contested ground counts for nobody. A point changes hands only when one
+      // side clearly owns it, which is what makes taking one a real commitment.
+      if (a > b) {
+        this.heldBy[p] = 0;
+        held[0]++;
+      } else if (b > a) {
+        this.heldBy[p] = 1;
+        held[1]++;
+      } else {
+        this.heldBy[p] = -1;
+      }
+    }
+
+    const v = this.victory;
+    if (v.mode === "objectives") {
+      for (const p of [0, 1]) {
+        if (held[p] >= v.required) this.holdSeconds[p] += TICK_DT;
+      }
+    } else if (v.mode === "points") {
+      for (const p of [0, 1]) {
+        this.points[p] += held[p] * v.perPointHeld * TICK_DT;
+      }
+    }
+  }
+
+  /** How many control points a player currently holds. */
+  pointsHeldBy(player: number): number {
+    let n = 0;
+    for (const owner of this.heldBy) if (owner === player) n++;
+    return n;
   }
 
   // -- morale -------------------------------------------------------------------

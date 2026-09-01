@@ -57,6 +57,7 @@ import { effectiveSight, hasLineOfSight, rangeFromHeight, FogField } from "../sr
 import { PLAYSTYLES } from "../src/sim/ai.ts";
 import { DOCTRINES, DOCTRINE_IDS } from "../src/content/doctrines.ts";
 import { DEFAULT_BUDGET, MAX_SQUADS, cost, defaultArmy, validate } from "../src/content/army.ts";
+import { LEVELS } from "../src/content/levels/index.ts";
 import { statsFor } from "../src/sim/world.ts";
 import { SPELLS, SPELL_IDS, hexPenalty, wardSoak } from "../src/sim/magic.ts";
 import { hitDamage } from "../src/sim/combat.ts";
@@ -895,15 +896,15 @@ section("combat");
 section("victory");
 {
   const full = { morale: 1, strength: 200, roster: 200 };
-  check("a running match has no outcome", evaluate([full, full], 60, 900) === null);
+  check("a running match has no outcome", evaluate({ mode: "rout" }, { armies: [full, full], elapsed: 60, duration: 900, holdSeconds: [0, 0], points: [0, 0] }) === null);
 
   const broken = { morale: ROUT_THRESHOLD - 0.01, strength: 150, roster: 200 };
-  const routed = evaluate([broken, full], 60, 900);
+  const routed = evaluate({ mode: "rout" }, { armies: [broken, full], elapsed: 60, duration: 900, holdSeconds: [0, 0], points: [0, 0] });
   check("an army below the rout threshold loses at once",
     routed !== null && routed.winner === 1 && routed.reason === "rout");
 
   const wiped = { morale: 1, strength: 0, roster: 200 };
-  const dead = evaluate([wiped, full], 60, 900);
+  const dead = evaluate({ mode: "rout" }, { armies: [wiped, full], elapsed: 60, duration: 900, holdSeconds: [0, 0], points: [0, 0] });
   check("annihilation ends the match", dead !== null && dead.winner === 1 && dead.reason === "annihilated");
 
   // THE TURTLING PROBLEM. An army that hid in a corner kept perfect morale and
@@ -914,7 +915,7 @@ section("victory");
   // and destroyed a third of the turtle's army.
   const turtle = { morale: 1.0, strength: 133, roster: 200 };
   const fighter = { morale: 0.8, strength: 200, roster: 200 };
-  const timed = evaluate([turtle, fighter], 900, 900);
+  const timed = evaluate({ mode: "rout" }, { armies: [turtle, fighter], elapsed: 900, duration: 900, holdSeconds: [0, 0], points: [0, 0] });
   check("turtling does not win on the timer",
     timed !== null && timed.reason === "timer" && timed.winner === 1,
     "turtle " + score(turtle, fighter).toFixed(3) + " vs fighter " + score(fighter, turtle).toFixed(3));
@@ -924,7 +925,7 @@ section("victory");
   // But morale still matters: an army that traded evenly and held up wins.
   const steady = { morale: 0.9, strength: 170, roster: 200 };
   const shaken = { morale: 0.35, strength: 170, roster: 200 };
-  const onMorale = evaluate([steady, shaken], 900, 900);
+  const onMorale = evaluate({ mode: "rout" }, { armies: [steady, shaken], elapsed: 900, duration: 900, holdSeconds: [0, 0], points: [0, 0] });
   check("morale still decides an even trade", onMorale !== null && onMorale.winner === 0);
 
   // A live match must actually reach a decision when one side is destroyed.
@@ -1583,6 +1584,74 @@ section("gestures");
   console.log("");
   console.log("  accuracy    " + report.correct + "/" + report.total +
     " (" + ((report.correct / report.total) * 100).toFixed(1) + "%)");
+}
+
+// -- 9a2. levels ---------------------------------------------------------------
+
+section("levels");
+{
+  check("there is more than one battlefield", LEVELS.length >= 4, LEVELS.length + " levels");
+
+  let ok = true;
+  const notes: string[] = [];
+  for (const l of LEVELS) {
+    const v = validate(defaultArmy("maneuver", l.budget), l.budget);
+    if (!v.ok) {
+      ok = false;
+      notes.push(l.id + ": " + v.problems.join("; "));
+    }
+    // Deployment zones must sit on the map and not overlap each other.
+    for (const z of l.deployment) {
+      if (z.x < 0 || z.y < 0 || z.x + z.w > l.tilesWide || z.y + z.h > l.tilesHigh) {
+        ok = false;
+        notes.push(l.id + ": deployment zone off the map");
+      }
+    }
+    const [a, b] = l.deployment;
+    if (a && b && Math.abs(a.x - b.x) < Math.max(a.w, b.w)) {
+      ok = false;
+      notes.push(l.id + ": armies deploy on top of each other");
+    }
+    // Control points must be reachable ground, not sitting in a river.
+    const g = generateTerrain(l.tilesWide, l.tilesHigh, l.seed);
+    for (const cp of l.controlPoints) {
+      if (!g.passableAt(Math.floor(cp.x / TILE_SIZE), Math.floor(cp.y / TILE_SIZE))) {
+        ok = false;
+        notes.push(l.id + ": control point " + cp.name + " is on impassable ground");
+      }
+    }
+    if (l.victory.mode === "objectives" && l.victory.required > l.controlPoints.length) {
+      ok = false;
+      notes.push(l.id + ": needs more points held than exist");
+    }
+    if (l.victory.mode !== "rout" && l.controlPoints.length === 0) {
+      ok = false;
+      notes.push(l.id + ": ground-based victory with no ground to take");
+    }
+  }
+  check("every level is legal and playable", ok, notes.join(" | "));
+
+  // The roster should be varied, not four maps with the numbers changed.
+  const modes = new Set(LEVELS.map((l) => l.victory.mode));
+  const sizes = new Set(LEVELS.map((l) => l.tilesWide * l.tilesHigh));
+  const budgets = new Set(LEVELS.map((l) => l.budget));
+  check("levels differ in how they are won", modes.size >= 3, [...modes].join(", "));
+  check("levels differ in size and budget", sizes.size >= 2 && budgets.size >= 3,
+    sizes.size + " sizes, " + budgets.size + " budgets");
+
+  // Each level's terrain should suit its brief.
+  function share(l: (typeof LEVELS)[number], t: number): number {
+    const g = generateTerrain(l.tilesWide, l.tilesHigh, l.seed);
+    let n = 0;
+    for (const v of g.type) if (v === t) n++;
+    return n / g.type.length;
+  }
+  const open = LEVELS.find((l) => l.id === "open-field");
+  const hills = LEVELS.find((l) => l.id === "high-ground");
+  check("the open field is actually open", open !== undefined && share(open, Terrain.Forest) < 0.15,
+    open ? (share(open, Terrain.Forest) * 100).toFixed(0) + "% wooded" : "missing");
+  check("the high ground actually has hills", hills !== undefined && share(hills, Terrain.Hill) > 0.2,
+    hills ? (share(hills, Terrain.Hill) * 100).toFixed(0) + "% hill" : "missing");
 }
 
 // -- 9b. selection context -----------------------------------------------------

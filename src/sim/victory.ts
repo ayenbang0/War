@@ -1,22 +1,18 @@
 /**
- * Win conditions.
+ * Win conditions, selectable per level (spec section 11.3).
  *
- * The chosen condition is global-morale rout, with the 15-minute timer as a
- * tiebreak (see PLAN.md). Rout is an instant loss the moment an army's
- * strength-weighted morale falls below the threshold.
+ * Three modes share one rule: ROUT AND ANNIHILATION END THE MATCH IN ALL OF
+ * THEM. An army whose nerve breaks has lost regardless of how many flags it was
+ * standing on, and a mode that let a broken army win on points would make
+ * morale -- the spine of the whole design -- decorative.
  *
- * THE TURTLING PROBLEM. "Higher morale at the timer" on its own rewards doing
- * nothing: an army that hides in a corner takes no casualties and keeps perfect
- * morale. The tiebreak therefore scores morale PLUS the share of the enemy army
- * destroyed. Rout stays exactly as chosen -- this only decides matches that
- * reach full time, where an army that inflicted nothing has earned nothing.
- * Phase 9 makes the whole condition swappable per level.
+ * What the modes change is only how a match that runs its full length is
+ * decided.
  */
 
 import { ROUT_THRESHOLD } from "./morale.ts";
 
-/**
- * How much destroying the enemy counts for, relative to holding morale.
+/** How much destroying the enemy counts for, relative to holding morale.
  *
  * Weighted equal to morale on purpose. Morale only ever falls through fighting,
  * so any weight low enough to be "a tiebreak nudge" leaves not fighting as the
@@ -26,6 +22,40 @@ import { ROUT_THRESHOLD } from "./morale.ts";
  */
 const AGGRESSION_WEIGHT = 1.0;
 
+export type WinMode = "rout" | "objectives" | "points";
+
+/** A place worth standing on. Positions are world units. */
+export type ControlPoint = {
+  readonly id: number;
+  readonly name: string;
+  readonly x: number;
+  readonly y: number;
+  readonly radius: number;
+};
+
+export type VictoryConfig =
+  /** Break the enemy's nerve. At full time, morale plus damage done decides. */
+  | { readonly mode: "rout" }
+  /** Hold enough ground for long enough. */
+  | {
+      readonly mode: "objectives";
+      /** Control points a player must hold at once to be accruing. */
+      readonly required: number;
+      /** Cumulative seconds of holding that wins outright. */
+      readonly holdToWin: number;
+    }
+  /** Accrue points from ground held and enemies killed. */
+  | {
+      readonly mode: "points";
+      readonly perKill: number;
+      /** Points per second per control point held. */
+      readonly perPointHeld: number;
+      /** Total that wins outright. */
+      readonly target: number;
+    };
+
+export const DEFAULT_VICTORY: VictoryConfig = { mode: "rout" };
+
 export type ArmyState = {
   readonly morale: number;
   /** Living soldiers. */
@@ -34,28 +64,34 @@ export type ArmyState = {
   readonly roster: number;
 };
 
+export type MatchState = {
+  readonly armies: readonly [ArmyState, ArmyState];
+  /** Seconds elapsed, and the match length. */
+  readonly elapsed: number;
+  readonly duration: number;
+  /** Cumulative seconds each side has spent holding enough ground. */
+  readonly holdSeconds: readonly [number, number];
+  /** Victory points accrued. */
+  readonly points: readonly [number, number];
+};
+
 export type Outcome = {
   readonly winner: number;
-  readonly reason: "rout" | "annihilated" | "timer";
+  readonly reason: "rout" | "annihilated" | "timer" | "objectives" | "points";
   readonly detail: string;
 };
 
-/** Timer score for one army: morale held, plus enemy destroyed. */
+/** Timer score for the rout mode: morale held, plus enemy destroyed. */
 export function score(own: ArmyState, foe: ArmyState): number {
   const destroyed = foe.roster > 0 ? 1 - foe.strength / foe.roster : 0;
   return own.morale + AGGRESSION_WEIGHT * destroyed;
 }
 
-/**
- * Evaluate the match. Returns null while it is still running.
- * `elapsed` and `duration` are in seconds.
- */
-export function evaluate(
-  armies: readonly ArmyState[],
-  elapsed: number,
-  duration: number,
-): Outcome | null {
-  const [a, b] = armies;
+/** Evaluate the match. Returns null while it is still running. */
+export function evaluate(config: VictoryConfig, state: MatchState): Outcome | null {
+  const [a, b] = state.armies;
+
+  // -- conditions common to every mode ---------------------------------------
 
   const aGone = a.strength === 0;
   const bGone = b.strength === 0;
@@ -68,33 +104,67 @@ export function evaluate(
     };
   }
 
-  // Rout is checked before the timer: it ends the match the moment it happens.
   const aBroken = a.morale < ROUT_THRESHOLD;
   const bBroken = b.morale < ROUT_THRESHOLD;
   if (aBroken || bBroken) {
     if (aBroken && bBroken) {
-      // Both armies break in the same tick: the steadier one is still standing.
       const winner = a.morale >= b.morale ? 0 : 1;
       return { winner, reason: "rout", detail: "both armies broke; army " + winner + " held longer" };
     }
-    return {
-      winner: aBroken ? 1 : 0,
-      reason: "rout",
-      detail: "army " + (aBroken ? 0 : 1) + " routed",
-    };
+    return { winner: aBroken ? 1 : 0, reason: "rout", detail: "army " + (aBroken ? 0 : 1) + " routed" };
   }
 
-  if (elapsed >= duration) {
-    const sa = score(a, b);
-    const sb = score(b, a);
-    if (sa === sb) return { winner: -1, reason: "timer", detail: "drawn on points" };
-    const winner = sa > sb ? 0 : 1;
-    return {
-      winner,
-      reason: "timer",
-      detail: "time expired: " + sa.toFixed(3) + " vs " + sb.toFixed(3),
-    };
+  // -- outright wins particular to a mode -------------------------------------
+
+  if (config.mode === "objectives") {
+    for (const p of [0, 1]) {
+      if (state.holdSeconds[p] >= config.holdToWin) {
+        return {
+          winner: p,
+          reason: "objectives",
+          detail: "army " + p + " held the ground for " + config.holdToWin + "s",
+        };
+      }
+    }
+  }
+  if (config.mode === "points") {
+    for (const p of [0, 1]) {
+      if (state.points[p] >= config.target) {
+        return {
+          winner: p,
+          reason: "points",
+          detail: "army " + p + " reached " + config.target + " points",
+        };
+      }
+    }
   }
 
-  return null;
+  if (state.elapsed < state.duration) return null;
+
+  // -- full time --------------------------------------------------------------
+
+  let sa: number;
+  let sb: number;
+  let reason: Outcome["reason"];
+  if (config.mode === "objectives") {
+    sa = state.holdSeconds[0];
+    sb = state.holdSeconds[1];
+    reason = "objectives";
+  } else if (config.mode === "points") {
+    sa = state.points[0];
+    sb = state.points[1];
+    reason = "points";
+  } else {
+    sa = score(a, b);
+    sb = score(b, a);
+    reason = "timer";
+  }
+
+  if (sa === sb) return { winner: -1, reason, detail: "drawn at full time" };
+  const winner = sa > sb ? 0 : 1;
+  return {
+    winner,
+    reason,
+    detail: "time expired: " + sa.toFixed(1) + " vs " + sb.toFixed(1),
+  };
 }

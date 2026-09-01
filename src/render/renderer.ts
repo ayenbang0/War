@@ -54,6 +54,7 @@ export class Renderer {
 
     this.terrainLayer.draw(ctx, cam);
     this.drawGrid(world.terrain, cam);
+    this.drawControlPoints(world, cam);
 
     // Only your own orders are on the board; you cannot read an enemy's plan.
     for (const g of world.groups) {
@@ -323,6 +324,51 @@ export class Renderer {
       ctx.arc(sx, sy, r * 0.72, 0, Math.PI * 2);
       ctx.stroke();
       ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Ground worth standing on.
+   *
+   * Drawn under the troops and over the terrain, with the ring coloured by
+   * whoever currently holds it. Contested points stay neutral rather than
+   * flickering between the two armies -- a point changing hands should be an
+   * event you notice, not a strobe.
+   */
+  private drawControlPoints(world: World, cam: Camera): void {
+    if (world.controlPoints.length === 0) return;
+    const ctx = this.ctx;
+    ctx.save();
+    for (let i = 0; i < world.controlPoints.length; i++) {
+      const cp = world.controlPoints[i];
+      const owner = world.heldBy[i];
+      const sx = cam.worldToScreenX(cp.x);
+      const sy = cam.worldToScreenY(cp.y);
+      const r = cp.radius * cam.zoom;
+      if (sx < -r || sy < -r || sx > cam.viewW + r || sy > cam.viewH + r) continue;
+
+      const tint = owner < 0 ? "120, 104, 74" : owner === 0 ? "59, 95, 138" : "140, 58, 52";
+      ctx.fillStyle = "rgba(" + tint + ", 0.10)";
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(" + tint + ", 0.85)";
+      ctx.lineWidth = owner < 0 ? 1.5 : 2.5;
+      ctx.setLineDash(owner < 0 ? [7, 6] : []);
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      if (cam.zoom > 0.5) {
+        ctx.fillStyle = "rgba(58, 49, 36, 0.8)";
+        ctx.font = "600 11px ui-monospace, Menlo, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(cp.name.toUpperCase(), sx, sy - r - 6);
+        ctx.textAlign = "left";
+      }
     }
     ctx.restore();
   }

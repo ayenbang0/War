@@ -111,8 +111,10 @@ A first attempt to test wards through a duel "showed" them costing lives: the co
 ### Phase 8 — Destructible terrain
 Damageable fortifications, burnable/clearable forest, destructible bridges, with pathing and vision invalidation on change.
 
-### Phase 9 — Levels and polish
+### Phase 9 — Levels and win conditions — **DONE**
 Level config format (terrain, objectives, AI doctrine, magic intensity, point budget), alternate win conditions as selectable modes, minimal HUD (unit status, global morale bar, doctrine, timer), audio, tutorial.
 
-### Phase 10 — Netplay (optional)
-Node relay, matchmaking, lockstep order exchange, desync detection via periodic state hash. Enabled by the Phase 0 determinism work; no sim rewrite required.
+### Phase 10 — Lockstep verification — **DONE**
+`tools/lockstep.ts` proves the claim the architecture was built for: two `World` instances fed one order stream compute an identical battle. Seven checks, including the two that matter most — a 0.0001 nudge is caught immediately (a desync detector that cannot detect a desync is worse than none), and **orders arriving out of sequence change nothing**, which is what makes real latency survivable.
+
+No relay or matchmaker. Those are infrastructure; what needed proving first is that the simulation is deterministic enough for them to be worth building. If this harness ever fails, no amount of netcode would have saved it. Ask before building the server.

@@ -12,8 +12,7 @@ import { World, TICK_DT, TICK_RATE } from "./sim/world.ts";
 import { hashWorld } from "./sim/hash.ts";
 import { PI } from "./sim/math.ts";
 import { TILE_SIZE } from "./sim/terrain.ts";
-import { provingGround } from "./content/levels/proving-ground.ts";
-import { DEFAULT_BUDGET, validate, type ArmyList } from "./content/army.ts";
+import { validate, type ArmyList } from "./content/army.ts";
 import { DIFFICULTIES } from "./content/difficulty.ts";
 import { type UnitTypeId } from "./content/unit-types.ts";
 import { openMenu } from "./ui/menu.ts";
@@ -33,11 +32,11 @@ if (!ctx2d) throw new Error("2d canvas context unavailable");
 const ctx: CanvasRenderingContext2D = ctx2d;
 
 const PLAYER = 0;
-const level = provingGround;
 
-// Nothing can be built until the player has chosen: the world needs their
-// doctrine, and the enemy's army depends on the difficulty they picked.
+// Nothing can be built until the player has chosen: the world needs the level,
+// their doctrine, and an enemy army sized by the difficulty they picked.
 const setup = await openMenu(document.getElementById("menu") as HTMLElement);
+const level = setup.level;
 const diff = DIFFICULTIES[setup.difficulty];
 
 /**
@@ -48,6 +47,7 @@ const diff = DIFFICULTIES[setup.difficulty];
  * force, and the list stays legal if costs are ever retuned.
  */
 function enemyArmy(budget: number): ArmyList {
+  const doctrine = level.enemyDoctrine;
   const wish: UnitTypeId[] = [
     "line", "archer", "line", "scout", "horse", "line", "skirmisher",
     "archer", "guard", "line", "horse", "mage", "skirmisher", "siege", "archer",
@@ -55,14 +55,14 @@ function enemyArmy(budget: number): ArmyList {
   const squads: UnitTypeId[] = [];
   for (const id of wish) {
     squads.push(id);
-    if (!validate({ doctrine: "aggressive", squads }, budget).ok) squads.pop();
+    if (!validate({ doctrine, squads }, budget).ok) squads.pop();
   }
-  return { doctrine: "aggressive", squads };
+  return { doctrine, squads };
 }
 
 const ARMIES: readonly ArmyList[] = [
   setup.army,
-  enemyArmy(Math.round(DEFAULT_BUDGET * diff.budget)),
+  enemyArmy(Math.round(level.budget * diff.budget)),
 ];
 
 const world = new World({
@@ -73,6 +73,8 @@ const world = new World({
   soldierCapacity: 4096,
   aiPlayers: [1],
   aiTuning: { think: diff.thinkInterval, commit: diff.commitTicks, focus: diff.focus },
+  victory: level.victory,
+  controlPoints: level.controlPoints,
 });
 world.doctrine[0] = ARMIES[0].doctrine;
 world.doctrine[1] = ARMIES[1].doctrine;
@@ -267,6 +269,18 @@ function drawHud(): void {
     clock + "   " + men + " men",
     bar + " " + (morale * 100).toFixed(0) + "%",
   ];
+  const v = world.victory;
+  if (v.mode === "objectives") {
+    lines.push(
+      "holding " + world.pointsHeldBy(PLAYER) + "/" + world.controlPoints.length +
+      "   " + Math.floor(world.holdSeconds[PLAYER]) + "s of " + v.holdToWin + "s",
+    );
+  } else if (v.mode === "points") {
+    lines.push(
+      Math.floor(world.points[PLAYER]) + " / " + v.target + " pts" +
+      "   holding " + world.pointsHeldBy(PLAYER) + "/" + world.controlPoints.length,
+    );
+  }
   if (world.deploying) lines.push("", "set out your men, then ENTER");
   else if (world.outcome) {
     lines.push("", world.outcome.winner === PLAYER ? "VICTORY" : world.outcome.winner < 0 ? "DRAW" : "DEFEAT");

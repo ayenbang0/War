@@ -11,9 +11,11 @@
 import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "../content/unit-types.ts";
 import { DOCTRINES, DOCTRINE_IDS, type DoctrineId } from "../content/doctrines.ts";
 import { DIFFICULTIES, DIFFICULTY_IDS, type DifficultyId } from "../content/difficulty.ts";
-import { DEFAULT_BUDGET, MAX_SQUADS, cost, validate, type ArmyList } from "../content/army.ts";
+import { MAX_SQUADS, cost, validate, type ArmyList } from "../content/army.ts";
+import { LEVELS, type LevelDef } from "../content/levels/index.ts";
 
 export type Setup = {
+  readonly level: LevelDef;
   readonly difficulty: DifficultyId;
   readonly army: ArmyList;
 };
@@ -34,7 +36,8 @@ const el = (tag: string, cls?: string, text?: string): HTMLElement => {
  */
 export function openMenu(root: HTMLElement): Promise<Setup> {
   return new Promise((resolve) => {
-    let difficulty: DifficultyId = "captain";
+    let level: LevelDef = LEVELS[0];
+    let difficulty: DifficultyId = level.suggestedDifficulty;
     let doctrine: DoctrineId = "maneuver";
     const picked: UnitTypeId[] = [];
 
@@ -44,6 +47,34 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
     const panel = el("div", "menu-panel");
     panel.appendChild(el("h1", undefined, "War"));
     panel.appendChild(el("p", "sub", "A slow, deliberate battle. You command by drawing."));
+
+    // -- battlefield --------------------------------------------------------
+    panel.appendChild(el("h2", undefined, "Battlefield"));
+    const lvlRow = el("div", "choices");
+    const lvlBlurb = el("p", "blurb");
+    const lvlButtons: HTMLButtonElement[] = [];
+    for (const l of LEVELS) {
+      const b = el("button", "choice", l.name) as HTMLButtonElement;
+      b.onclick = () => {
+        level = l;
+        for (const c of lvlRow.children) c.classList.remove("on");
+        b.classList.add("on");
+        // The budget and the win condition are the level's, so the army has to
+        // be re-checked -- and often re-picked -- when the ground changes.
+        showLevel();
+        auto.click();
+      };
+      lvlButtons.push(b);
+      lvlRow.appendChild(b);
+    }
+    panel.appendChild(lvlRow);
+    panel.appendChild(lvlBlurb);
+
+    function showLevel(): void {
+      lvlBlurb.textContent =
+        level.brief + "   -   " + describeVictory(level) +
+        "   -   " + level.budget + " points, " + Math.round(level.duration / 60) + " minutes.";
+    }
 
     // -- difficulty ---------------------------------------------------------
     panel.appendChild(el("h2", undefined, "Opponent"));
@@ -152,15 +183,15 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
       ];
       for (const id of wish) {
         picked.push(id);
-        if (!validate({ doctrine, squads: picked }).ok) picked.pop();
+        if (!validate({ doctrine, squads: picked }, level.budget).ok) picked.pop();
       }
       refresh();
     };
 
     start.onclick = () => {
-      if (!validate({ doctrine, squads: picked }).ok) return;
+      if (!validate({ doctrine, squads: picked }, level.budget).ok) return;
       root.style.display = "none";
-      resolve({ difficulty, army: { doctrine, squads: picked.slice() } });
+      resolve({ level, difficulty, army: { doctrine, squads: picked.slice() } });
     };
 
     function refresh(): void {
@@ -170,17 +201,32 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
         if (c) c.textContent = String(n);
       }
       const spent = cost({ doctrine, squads: picked });
-      const v = validate({ doctrine, squads: picked });
+      const v = validate({ doctrine, squads: picked }, level.budget);
       budgetLine.textContent =
-        spent + " of " + DEFAULT_BUDGET + " points   -   " +
+        spent + " of " + level.budget + " points   -   " +
         picked.length + " of " + MAX_SQUADS + " companies   -   " +
         picked.reduce((n, p) => n + UNIT_TYPES[p].soldiers, 0) + " men";
-      budgetLine.classList.toggle("over", spent > DEFAULT_BUDGET);
+      budgetLine.classList.toggle("over", spent > level.budget);
       problems.textContent = v.problems.join("   ");
       start.disabled = !v.ok;
     }
 
+    lvlButtons[0].classList.add("on");
+    showLevel();
     auto.click();
     root.appendChild(panel);
   });
+}
+
+/** Plain English for how a level is won, so the mode is never a mystery. */
+function describeVictory(level: LevelDef): string {
+  const v = level.victory;
+  if (v.mode === "objectives") {
+    return "hold " + v.required + " of " + level.controlPoints.length +
+      " points for " + Math.round(v.holdToWin / 60) + " minutes";
+  }
+  if (v.mode === "points") {
+    return "first to " + v.target + " points, from ground held and men killed";
+  }
+  return "break the enemy's nerve";
 }
