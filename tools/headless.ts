@@ -1989,6 +1989,18 @@ section("deployment");
       "recoverUntil " + a.recoverUntil + "/" + b.recoverUntil + ", said: " + heartSaid);
     check("and the player is told why, for both",
       cutSaid.length > 0 && heartSaid.length > 0, cutSaid + " | " + heartSaid);
+
+    // Cutting one group in two is an order like any other, so it is refused
+    // while setting out even though a formation glyph is not.
+    cmd4.selected = [a.id];
+    const groupsBeforeDivide = w4.groups.length;
+    const through: { x: number; y: number }[] = [];
+    for (let i = 0; i < 30; i++) through.push({ x: a.anchorX, y: a.anchorY - 400 + i * (800 / 29) });
+    const divideSaid = cmd4.commit(through);
+    for (let t = 0; t < 6; t++) w4.step();
+    check("cutting a group in two does nothing while setting out",
+      w4.groups.length === groupsBeforeDivide && w4.orders.size === 0,
+      w4.groups.length + " groups, said: " + divideSaid);
   }
 }
 
@@ -2002,10 +2014,10 @@ section("glyph vs split");
   // selection in half.
   const R = 46;
   const squads: SquadView[] = [
-    { id: 1, player: 0, x: 900, y: 900, radius: R, facing: 0, visible: true },
-    { id: 2, player: 0, x: 1300, y: 900, radius: R, facing: 0, visible: true },
-    { id: 3, player: 0, x: 900, y: 1300, radius: R, facing: 0, visible: true },
-    { id: 4, player: 0, x: 1300, y: 1300, radius: R, facing: 0, visible: true },
+    { id: 1, player: 0, x: 900, y: 900, radius: R, size: 20, facing: 0, visible: true },
+    { id: 2, player: 0, x: 1300, y: 900, radius: R, size: 20, facing: 0, visible: true },
+    { id: 3, player: 0, x: 900, y: 1300, radius: R, size: 20, facing: 0, visible: true },
+    { id: 4, player: 0, x: 1300, y: 1300, radius: R, size: 20, facing: 0, visible: true },
   ];
   const ctx = (selected: number[]): GestureContext =>
     ({ player: 0, squads, selected, homeX: 0, pendingLine: null });
@@ -2066,6 +2078,100 @@ section("orders in practice");
       out.push({ x: g.anchorX + (hx / 16) * size, y: g.anchorY + (hy / 16) * size });
     }
     return out;
+  }
+
+  // -- DIVIDE: cutting ONE group's men in two -------------------------------
+  {
+    const w = new World({ seed: 47, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
+    // A wide block so a vertical cut has men clearly either side of it.
+    const ids: number[] = [];
+    for (let i = 0; i < 24; i++) ids.push(w.spawnSoldier(0, "line", 800 + (i % 12) * 30, 1000 + ((i / 12) | 0) * 24, 0));
+    army(w, 1, 2600, 1100);
+    const g = w.createGroup(0, ids) as Group;
+    g.shape = "line";
+    const before = w.liveCount(g);
+    const midX = g.anchorX;
+
+    // Straight down through the middle: men to the left keep the group.
+    const other = w.divideGroup(g, [midX, g.anchorY - 400, midX, g.anchorY + 400]) as Group;
+    check("a cut through a group makes a second group", other !== null && w.groups.length === 3,
+      w.groups.length + " groups");
+    check("every man is still in exactly one of the two halves",
+      other !== null && w.liveCount(g) + w.liveCount(other) === before,
+      w.liveCount(g) + " + " + (other ? w.liveCount(other) : 0) + " of " + before);
+    check("neither half is empty", w.liveCount(g) > 0 && other !== null && w.liveCount(other) > 0,
+      w.liveCount(g) + "/" + (other ? w.liveCount(other) : 0));
+    // Drawn top to bottom you are walking south, and on a screen whose y grows
+    // downward your left hand points EAST -- so the eastern half keeps the
+    // group, exactly as the multi-group split keeps the side left of the stroke.
+    check("the halves land on opposite sides of the line",
+      other !== null && g.anchorX > midX && other.anchorX < midX,
+      Math.round(g.anchorX) + " vs " + Math.round(other.anchorX) + " about " + Math.round(midX));
+    check("the new half inherits the shape it was standing in",
+      other !== null && other.shape === "line", other ? other.shape : "-");
+    check("no man belongs to both", (() => {
+      if (!other) return false;
+      const seen = new Set(g.members);
+      return other.members.every((m) => !seen.has(m));
+    })());
+  }
+
+  // Drawing the same cut the other way round keeps the OTHER half -- one
+  // gesture, both outcomes, exactly as the multi-group split reads.
+  {
+    const w = new World({ seed: 48, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
+    const ids: number[] = [];
+    for (let i = 0; i < 24; i++) ids.push(w.spawnSoldier(0, "line", 800 + (i % 12) * 30, 1000 + ((i / 12) | 0) * 24, 0));
+    const g = w.createGroup(0, ids) as Group;
+    const midX = g.anchorX;
+    w.divideGroup(g, [midX, g.anchorY + 400, midX, g.anchorY - 400]);
+    check("reversing the cut keeps the other half", g.anchorX < midX,
+      Math.round(g.anchorX) + " about " + Math.round(midX));
+  }
+
+  // A cut that leaves everyone on one side must do nothing at all. Men move
+  // while an order is in flight, so this really can arrive as a no-op.
+  {
+    const w = new World({ seed: 49, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
+    const g = army(w, 0, 900, 900, 12);
+    const groups = w.groups.length;
+    const members = w.liveCount(g);
+    const missed = w.divideGroup(g, [g.anchorX + 600, g.anchorY - 400, g.anchorX + 600, g.anchorY + 400]);
+    check("a cut that divides nobody does nothing",
+      missed === null && w.groups.length === groups && w.liveCount(g) === members,
+      w.groups.length + " groups, " + w.liveCount(g) + " men");
+  }
+
+  // End to end: a drawn stroke, through the Commander and the order queue.
+  {
+    const w = new World({ seed: 50, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
+    const ids: number[] = [];
+    for (let i = 0; i < 24; i++) ids.push(w.spawnSoldier(0, "line", 800 + (i % 12) * 30, 1000 + ((i / 12) | 0) * 24, 0));
+    army(w, 1, 2600, 1100);
+    const g = w.createGroup(0, ids) as Group;
+    const cmd = new Commander(w, 0);
+    cmd.selected = [g.id];
+
+    const cut: { x: number; y: number }[] = [];
+    for (let i = 0; i < 30; i++) cut.push({ x: g.anchorX, y: g.anchorY - 400 + i * (800 / 29) });
+    const said = cmd.commit(cut);
+    check("a stroke through a lone selected group is read as a cut", said === "cut in two", said);
+    check("and nothing has happened yet", w.groups.length === 2, w.groups.length + " groups");
+    for (let t = 0; t < 6; t++) w.step();
+    check("the order lands and the group becomes two", w.groups.length === 3,
+      w.groups.length + " groups");
+
+    // The march that must NOT be a cut: a straight line out in open ground.
+    const g2 = w.groups.find((q) => q.player === 0) as Group;
+    cmd.selected = [g2.id];
+    const groupsNow = w.groups.length;
+    const march: { x: number; y: number }[] = [];
+    for (let i = 0; i < 30; i++) march.push({ x: g2.anchorX + 400 + i * 18, y: g2.anchorY - 500 });
+    const saidMarch = cmd.commit(march);
+    for (let t = 0; t < 6; t++) w.step();
+    check("a straight march clear of the group is still a march",
+      saidMarch !== "cut in two" && w.groups.length === groupsNow,
+      saidMarch + ", " + w.groups.length + " groups");
   }
 
   // -- SPLIT ----------------------------------------------------------------
@@ -2199,11 +2305,11 @@ section("selection");
   // case below is the SAME geometry read against a different selection.
   const R = 58;
   const squads: SquadView[] = [
-    { id: 1, player: 0, x: 900, y: 900, radius: R, facing: 0, visible: true },
-    { id: 2, player: 0, x: 1100, y: 900, radius: R, facing: 0, visible: true },
-    { id: 3, player: 0, x: 900, y: 1100, radius: R, facing: 0, visible: true },
-    { id: 4, player: 0, x: 1100, y: 1100, radius: R, facing: 0, visible: true },
-    { id: 9, player: 1, x: 2600, y: 1000, radius: R, facing: Math.PI, visible: true },
+    { id: 1, player: 0, x: 900, y: 900, radius: R, size: 20, facing: 0, visible: true },
+    { id: 2, player: 0, x: 1100, y: 900, radius: R, size: 20, facing: 0, visible: true },
+    { id: 3, player: 0, x: 900, y: 1100, radius: R, size: 20, facing: 0, visible: true },
+    { id: 4, player: 0, x: 1100, y: 1100, radius: R, size: 20, facing: 0, visible: true },
+    { id: 9, player: 1, x: 2600, y: 1000, radius: R, size: 20, facing: Math.PI, visible: true },
   ];
   const ctx = (selected: number[]): GestureContext =>
     ({ player: 0, squads, selected, homeX: 0, pendingLine: null });

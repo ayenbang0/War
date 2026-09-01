@@ -13,11 +13,11 @@ import type { Group } from "../sim/entities.ts";
 import { TerrainGrid, TILE_SIZE } from "../sim/terrain.ts";
 import { Camera } from "./camera.ts";
 import { TerrainLayer } from "./terrain-layer.ts";
-import { ink, inkFaint, inkSoft, parchment, playerColor } from "./palette.ts";
+import { ink, inkFaint, inkSoft, parchment, playerColor, unitEdge, unitFill, unitSheen, unitShadow } from "./palette.ts";
 import { FOG_CELL } from "../sim/vision.ts";
 import { RECOVER_LOCK_SECONDS, TICK_RATE } from "../sim/world.ts";
 import { UNIT_TYPE_IDS } from "../content/unit-types.ts";
-import { SIZE, bodyPath, detailPath, gait, type Brush } from "./soldier-art.ts";
+import { SIZE, bodyPath, detailPath, gait, offsetBrush, type Brush } from "./soldier-art.ts";
 
 const GRID_TILES = 8;
 /** Below this zoom individual soldiers stop reading and become blocks. */
@@ -144,27 +144,80 @@ export class Renderer {
         }
         if (shown.length === 0) continue;
 
+        // The brush is the same for all four passes, so build it once. The
+        // shading passes below are the SAME bodyPath drawn from a shifted or
+        // shrunken brush -- which is what guarantees the polished counter has
+        // exactly the silhouette and proportions of the plain one.
+        const brushes = shown.map(
+          (id) => this.brushFor(world, id, cam, prev, alpha, now, base),
+        );
+
+        // 1. Contact shadow. Cheap, and it is what lifts a counter off the
+        //    ground rather than letting it sit flat in the terrain wash --
+        //    the single biggest gain in reading a crowded field from above.
+        if (detailed && cam.zoom > 0.7) {
+          ctx.beginPath();
+          for (const brush of brushes) bodyPath(type, offsetBrush(brush, base * 0.16, base * 0.24));
+          ctx.fillStyle = unitShadow;
+          ctx.fill();
+        }
+
+        // 2. The body itself, in this type's tone of its army's colour.
         ctx.beginPath();
-        for (const id of shown) {
-          const brush = this.brushFor(world, id, cam, prev, alpha, now, base);
+        for (const brush of brushes) {
           if (detailed) bodyPath(type, brush);
           else ctx.rect(brush.x - base * 0.6, brush.y - base * 0.6, base * 1.2, base * 1.2);
         }
-        ctx.fillStyle = playerColor[player] ?? ink;
+        ctx.fillStyle = unitFill(player, type);
         ctx.fill();
+
+        // 3. Top-light, as a bevel rather than a smaller copy floating inside.
+        //    Clip to the silhouette, then fill the SAME silhouette shifted
+        //    toward the light: the overlap is everything but a rim on the
+        //    shaded side, so the counter reads as lit from the top left and the
+        //    base colour survives as a rim along the bottom right. A concentric
+        //    inset instead reads as a picture frame, which is what this
+        //    replaced. No gradient, because one path holds the whole batch and
+        //    a gradient would be fixed in screen space rather than to a counter.
+        if (detailed && cam.zoom > 0.85) {
+          ctx.save();
+          ctx.beginPath();
+          for (const brush of brushes) bodyPath(type, brush);
+          ctx.clip();
+          ctx.beginPath();
+          for (const brush of brushes) {
+            bodyPath(type, offsetBrush(brush, -base * 0.17, -base * 0.2));
+          }
+          ctx.fillStyle = unitSheen;
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // 4. The outline, derived from the fill rather than a flat black, with
+        //    round joins so a wedge's point reads as drawn rather than pricked.
         if (cam.zoom > 0.85) {
-          ctx.strokeStyle = "rgba(35, 28, 18, 0.5)";
-          ctx.lineWidth = 0.7;
+          ctx.beginPath();
+          for (const brush of brushes) {
+            if (detailed) bodyPath(type, brush);
+            else ctx.rect(brush.x - base * 0.6, brush.y - base * 0.6, base * 1.2, base * 1.2);
+          }
+          ctx.lineJoin = "round";
+          ctx.lineCap = "round";
+          ctx.strokeStyle = unitEdge(player, type);
+          ctx.lineWidth = Math.max(0.6, base * 0.1);
           ctx.stroke();
         }
 
+        // 5. Ornament last and quietest. It was competing with the body for
+        //    attention; a weapon is meant to tell you WHICH unit this is once
+        //    the counter itself has already read as a unit.
         if (!detailed || cam.zoom < 0.7) continue;
         ctx.beginPath();
-        for (const id of shown) {
-          detailPath(type, this.brushFor(world, id, cam, prev, alpha, now, base));
-        }
-        ctx.strokeStyle = "rgba(28, 22, 14, 0.72)";
-        ctx.lineWidth = Math.max(0.7, base * 0.16);
+        for (const brush of brushes) detailPath(type, brush);
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.strokeStyle = "rgba(31, 25, 16, 0.6)";
+        ctx.lineWidth = Math.max(0.6, base * 0.13);
         ctx.stroke();
       }
     }

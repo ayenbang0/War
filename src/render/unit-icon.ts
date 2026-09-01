@@ -11,8 +11,8 @@
  * would quietly start lying about it.
  */
 
-import { SIZE, bodyPath, detailPath, type Brush } from "./soldier-art.ts";
-import { ink, playerColor } from "./palette.ts";
+import { SIZE, bodyPath, detailPath, offsetBrush, type Brush } from "./soldier-art.ts";
+import { unitEdge, unitFill, unitSheen, unitShadow } from "./palette.ts";
 import type { UnitTypeId } from "../content/unit-types.ts";
 
 /**
@@ -41,18 +41,41 @@ export function drawUnitIcon(
   };
 
   ctx.save();
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+
+  // The same five passes the battlefield uses, in the same order, so the menu
+  // counter is the field counter and cannot drift from it.
+  ctx.beginPath();
+  bodyPath(type, offsetBrush(brush, r * 0.16, r * 0.24));
+  ctx.fillStyle = unitShadow;
+  ctx.fill();
+
   ctx.beginPath();
   bodyPath(type, brush);
-  ctx.fillStyle = playerColor[player] ?? ink;
+  ctx.fillStyle = unitFill(player, type);
   ctx.fill();
-  ctx.strokeStyle = "rgba(35, 28, 18, 0.5)";
-  ctx.lineWidth = 0.8;
+
+  ctx.save();
+  ctx.beginPath();
+  bodyPath(type, brush);
+  ctx.clip();
+  ctx.beginPath();
+  bodyPath(type, offsetBrush(brush, -r * 0.17, -r * 0.2));
+  ctx.fillStyle = unitSheen;
+  ctx.fill();
+  ctx.restore();
+
+  ctx.beginPath();
+  bodyPath(type, brush);
+  ctx.strokeStyle = unitEdge(player, type);
+  ctx.lineWidth = Math.max(0.8, r * 0.1);
   ctx.stroke();
 
   ctx.beginPath();
   detailPath(type, brush);
-  ctx.strokeStyle = "rgba(28, 22, 14, 0.72)";
-  ctx.lineWidth = Math.max(0.9, r * 0.16);
+  ctx.strokeStyle = "rgba(31, 25, 16, 0.6)";
+  ctx.lineWidth = Math.max(0.9, r * 0.13);
   ctx.stroke();
   ctx.restore();
 }

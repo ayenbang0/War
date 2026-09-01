@@ -49,8 +49,8 @@ const R = squadRadius("line");
 
 function context(facing: number): GestureContext {
   const squads: SquadView[] = [
-    { id: 1, player: 0, x: FRIEND_X, y: FRIEND_Y, radius: R, facing, visible: true },
-    { id: 2, player: 1, x: ENEMY_X, y: ENEMY_Y, radius: R, facing: Math.PI, visible: true },
+    { id: 1, player: 0, x: FRIEND_X, y: FRIEND_Y, radius: R, size: 20, facing, visible: true },
+    { id: 2, player: 1, x: ENEMY_X, y: ENEMY_Y, radius: R, size: 20, facing: Math.PI, visible: true },
   ];
   return { player: 0, squads, selected: [1], homeX: HOME_X };
 }
@@ -62,11 +62,11 @@ function context(facing: number): GestureContext {
  */
 function groupContext(pending: { a: Point; b: Point } | null = null): GestureContext {
   const squads: SquadView[] = [
-    { id: 1, player: 0, x: FRIEND_X - 150, y: FRIEND_Y - 150, radius: R, facing: 0, visible: true },
-    { id: 2, player: 0, x: FRIEND_X + 150, y: FRIEND_Y - 150, radius: R, facing: 0, visible: true },
-    { id: 3, player: 0, x: FRIEND_X - 150, y: FRIEND_Y + 150, radius: R, facing: 0, visible: true },
-    { id: 4, player: 0, x: FRIEND_X + 150, y: FRIEND_Y + 150, radius: R, facing: 0, visible: true },
-    { id: 9, player: 1, x: ENEMY_X, y: ENEMY_Y, radius: R, facing: Math.PI, visible: true },
+    { id: 1, player: 0, x: FRIEND_X - 150, y: FRIEND_Y - 150, radius: R, size: 20, facing: 0, visible: true },
+    { id: 2, player: 0, x: FRIEND_X + 150, y: FRIEND_Y - 150, radius: R, size: 20, facing: 0, visible: true },
+    { id: 3, player: 0, x: FRIEND_X - 150, y: FRIEND_Y + 150, radius: R, size: 20, facing: 0, visible: true },
+    { id: 4, player: 0, x: FRIEND_X + 150, y: FRIEND_Y + 150, radius: R, size: 20, facing: 0, visible: true },
+    { id: 9, player: 1, x: ENEMY_X, y: ENEMY_Y, radius: R, size: 20, facing: Math.PI, visible: true },
   ];
   return { player: 0, squads, selected: [1, 2, 3, 4], homeX: HOME_X, pendingLine: pending };
 }
@@ -623,6 +623,61 @@ export function splitAndRecoverCases(): Case[] {
       points: stroke(
         [{ x: FRIEND_X + 200, y: FRIEND_Y + off }, { x: ENEMY_X + off, y: ENEMY_Y + off * 0.5 }],
         44, J, rnd,
+      ),
+    });
+  }
+
+  // -- divide: ONE group selected, a straight cut drawn clean THROUGH it.
+  //    This is the case a player hits after lassoing a single group and wanting
+  //    half of it somewhere else.
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI;
+    const dx = Math.cos(a) * 300;
+    const dy = Math.sin(a) * 300;
+    cases.push({
+      expected: "divide",
+      note: "cut through a single selected group at " + a.toFixed(2) + " rad",
+      ctx: context(0),
+      points: stroke(
+        [{ x: FRIEND_X - dx, y: FRIEND_Y - dy }, { x: FRIEND_X + dx, y: FRIEND_Y + dy }],
+        34, J, rnd,
+      ),
+    });
+  }
+
+  // -- and the whole reason the span test exists: with one group selected, a
+  //    straight line drawn in OPEN GROUND is a march, not a cut. This is the
+  //    commonest stroke in the game and it must never carve up the group.
+  const marches = [
+    [FRIEND_X + 300, FRIEND_Y - 380, FRIEND_X + 820, FRIEND_Y - 380],
+    [FRIEND_X + 260, FRIEND_Y + 300, FRIEND_X + 900, FRIEND_Y + 520],
+    [FRIEND_X - 350, FRIEND_Y + 330, FRIEND_X + 250, FRIEND_Y + 700],
+    [FRIEND_X + 200, FRIEND_Y - 600, FRIEND_X + 700, FRIEND_Y - 250],
+  ];
+  for (const m of marches) {
+    cases.push({
+      expected: "move",
+      note: "straight march clear of the group, one group selected",
+      ctx: context(0),
+      points: stroke([{ x: m[0], y: m[1] }, { x: m[2], y: m[3] }], 36, J, rnd),
+    });
+  }
+
+  // -- a line that stops SHORT of the group has not cut it. Both endpoints sit
+  //    outside the footprint, so only the segment test separates this from a
+  //    genuine cut.
+  for (let i = 0; i < 4; i++) {
+    const gapFromCentre = 150 + i * 60;
+    cases.push({
+      expected: "move",
+      note: "line stopping " + gapFromCentre + " short of the group",
+      ctx: context(0),
+      points: stroke(
+        [
+          { x: FRIEND_X - 620, y: FRIEND_Y - gapFromCentre },
+          { x: FRIEND_X - 200, y: FRIEND_Y - gapFromCentre },
+        ],
+        30, J, rnd,
       ),
     });
   }

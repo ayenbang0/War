@@ -195,3 +195,11 @@ export function gait(type: UnitTypeId, moving: boolean, t: number, phase: number
       return Math.sin(t * 6.5 + phase) * 0.6;
   }
 }
+
+/**
+ * The same brush moved. Used to draw a counter's contact shadow: the identical
+ * body path, offset, so the shadow can never disagree with the silhouette.
+ */
+export function offsetBrush(b: Brush, dx: number, dy: number): Brush {
+  return { ...b, x: b.x + dx, y: b.y + dy };
+}

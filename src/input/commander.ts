@@ -115,6 +115,7 @@ export class Commander {
         x: g.anchorX,
         y: g.anchorY,
         radius: g.radius,
+        size: w.liveCount(g),
         facing: g.facing,
         visible: g.player === this.player || g.seenBy[this.player],
       });
@@ -128,6 +129,7 @@ export class Commander {
         x: s.x[i],
         y: s.y[i],
         radius: LOOSE_RADIUS,
+        size: 1,
         facing: s.facing[i],
         visible: s.player[i] === this.player || w.canSee(this.player, i),
       });
@@ -247,6 +249,22 @@ export class Commander {
       return r.keep.length === 0 || r.drop.length === 0
         ? "rail set  (draw a parallel line for rows)"
         : "split " + r.keep.length + "/" + r.squads.length + "  (parallel line = rows)";
+    }
+
+    if (r.kind === "divide") {
+      this.clearPending();
+      const id = r.squads[0];
+      if (this.locked(id)) return "locked (recovering)";
+      const g = this.world.groupById(id);
+      if (!g) return "";
+      this.world.orders.issue(
+        { kind: "divide", squad: id, line: r.line.slice() },
+        this.player,
+        this.world.tick + ORDER_DELAY,
+      );
+      // The new half keeps no selection of its own: cutting a body of troops in
+      // two is a decision about the board, not about what you are holding.
+      return "cut in two";
     }
 
     if (r.kind === "grid") {
