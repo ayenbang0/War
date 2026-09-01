@@ -308,3 +308,53 @@ export function clearLine(
   }
   return true;
 }
+
+/**
+ * Round the corners off a route.
+ *
+ * A* on a grid, even after string pulling, gives a chain of straight segments
+ * meeting at hard angles, and a formation walking one pivots on the spot at
+ * every joint -- it reads as a machine following waypoints rather than a body
+ * of troops crossing ground. The spec asks for drawn paths to be smoothed into
+ * a clean curve (section 4.2), and this is where that happens.
+ *
+ * Chaikin corner cutting: each interior corner is replaced by two points a
+ * quarter and three quarters along its neighbouring segments. Pure arithmetic,
+ * so it stays deterministic, and endpoints never move -- the player asked to
+ * end up somewhere specific.
+ *
+ * A corner is only cut when BOTH replacement segments are walkable. Rounding a
+ * corner that hugs a riverbank would otherwise cut it straight through the
+ * water, and the mover would stop dead at the bank having been sent into it.
+ */
+export function smoothRoute(grid: TerrainGrid, pts: readonly number[], passes = 2): number[] {
+  if (pts.length < 6) return pts.slice();
+  let cur = pts.slice();
+
+  for (let pass = 0; pass < passes; pass++) {
+    const out: number[] = [cur[0], cur[1]];
+    for (let i = 2; i + 3 < cur.length; i += 2) {
+      const px = cur[i - 2];
+      const py = cur[i - 1];
+      const cx = cur[i];
+      const cy = cur[i + 1];
+      const nx = cur[i + 2];
+      const ny = cur[i + 3];
+
+      const ax = cx + (px - cx) * 0.25;
+      const ay = cy + (py - cy) * 0.25;
+      const bx = cx + (nx - cx) * 0.25;
+      const by = cy + (ny - cy) * 0.25;
+
+      if (clearLine(grid, ax, ay, bx, by) && clearLine(grid, px, py, ax, ay)) {
+        out.push(ax, ay, bx, by);
+      } else {
+        // Keep the hard corner. Better an ugly turn than a route through a river.
+        out.push(cx, cy);
+      }
+    }
+    out.push(cur[cur.length - 2], cur[cur.length - 1]);
+    cur = out;
+  }
+  return cur;
+}

@@ -7,7 +7,7 @@
  * Phase 10 netplay.
  */
 
-import { World, TICK_RATE } from "../src/sim/world.ts";
+import { World, TICK_RATE, RECOVER_LOCK_SECONDS } from "../src/sim/world.ts";
 import type { Group } from "../src/sim/entities.ts";
 
 /**
@@ -68,7 +68,7 @@ import * as M from "../src/sim/math.ts";
 import { provingGround } from "../src/content/levels/proving-ground.ts";
 import { generateTerrain, Terrain, TERRAIN_INFO, TILE_SIZE } from "../src/sim/terrain.ts";
 import { formationSlots, formationRadius, FORMATION_SHAPES } from "../src/sim/formations.ts";
-import { findPath } from "../src/sim/pathfind.ts";
+import { findPath, smoothRoute } from "../src/sim/pathfind.ts";
 import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "../src/content/unit-types.ts";
 import type { Order } from "../src/sim/orders.ts";
 import { runConfusionMatrix, printMatrix } from "./test-gestures.ts";
@@ -262,6 +262,58 @@ section("terrain");
   }
 
   check("map is mostly passable", passable / total > 0.85);
+
+  // -- the varied terrain ---------------------------------------------------
+  check("mountains, marsh, roads and scree all appear",
+    share(Terrain.Mountain) > 0.001 && share(Terrain.Marsh) > 0.005 &&
+      share(Terrain.Road) > 0.005 && share(Terrain.Scree) > 0.01,
+    ["mountain", "marsh", "road", "scree"]
+      .map((n, i) => n + " " + (share([Terrain.Mountain, Terrain.Marsh, Terrain.Road, Terrain.Scree][i]) * 100).toFixed(1) + "%")
+      .join(", "));
+
+  check("roads are the only ground faster than open field",
+    TERRAIN_INFO[Terrain.Road].moveScale > 1 &&
+      [Terrain.Plain, Terrain.Forest, Terrain.Hill, Terrain.Marsh, Terrain.Scree, Terrain.Bridge]
+        .every((t) => TERRAIN_INFO[t].moveScale <= 1),
+    "road " + TERRAIN_INFO[Terrain.Road].moveScale + "x");
+
+  check("marsh is a trap, not an obstacle: slow and with no cover",
+    TERRAIN_INFO[Terrain.Marsh].moveScale > 0 &&
+      TERRAIN_INFO[Terrain.Marsh].moveScale < 0.6 &&
+      TERRAIN_INFO[Terrain.Marsh].cover === 0);
+
+  check("mountains are impassable and block sight",
+    TERRAIN_INFO[Terrain.Mountain].moveScale === 0 && TERRAIN_INFO[Terrain.Mountain].blocksSight);
+
+  // Mountains create passes; they must never seal the map into halves. A range
+  // that walls off a third of the board makes a level unplayable, not tactical.
+  {
+    const seen = new Uint8Array(total);
+    let first = -1;
+    for (let y = 0; y < g.height && first < 0; y++) if (g.passableAt(0, y)) first = y * g.width;
+    const stack = [first];
+    seen[first] = 1;
+    let reached = 0;
+    const steps = [1, 0, -1, 0, 0, 1, 0, -1];
+    while (stack.length > 0) {
+      const i = stack.pop() as number;
+      reached++;
+      const x = i % g.width;
+      const y = (i / g.width) | 0;
+      for (let k = 0; k < 8; k += 2) {
+        const nx = x + steps[k];
+        const ny = y + steps[k + 1];
+        if (!g.inBounds(nx, ny)) continue;
+        const j = ny * g.width + nx;
+        if (seen[j] === 1 || !g.passableAt(nx, ny)) continue;
+        seen[j] = 1;
+        stack.push(j);
+      }
+    }
+    check("mountains leave passes rather than sealing the map",
+      reached > passable * 0.98,
+      (reached / passable * 100).toFixed(1) + "% of walkable ground reachable");
+  }
   check("river exists", share(Terrain.Water) > 0.01);
   check("bridges were carved", (counts.get(Terrain.Bridge) ?? 0) > 0);
   check("forest and hills both present", share(Terrain.Forest) > 0.03 && share(Terrain.Hill) > 0.03);
@@ -1345,6 +1397,80 @@ section("engagement");
   }
 }
 
+// -- 8g4. nobody gets left on the bank -----------------------------------------
+
+section("crossings");
+{
+  /**
+   * March a formation over a bridge and count who never made it.
+   *
+   * A wide line on a narrow crossing is the hard case: whole ranks of slots
+   * hang over the water, so those men walk at the bank and grind against it.
+   * Not standing IN the river was never the problem -- being abandoned beside
+   * it was.
+   */
+  function crossBridge(n: number, shape: "line" | "square"): { stranded: number; wet: number } {
+    const w = buildWorld();
+    const T = w.terrain;
+    // Clear the field so this measures the crossing, not the traffic.
+    let parked = 0;
+    for (const other of w.groups) {
+      place(w, other, 300 + (parked % 5) * 90, 3500 + ((parked / 5) | 0) * 90);
+      parked++;
+    }
+    let bx = -1;
+    let by = -1;
+    for (let ty = 0; ty < T.height && bx < 0; ty++) {
+      for (let tx = 0; tx < T.width; tx++) {
+        if (T.typeAt(tx, ty) === Terrain.Bridge) { bx = tx; by = ty; break; }
+      }
+    }
+    let west = bx;
+    while (west > 0 && T.typeAt(west, by) !== Terrain.Plain) west--;
+    let east = bx;
+    while (east < T.width - 1 && T.typeAt(east, by) !== Terrain.Plain) east++;
+
+    const ids: number[] = [];
+    for (let i = 0; i < n; i++) {
+      ids.push(w.spawnSoldier(
+        0, "line",
+        (west - 4) * TILE_SIZE + (i % 6) * 13,
+        (by + 0.5) * TILE_SIZE + ((i / 6) | 0) * 13,
+        0,
+      ));
+    }
+    const g = w.createGroup(0, ids) as Group;
+    w.setFormation(g.id, shape);
+    w.orders.issue(
+      { kind: "move", squad: g.id, path: [(east + 6) * TILE_SIZE, (by + 0.5) * TILE_SIZE] },
+      0, 1,
+    );
+    for (let t = 0; t < TICK_RATE * 200; t++) w.step();
+
+    let stranded = 0;
+    let wet = 0;
+    for (const m of g.members) {
+      if (Math.hypot(w.soldiers.x[m] - g.anchorX, w.soldiers.y[m] - g.anchorY) > g.radius + 120) stranded++;
+      if (TERRAIN_INFO[T.typeAtWorld(w.soldiers.x[m], w.soldiers.y[m])].moveScale <= 0) wet++;
+    }
+    return { stranded, wet };
+  }
+
+  const tight = crossBridge(20, "square");
+  const wide = crossBridge(48, "line");
+  const huge = crossBridge(90, "line");
+
+  check("a compact group crosses cleanly", tight.stranded === 0 && tight.wet === 0,
+    tight.stranded + " stranded");
+  check("a wide line crosses without losing its wings", wide.stranded === 0,
+    wide.stranded + "/48 left on the bank");
+  check("even a very wide line gets everyone over", huge.stranded === 0,
+    huge.stranded + "/90 left on the bank");
+  check("and nobody ends up standing in the river",
+    tight.wet === 0 && wide.wet === 0 && huge.wet === 0,
+    tight.wet + "/" + wide.wet + "/" + huge.wet);
+}
+
 // -- 8h. army building ---------------------------------------------------------
 
 section("army");
@@ -1721,8 +1847,12 @@ section("levels");
   const hills = LEVELS.find((l) => l.id === "high-ground");
   check("the open field is actually open", open !== undefined && share(open, Terrain.Forest) < 0.15,
     open ? (share(open, Terrain.Forest) * 100).toFixed(0) + "% wooded" : "missing");
-  check("the high ground actually has hills", hills !== undefined && share(hills, Terrain.Hill) > 0.2,
-    hills ? (share(hills, Terrain.Hill) * 100).toFixed(0) + "% hill" : "missing");
+  // High ground is now graded -- hill, then scree, then bare mountain -- so
+  // counting only the middle band understates how hilly a map is.
+  const highGround = (l: (typeof LEVELS)[number]): number =>
+    share(l, Terrain.Hill) + share(l, Terrain.Scree) + share(l, Terrain.Mountain);
+  check("the high ground actually has high ground", hills !== undefined && highGround(hills) > 0.2,
+    hills ? (highGround(hills) * 100).toFixed(0) + "% high ground" : "missing");
 }
 
 // -- 9a3. what the pen may do while setting out --------------------------------
@@ -1871,6 +2001,150 @@ section("glyph vs split");
   const single = recognize(glyph(1100, 1100, Math.PI / 2, 900), ctx([1]));
   check("with one squad selected the same line is a move",
     single?.kind === "move", single ? single.kind : "null");
+}
+
+// -- 9a5. split, recover, and curved routes ------------------------------------
+
+section("orders in practice");
+{
+  function army(w: World, player: number, x: number, y: number, n = 10): Group {
+    const ids: number[] = [];
+    for (let i = 0; i < n; i++) {
+      ids.push(w.spawnSoldier(player, "line", x + (i % 4) * 13, y + ((i / 4) | 0) * 13, 0));
+    }
+    return w.createGroup(player, ids) as Group;
+  }
+  function heartOver(g: Group, size: number): { x: number; y: number }[] {
+    const out: { x: number; y: number }[] = [];
+    for (let i = 0; i <= 56; i++) {
+      const t = (i / 56) * Math.PI * 2;
+      const hx = 16 * Math.sin(t) * Math.sin(t) * Math.sin(t);
+      const hy = -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t));
+      out.push({ x: g.anchorX + (hx / 16) * size, y: g.anchorY + (hy / 16) * size });
+    }
+    return out;
+  }
+
+  // -- SPLIT ----------------------------------------------------------------
+  {
+    const w = new World({ seed: 41, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
+    const gs = [army(w, 0, 900, 900), army(w, 0, 1300, 900), army(w, 0, 900, 1300), army(w, 0, 1300, 1300)];
+    army(w, 1, 2600, 1100);
+    const cmd = new Commander(w, 0);
+    cmd.selected = gs.map((g) => g.id);
+
+    const cut: { x: number; y: number }[] = [];
+    for (let i = 0; i < 30; i++) cut.push({ x: 700 + i * 30, y: 1100 });
+    cmd.commit(cut);
+    check("a split is held for the pair window, not applied at once",
+      cmd.selected.length === 4 && cmd.pendingRail !== null, cmd.selected.length + " selected");
+
+    cmd.flushPending(Number.MAX_SAFE_INTEGER);
+    check("the split then keeps exactly one side", cmd.selected.length === 2,
+      cmd.selected.length + " of 4 kept");
+    check("it keeps the side left of the stroke",
+      cmd.selected.every((id) => (w.groupById(id) as Group).anchorY < 1100),
+      cmd.selected.map((id) => Math.round((w.groupById(id) as Group).anchorY)).join(","));
+
+    // Drawn the other way, it keeps the other half.
+    cmd.selected = gs.map((g) => g.id);
+    cmd.commit([...cut].reverse());
+    cmd.flushPending(Number.MAX_SAFE_INTEGER);
+    check("drawn the other way it keeps the other half",
+      cmd.selected.length === 2 && cmd.selected.every((id) => (w.groupById(id) as Group).anchorY > 1100),
+      cmd.selected.map((id) => Math.round((w.groupById(id) as Group).anchorY)).join(","));
+  }
+
+  // -- RECOVER --------------------------------------------------------------
+  {
+    const w = new World({ seed: 42, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
+    const g = army(w, 0, 900, 900);
+    army(w, 1, 2600, 900);
+    for (const m of g.members) {
+      w.soldiers.morale[m] = 0.3;
+      w.soldiers.hp[m] = 30;
+    }
+    const cmd = new Commander(w, 0);
+    // ONE group selected: the case that used to fall through and read as patrol.
+    cmd.selected = [g.id];
+    cmd.commit(heartOver(g, 260));
+    w.step();
+    w.step();
+    check("a heart recovers a single group", g.stance === "recover", g.stance);
+    check("and it locks for the full term",
+      (g.recoverUntil - w.tick) / TICK_RATE > RECOVER_LOCK_SECONDS - 1.5,
+      ((g.recoverUntil - w.tick) / TICK_RATE).toFixed(1) + "s");
+
+    const hpBefore = w.soldiers.hp[g.members[0]];
+    const parked = g.anchorX;
+    w.orders.issue({ kind: "move", squad: g.id, path: [2200, 900] }, 0, w.tick + 1);
+    for (let t = 0; t < TICK_RATE * 12; t++) w.step();
+    check("recovering heals and steadies",
+      w.soldiers.hp[g.members[0]] > hpBefore && w.soldiers.morale[g.members[0]] > 0.3,
+      "hp " + hpBefore.toFixed(0) + "->" + w.soldiers.hp[g.members[0]].toFixed(0));
+    check("and refuses orders while it lasts",
+      g.stance === "recover" && Math.abs(g.anchorX - parked) < 3,
+      g.stance + ", moved " + (g.anchorX - parked).toFixed(1));
+  }
+
+  // -- CURVED ROUTES --------------------------------------------------------
+  {
+    const w = new World({ seed: 51, tilesWide: 120, tilesHigh: 90, soldierCapacity: 256 });
+    const g = army(w, 0, 800, 900, 12);
+    army(w, 1, 3200, 900, 6);
+    const cmd = new Commander(w, 0);
+    cmd.selected = [g.id];
+
+    // A swept arc, as a hand would draw it.
+    const stroke: { x: number; y: number }[] = [];
+    for (let i = 0; i <= 60; i++) {
+      const t = i / 60;
+      stroke.push({ x: 830 + t * 1400, y: 900 + Math.sin(t * Math.PI) * 520 });
+    }
+    cmd.commit(stroke);
+    w.step();
+    w.step();
+
+    function turns(p: readonly number[]): number[] {
+      const out: number[] = [];
+      for (let i = 2; i + 3 < p.length; i += 2) {
+        const a = Math.atan2(p[i + 1] - p[i - 1], p[i] - p[i - 2]);
+        const b = Math.atan2(p[i + 3] - p[i + 1], p[i + 2] - p[i]);
+        let d = Math.abs(b - a);
+        while (d > Math.PI) d = Math.abs(d - Math.PI * 2);
+        out.push((d * 180) / Math.PI);
+      }
+      return out;
+    }
+    const t = turns(g.path);
+    const mean = t.reduce((a, b) => a + b, 0) / Math.max(t.length, 1);
+    check("a drawn arc becomes a many-pointed route, not two corners",
+      g.path.length / 2 > 12, g.path.length / 2 + " waypoints");
+    check("and its turns are gentle rather than sharp", mean < 25,
+      "mean turn " + mean.toFixed(1) + " deg");
+
+    let offRoad = 0;
+    for (let i = 0; i < g.path.length; i += 2) {
+      if (TERRAIN_INFO[w.terrain.typeAtWorld(g.path[i], g.path[i + 1])].moveScale <= 0) offRoad++;
+    }
+    check("smoothing never routes anyone through a river", offRoad === 0, offRoad + " bad waypoints");
+
+    // The group must actually track the sweep, not cut the corner.
+    let peak = g.anchorY;
+    for (let k = 0; k < 900; k++) {
+      w.step();
+      peak = Math.max(peak, g.anchorY);
+    }
+    check("the group follows the curve it was given", peak > 1200,
+      "reached y=" + peak.toFixed(0) + " on a arc drawn to 1420");
+
+    // A hard right angle must round off, but only where it is safe to.
+    const corner = [700, 700, 1400, 700, 1400, 1400];
+    const rounded = smoothRoute(w.terrain, corner, 2);
+    check("a right-angle corner is rounded",
+      Math.max(...turns(rounded)) < 50 && rounded.length > corner.length,
+      Math.max(...turns(corner)).toFixed(0) + " deg -> " + Math.max(...turns(rounded)).toFixed(0) + " deg");
+  }
 }
 
 // -- 9b. selection context -----------------------------------------------------

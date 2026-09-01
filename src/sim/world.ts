@@ -26,7 +26,7 @@ import { generateTerrain, TerrainGrid, TERRAIN_INFO } from "./terrain.ts";
 import { formationSlots, formationRadius, type FormationShape } from "./formations.ts";
 import { advanceToward } from "./movement.ts";
 import { SpatialHash } from "./spatial.ts";
-import { clearLine, findPath } from "./pathfind.ts";
+import { clearLine, findPath, smoothRoute } from "./pathfind.ts";
 import { UNIT_TYPES } from "../content/unit-types.ts";
 import { type DoctrineId } from "../content/doctrines.ts";
 import { Soldiers, statsFor, typeAt, typeIndex, type Group, type Stats } from "./entities.ts";
@@ -87,6 +87,16 @@ const ENGAGE_RANGE = 110;
  * turn your back on someone with a spear.
  */
 const ENGAGE_HALT_FRACTION = 0.2;
+/**
+ * Directions to try when a soldier walks into something, in order.
+ *
+ * Shallow deflections first so a man hugs the obstacle rather than veering off
+ * across the field, and both ways at each angle so a shoreline can be followed
+ * in whichever direction actually opens up.
+ */
+const DEFLECTIONS = [0.55, -0.55, 1.1, -1.1, 1.7, -1.7];
+/** Distance from station beyond which a soldier checks his route is walkable. */
+const SLOT_DETOUR_CHECK = 45;
 /** Cell size of the sight hash, in world units. */
 const SIGHT_CELL = 128;
 /** Nothing on the field perceives further than this. Bounds every sight query. */
@@ -604,7 +614,9 @@ export class World {
       cx = leg[leg.length - 2];
       cy = leg[leg.length - 1];
     }
-    return out;
+    // Round the joints off before anyone walks it, so a group sweeps through a
+    // turn instead of pivoting on the spot at every waypoint.
+    return smoothRoute(this.terrain, out);
   }
 
   private legRoute(g: Group): number[] {
@@ -726,6 +738,15 @@ export class World {
    * Averaging would let a player hide a siege engine inside a cavalry group and
    * have it keep up. Mixing arms should feel like a decision with a cost.
    */
+  /**
+   * A group moves at the pace of its worst-off man -- his own speed AND the
+   * ground he is standing on.
+   *
+   * Reading terrain under the anchor alone was fine when the map was mostly
+   * plain, and wrong the moment it was not: with roads at 1.3x and marsh at
+   * 0.45x, an anchor on the highway would set a pace nobody in the bog could
+   * hold, and the formation tore itself apart crossing ordinary ground.
+   */
   private groupSpeed(g: Group): number {
     const s = this.soldiers;
     let slowest = Infinity;
@@ -733,26 +754,18 @@ export class World {
     let n = 0;
     for (const m of g.members) {
       if (s.alive[m] !== 1) continue;
-      slowest = min(slowest, this.stats(m).speed);
+      const ground = TERRAIN_INFO[this.terrain.typeAtWorld(s.x[m], s.y[m])];
+      // Impassable ground scales to zero, which is right for entering it and
+      // disastrous for standing in it. Wading out is slow, not impossible.
+      const scale = ground.moveScale > 0 ? ground.moveScale : STRANDED_WADE;
+      slowest = min(slowest, this.stats(m).speed * scale);
       morale += s.morale[m];
       n++;
     }
     if (n === 0) return 0;
-    const ground = TERRAIN_INFO[this.terrain.typeAtWorld(g.anchorX, g.anchorY)];
-    const scale = ground.moveScale > 0 ? ground.moveScale : STRANDED_WADE;
-    return slowest * FORMATION_PACE * scale * moraleSpeedScale(morale / n);
+    return slowest * FORMATION_PACE * moraleSpeedScale(morale / n);
   }
 
-  /**
-   * How fast a formation may wheel.
-   *
-   * Bounded by what the outermost man can actually walk. A slot at radius r
-   * sweeps at omega * r, so a wide line pivoting at its members' nominal turn
-   * rate would demand three times their marching speed on the outer wing --
-   * they simply cannot be there, and the formation tears itself apart on every
-   * corner. Big formations turning ponderously is the correct answer, and the
-   * alternative is letting men sprint to keep up, which looks like teleporting.
-   */
   private groupTurnRate(g: Group): number {
     const s = this.soldiers;
     let slowestTurn = Infinity;
@@ -824,6 +837,7 @@ export class World {
         // until it is walkable, so the formation compresses against the
         // obstacle rather than stranding men reaching for open water.
         if (TERRAIN_INFO[this.terrain.typeAtWorld(tx, ty)].moveScale <= 0) {
+          let found = false;
           for (let k = 1; k <= 4; k++) {
             const f = 1 - k * 0.22;
             const px = g.anchorX + (tx - g.anchorX) * f;
@@ -831,10 +845,34 @@ export class World {
             if (TERRAIN_INFO[this.terrain.typeAtWorld(px, py)].moveScale > 0) {
               tx = px;
               ty = py;
+              found = true;
               break;
             }
           }
+          // A wide line crossing a narrow bridge has whole ranks hanging over
+          // the water, so sliding toward the anchor never reaches dry ground.
+          // Fall back to the anchor itself, which a group can never occupy
+          // unless it is passable -- otherwise the wings simply stop on the
+          // bank and are left behind for the rest of the match.
+          if (!found) {
+            tx = g.anchorX;
+            ty = g.anchorY;
+          }
         }
+        // If the way to that slot is not walkable in a straight line, head for
+        // the anchor instead. A man on the near bank whose slot sits on the far
+        // one will otherwise walk at the water and grind against it -- the
+        // anchor is on the crossing, so aiming there funnels him over it.
+        // Checked only when he is genuinely far from station, to keep a raycast
+        // off the common case.
+        if (
+          dist(s.x[id], s.y[id], tx, ty) > SLOT_DETOUR_CHECK &&
+          !clearLine(this.terrain, s.x[id], s.y[id], tx, ty)
+        ) {
+          tx = g.anchorX;
+          ty = g.anchorY;
+        }
+
         // Melee soldiers break ranks for anyone already on top of them. A
         // withdrawal is the one order that overrides this -- disengaging is the
         // whole point of it -- and a group standing down to recover is helpless
@@ -937,7 +975,26 @@ export class World {
       const budget = maxSpeed * TICK_DT * min(1, vlen);
       const ux = vx / vlen;
       const uy = vy / vlen;
-      const r = advanceToward(this.terrain, sx, sy, sx + ux * budget, sy + uy * budget, budget);
+      let r = advanceToward(this.terrain, sx, sy, sx + ux * budget, sy + uy * budget, budget);
+      if (r.blocked) {
+        // Pressed against an obstacle. Try walking ALONG it rather than into
+        // it: a soldier funnelling onto a bridge is heading at the bank for
+        // most of the approach, and stopping dead there is how a wing ends up
+        // stranded across the river from its own group.
+        for (const turn of DEFLECTIONS) {
+          const c = cos(turn);
+          const sn2 = sin(turn);
+          const dx2 = ux * c - uy * sn2;
+          const dy2 = ux * sn2 + uy * c;
+          const slid = advanceToward(
+            this.terrain, sx, sy, sx + dx2 * budget, sy + dy2 * budget, budget,
+          );
+          if (slid.travelled > 1e-6) {
+            r = slid;
+            break;
+          }
+        }
+      }
       s.x[id] = r.x;
       s.y[id] = r.y;
       const want = d > IN_SLOT * 1.5 ? atan2(uy, ux) : facing;

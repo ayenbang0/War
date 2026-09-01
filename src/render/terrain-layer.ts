@@ -169,6 +169,48 @@ export class TerrainLayer {
         ctx.lineTo(px + TILE_SIZE - inset * 0.5, oy);
         ctx.stroke();
       }
+    } else if (type === 6) {
+      // Mountains get hatched peaks, the map convention, so impassable rock
+      // never reads as merely "darker hill".
+      ctx.strokeStyle = "rgba(48, 43, 38, 0.75)";
+      ctx.lineWidth = 1.2;
+      for (let k = 0; k < 2; k++) {
+        const ox = px + 6 + k * 12;
+        const oy = py + TILE_SIZE - 6;
+        ctx.beginPath();
+        ctx.moveTo(ox, oy);
+        ctx.lineTo(ox + 5, oy - 13);
+        ctx.lineTo(ox + 10, oy);
+        ctx.stroke();
+      }
+    } else if (type === 7) {
+      // Marsh: tussock dashes, the standard wetland mark.
+      ctx.strokeStyle = "rgba(58, 76, 48, 0.5)";
+      ctx.lineWidth = 1;
+      for (let k = 0; k < 3; k++) {
+        const ox = px + tileHash(tx, ty, 0x4000 + k) * (TILE_SIZE - 10) + 3;
+        const oy = py + tileHash(tx, ty, 0x5000 + k) * (TILE_SIZE - 8) + 4;
+        ctx.beginPath();
+        ctx.moveTo(ox, oy);
+        ctx.lineTo(ox + 7, oy);
+        ctx.stroke();
+      }
+    } else if (type === 9) {
+      // Scree: scattered stones.
+      ctx.fillStyle = "rgba(70, 62, 52, 0.45)";
+      for (let k = 0; k < 4; k++) {
+        const ox = px + tileHash(tx, ty, 0x6000 + k) * (TILE_SIZE - 5) + 2;
+        const oy = py + tileHash(tx, ty, 0x7000 + k) * (TILE_SIZE - 5) + 2;
+        ctx.fillRect(ox, oy, 2, 2);
+      }
+    } else if (type === 8) {
+      // Road: a dashed centre line, so it reads as a route rather than a field.
+      ctx.strokeStyle = "rgba(120, 98, 62, 0.4)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px, py + TILE_SIZE / 2);
+      ctx.lineTo(px + TILE_SIZE, py + TILE_SIZE / 2);
+      ctx.stroke();
     } else if (type === 4) {
       // Bridge: planking across the span.
       ctx.strokeStyle = "rgba(72, 55, 36, 0.5)";

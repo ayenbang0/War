@@ -7,7 +7,7 @@
  * vision data -- the grid already carries a `revision` counter for that.
  */
 
-import { floor, imul, clamp } from "./math.ts";
+import { floor, imul, clamp, min } from "./math.ts";
 
 export const Terrain = {
   Plain: 0,
@@ -16,6 +16,14 @@ export const Terrain = {
   Water: 3,
   Bridge: 4,
   Fortification: 5,
+  /** Impassable rock. Walls off whole regions and creates the passes between. */
+  Mountain: 6,
+  /** Wadeable but wretched: slow, exposed, and no cover at all. */
+  Marsh: 7,
+  /** Beaten track. The one terrain that is FASTER than open ground. */
+  Road: 8,
+  /** Loose scree on a mountain's skirts: slow, broken, a little cover. */
+  Scree: 9,
 } as const;
 
 export type TerrainType = (typeof Terrain)[keyof typeof Terrain];
@@ -37,6 +45,18 @@ export const TERRAIN_INFO: Record<TerrainType, TerrainInfo> = {
   [Terrain.Water]: { name: "water", moveScale: 0.0, cover: 0.0, blocksSight: false },
   [Terrain.Bridge]: { name: "bridge", moveScale: 0.9, cover: 0.0, blocksSight: false },
   [Terrain.Fortification]: { name: "fortification", moveScale: 0.5, cover: 0.6, blocksSight: true },
+  // Mountains are the only other impassable terrain, and they matter for a
+  // different reason than the river: a river is crossed at bridges, a mountain
+  // is not crossed at all. The gaps between ranges become passes, and a pass is
+  // the most valuable ground on any map that has one.
+  [Terrain.Mountain]: { name: "mountain", moveScale: 0.0, cover: 0.0, blocksSight: true },
+  // Marsh is a trap rather than an obstacle: you can cross it, and you will
+  // regret having done so under fire, because it is slow AND offers nothing.
+  [Terrain.Marsh]: { name: "marsh", moveScale: 0.45, cover: 0.0, blocksSight: false },
+  // The only terrain faster than open ground, which makes roads worth fighting
+  // over rather than merely worth walking on.
+  [Terrain.Road]: { name: "road", moveScale: 1.3, cover: 0.0, blocksSight: false },
+  [Terrain.Scree]: { name: "scree", moveScale: 0.55, cover: 0.2, blocksSight: false },
 };
 
 /** World units per tile. One soldier occupies roughly a third of a tile. */
@@ -224,8 +244,21 @@ export function generateTerrain(width: number, height: number, seed: number): Te
       let t: TerrainType;
       if (riverDist < riverHalfWidth) {
         t = Terrain.Water;
+      } else if (elev > 0.78) {
+        // The tops of the highest ground are bare rock, and impassable. This is
+        // what creates passes: the gaps a range leaves are the only way through,
+        // and they are worth more than anything around them.
+        t = Terrain.Mountain;
+      } else if (elev > 0.68) {
+        // Scree skirts the peaks, so a range has broken ground around it rather
+        // than a hard edge you can stand next to safely.
+        t = Terrain.Scree;
       } else if (elev > 0.62) {
         t = Terrain.Hill;
+      } else if (elev < 0.34 && moist > 0.55) {
+        // Marsh collects where the ground is low AND wet -- beside the river,
+        // in hollows -- so it lies exactly where an army would rather march.
+        t = Terrain.Marsh;
       } else if (moist > 0.58 && elev > 0.36) {
         t = Terrain.Forest;
       } else {
@@ -239,8 +272,74 @@ export function generateTerrain(width: number, height: number, seed: number): Te
   }
 
   carveBridges(grid);
+  carveRoad(grid, riverSeed);
+  openPasses(grid);
   grid.revision++;
   return grid;
+}
+
+/**
+ * Lay a road across the map, through the middle crossing.
+ *
+ * Roads are the only terrain faster than open ground, so a road is the fastest
+ * way across a map and therefore something worth taking and denying. It is
+ * routed through a bridge on purpose: the crossing and the highway being the
+ * same place is what makes that ground decisive rather than merely useful.
+ */
+function carveRoad(grid: TerrainGrid, seed: number): void {
+  const ty0 = (grid.height / 2) | 0;
+  for (let tx = 0; tx < grid.width; tx++) {
+    // A gentle wander, so it is a road and not a ruler.
+    const drift = (fbm(tx / grid.width * 5, 3.3, seed, 3) - 0.5) * grid.height * 0.16;
+    const ty = clamp((ty0 + drift) | 0, 1, grid.height - 2);
+    for (let band = 0; band <= 1; band++) {
+      const row = ty + band;
+      const i = row * grid.width + tx;
+      const cur = grid.type[i] as TerrainType;
+      // A road bridges water and tunnels nothing: it goes over crossings and
+      // around mountains, and it drains the marsh it runs through.
+      if (cur === Terrain.Water) continue;
+      if (cur === Terrain.Mountain) continue;
+      grid.type[i] = Terrain.Road;
+    }
+  }
+}
+
+/**
+ * Guarantee a way through every mountain range.
+ *
+ * Generated mountains can seal a map in half, which would make a level
+ * unplayable rather than interesting. Each range is opened at its lowest point,
+ * so the pass sits where a pass naturally would -- at the saddle.
+ */
+function openPasses(grid: TerrainGrid): void {
+  const strideY = 24;
+  for (let ty = 0; ty < grid.height; ty += strideY) {
+    for (let tx = 0; tx < grid.width; tx++) {
+      // Walk each column band; where it is solid rock across, cut the saddle.
+      let solid = true;
+      let lowest = 255;
+      let lowestY = ty;
+      for (let y = ty; y < min(ty + strideY, grid.height); y++) {
+        const t = grid.type[y * grid.width + tx] as TerrainType;
+        if (t !== Terrain.Mountain) {
+          solid = false;
+          break;
+        }
+        const e = grid.elevation[y * grid.width + tx];
+        if (e < lowest) {
+          lowest = e;
+          lowestY = y;
+        }
+      }
+      if (!solid) continue;
+      for (let d = -1; d <= 1; d++) {
+        const y = lowestY + d;
+        if (y < 0 || y >= grid.height) continue;
+        grid.type[y * grid.width + tx] = Terrain.Scree;
+      }
+    }
+  }
 }
 
 /**

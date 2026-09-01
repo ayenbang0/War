@@ -342,7 +342,13 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
   const total = pathLength(raw);
 
   const span = bboxSpan(raw);
+  // Two different simplifications, for two different jobs. The coarse one
+  // decides WHAT the stroke is -- a straight line must survive as two points
+  // even when drawn by a shaky hand. The fine one decides WHERE it goes, and
+  // keeping it fine is what lets a swept arc stay an arc instead of collapsing
+  // into two sharp corners.
   const simple = simplify(raw, Math.max(6, span * 0.09));
+  const route = simplify(raw, Math.max(3, span * 0.018));
   const gap = Math.hypot(end.x - start.x, end.y - start.y);
   const closed = total > 1e-6 && gap / total < CLOSED_RATIO;
 
@@ -386,7 +392,7 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
   //    shape-based reading, so it is resolved before shape is considered.
   const target = enemyAt(ctx, end);
   if (target !== null) {
-    return { kind: "attack", squads: subjects, target, path: toPath(simple) };
+    return { kind: "attack", squads: subjects, target, path: toPath(route) };
   }
 
   // 2. Formation. A glyph drawn ON the subject re-forms it, and this is
@@ -406,7 +412,21 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
     }
   }
 
-  // 3. Group verbs. Only with two or more squads selected, and only for
+  // 3. Recover. Available to ANY selection, not just a group of several.
+  //
+  //    Resolved BEFORE the group verbs, and that ordering is the whole point:
+  //    a heart is a large closed stroke, so the group vocabulary read it as
+  //    "patrol this area" and swallowed it. Standing one battered company down
+  //    is also the commonest reason to want it, and gating it behind "two or
+  //    more selected" made that impossible. Safe to resolve this early because
+  //    a heart and a ring are separated by how much of its own convex hull the
+  //    shape fills, with a wide margin: rings fill 0.98 to 1.00 of theirs,
+  //    hearts 0.93.
+  if (closed && span > scale && hullFill(raw) < HEART_HULL_FILL) {
+    return { kind: "recover", squads: subjects.slice() };
+  }
+
+  // 4. Group verbs. Only with two or more squads selected, and only for
   //    strokes that did NOT start on a squad -- the subject rule wins, so
   //    drawing from a squad is always that squad's own order and a group can
   //    still be sent somewhere one squad at a time.
@@ -418,7 +438,7 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
     if (group) return group;
   }
 
-  // 4. Closed strokes: hold versus patrol, split by how much ground is enclosed.
+  // 5. Closed strokes: hold versus patrol, split by how much ground is enclosed.
   if (closed) {
     const holdSpan = Math.min(HOLD_SPAN_BASE + scale * HOLD_SPAN_PER_RADIUS, HOLD_SPAN_MAX);
     if (span <= holdSpan) {
@@ -427,10 +447,10 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
       const radius = Math.max(scale, Math.sqrt(Math.max(enclosedArea(raw), 1) / Math.PI));
       return { kind: "hold", squads: subjects, x: c.x, y: c.y, radius };
     }
-    return { kind: "patrol", squads: subjects, path: toPath(simple) };
+    return { kind: "patrol", squads: subjects, path: toPath(route) };
   }
 
-  // 5. Open strokes: move versus retreat. Retreat has to earn it -- heading
+  // 6. Open strokes: move versus retreat. Retreat has to earn it -- heading
   //    home AND opening real distance from the nearest enemy. Without the
   //    second test every backward reposition would read as a rout.
   if (subject) {
@@ -450,13 +470,13 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
         const before = Math.hypot(foe.x - start.x, foe.y - start.y);
         const after = Math.hypot(foe.x - end.x, foe.y - end.y);
         if (after - before > RETREAT_GAIN) {
-          return { kind: "retreat", squads: subjects, path: toPath(simple) };
+          return { kind: "retreat", squads: subjects, path: toPath(route) };
         }
       }
     }
   }
 
-  return { kind: "move", squads: subjects, path: toPath(simple) };
+  return { kind: "move", squads: subjects, path: toPath(route) };
 }
 
 /** Drop the first point: a path starts where the squad already is. */
@@ -630,11 +650,6 @@ function groupVerb(
   const scale = 60;
 
   if (closed) {
-    // A heart is the one closed shape with a genuine notch cut into it, which
-    // shows up as a shape that fails to fill its own convex hull.
-    if (span > scale && hullFill(raw) < HEART_HULL_FILL) {
-      return { kind: "recover", squads: subjects.slice() };
-    }
     if (span > Math.min(HOLD_SPAN_BASE + scale * HOLD_SPAN_PER_RADIUS, HOLD_SPAN_MAX)) {
       const c = centroidOf(raw);
       const radius = Math.max(scale, Math.sqrt(Math.max(enclosedAreaOf(raw), 1) / Math.PI));
