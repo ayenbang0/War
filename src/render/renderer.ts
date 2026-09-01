@@ -67,7 +67,7 @@ export class Renderer {
     // halo. Both armies: knowing roughly where an enemy body of troops is, once
     // you have seen it, is the whole reason to pull the camera back.
     if (cam.zoom < GROUP_HALO_ZOOM) this.drawGroupHalos(world, cam, viewer);
-    this.drawSoldiers(world, cam, prev, alpha, now, viewer);
+    this.drawSoldiers(world, cam, prev, alpha, now);
     this.drawWorkings(world, cam, viewer, now);
     this.drawFog(world, cam, viewer);
   }
@@ -122,7 +122,7 @@ export class Renderer {
    * wheels -- strokes once more.
    */
   private drawSoldiers(
-    world: World, cam: Camera, prev: Snapshot, alpha: number, now: number, viewer: number,
+    world: World, cam: Camera, prev: Snapshot, alpha: number, now: number,
   ): void {
     const ctx = this.ctx;
     const s = world.soldiers;
@@ -137,7 +137,6 @@ export class Renderer {
         for (let id = 0; id < s.count; id++) {
           if (s.alive[id] !== 1 || s.player[id] !== player) continue;
           if (world.typeOf(id) !== type) continue;
-          if (player !== viewer && !world.canSee(viewer, id)) continue;
           if (s.x[id] < b.x0 - m || s.x[id] > b.x1 + m) continue;
           if (s.y[id] < b.y0 - m || s.y[id] > b.y1 + m) continue;
           shown.push(id);
@@ -302,7 +301,6 @@ export class Renderer {
     for (const g of world.groups) {
       const n = world.liveCount(g);
       if (n === 0) continue;
-      if (g.player !== viewer && !g.seenBy[viewer]) continue;
       const sx = cam.worldToScreenX(g.anchorX);
       const sy = cam.worldToScreenY(g.anchorY);
       const r = Math.max(11, (g.radius + 22) * cam.zoom);

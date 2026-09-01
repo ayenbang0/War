@@ -139,7 +139,7 @@ export class ArmyAI {
     switch (this.style) {
       case "aggressive":
         if (target) return this.assault(world, q, target, tick);
-        return this.advance(world, q, tick);
+        return this.pressLooseEnemy(world, q, tick) || this.advance(world, q, tick);
 
       case "defensive": {
         if (target && this.near(q, target, 420)) return this.assault(world, q, target, tick);
@@ -156,7 +156,7 @@ export class ArmyAI {
       }
 
       case "maneuver": {
-        if (!target) return this.advance(world, q, tick);
+        if (!target) return this.pressLooseEnemy(world, q, tick) || this.advance(world, q, tick);
         // Swing wide and come in off a flank rather than straight up the front.
         const side = q.id % 2 === 0 ? 1 : -1;
         const bearing = atan2(target.anchorY - q.anchorY, target.anchorX - q.anchorX) + side * 1.15;
@@ -181,8 +181,46 @@ export class ArmyAI {
 
       case "reactive":
         if (target && this.near(q, target, 700)) return this.assault(world, q, target, tick);
-        return this.advance(world, q, tick);
+        return this.pressLooseEnemy(world, q, tick) || this.advance(world, q, tick);
     }
+  }
+
+  /**
+   * Go for enemy soldiers who are not in any group.
+   *
+   * visibleEnemies() only reports GROUPS, and a player is under no obligation to
+   * form any -- their men can be scattered across the map, individually. Without
+   * this the machine sees nothing worth attacking, issues nothing but marches,
+   * and fights only by accidentally bumping into people.
+   *
+   * An attack order with no named target is an attack-move: walk there and
+   * engage whatever is met, which is exactly right for loose men who will not
+   * hold still as a formation anyway.
+   */
+  private pressLooseEnemy(world: World, q: Group, tick: number): boolean {
+    const s = world.soldiers;
+    const foe = 1 - this.player;
+    let best = -1;
+    let bestD = Infinity;
+    for (let i = 0; i < s.count; i++) {
+      if (s.alive[i] !== 1 || s.player[i] !== foe) continue;
+      if (!world.canSee(this.player, i)) continue;
+      const dx = s.x[i] - q.anchorX;
+      const dy = s.y[i] - q.anchorY;
+      const d = dx * dx + dy * dy;
+      // Ties on soldier index, so two peers pick the same man.
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    if (best < 0) return false;
+    world.orders.issue(
+      { kind: "attack", squad: q.id, target: -1, path: [s.x[best], s.y[best]] },
+      this.player,
+      tick,
+    );
+    return true;
   }
 
   private assault(world: World, q: Group, target: Group, tick: number): boolean {
