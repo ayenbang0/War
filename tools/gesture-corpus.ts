@@ -466,5 +466,186 @@ export function groupCases(): Case[] {
     });
   }
 
+  return cases.concat(splitAndRecoverCases());
+}
+
+/**
+ * Adversarial cases for the two verbs reported as colliding.
+ *
+ * Split and recover are the two most easily stolen readings in the vocabulary.
+ * A split is a straight open stroke, which is also what a move and a column
+ * glyph look like; a recover is a large closed stroke, which is also what a
+ * patrol area and a hold look like -- and heart-versus-ring is decided by a
+ * hull-fill margin of only about 0.05.
+ *
+ * Every case below is classified in a scene where the thing it could be
+ * MISTAKEN for is also legal: a heart with the group verbs live so patrolArea
+ * competes for it, a cut with the enemy on the board so attack competes for it.
+ * A corpus that tests a gesture where nothing else could win hands over the
+ * answer.
+ */
+export function splitAndRecoverCases(): Case[] {
+  const rnd = makeRng(0x2f9a71c3);
+  const cases: Case[] = [];
+  const J = 2.5;
+
+  // -- recover, drawn small: over span > scale but under the hold span, which
+  //    is the band where hold competes for it.
+  for (let i = 0; i < 6; i++) {
+    const size = 95 + i * 18;
+    cases.push({
+      expected: "recover",
+      note: "small heart size " + size + ", hold competing",
+      ctx: groupContext(),
+      points: stroke(heart(FRIEND_X + 520, FRIEND_Y - 40, size, (i - 3) * 0.1, 44), 60, J, rnd),
+    });
+  }
+
+  // -- recover with only ONE squad selected. Gating this behind "two or more
+  //    selected" is what made recover unusable on the single battered company
+  //    you actually wanted to stand down.
+  for (let i = 0; i < 5; i++) {
+    const size = 170 + i * 45;
+    cases.push({
+      expected: "recover",
+      note: "heart with a single squad selected",
+      ctx: context(0),
+      points: stroke(heart(FRIEND_X + 430, FRIEND_Y, size, (i - 2) * 0.18, 46), 62, J, rnd),
+    });
+  }
+
+  // -- recover drawn ON TOP of the group. A heart over your own line begins on
+  //    a squad, so this is where the anchor rule and the formation glyph both
+  //    get their chance to steal it.
+  for (let i = 0; i < 5; i++) {
+    const size = 210 + i * 55;
+    cases.push({
+      expected: "recover",
+      note: "heart drawn over the group itself",
+      ctx: groupContext(),
+      points: stroke(heart(FRIEND_X, FRIEND_Y, size, (i - 2) * 0.12, 46), 66, J, rnd),
+    });
+  }
+
+  // -- recover drawn hastily. Heavy jitter and few sample points is what a fast
+  //    mouse drag produces, and it pushes a heart's hull fill UP toward the
+  //    ring threshold.
+  for (let i = 0; i < 5; i++) {
+    const size = 230 + i * 50;
+    cases.push({
+      expected: "recover",
+      note: "hasty heart, heavy jitter",
+      ctx: groupContext(),
+      points: stroke(heart(FRIEND_X + 480, FRIEND_Y + 120, size, (i - 2) * 0.2, 34), 30, 9, rnd),
+    });
+  }
+
+  // -- the dangerous direction: a LUMPY ring must stay a patrol area. A shaky
+  //    hand lowers a ring's hull fill, and low fill is the whole heart test.
+  for (let i = 0; i < 6; i++) {
+    const r = 430 + i * 70;
+    const verts: Point[] = [];
+    for (let k = 0; k <= 40; k++) {
+      const a = (k / 40) * Math.PI * 2;
+      const rr = r * (1 + Math.sin(a * 3 + i) * 0.11 + Math.sin(a * 7) * 0.05);
+      // Centred well clear of the enemy: a ring that happens to END on an enemy
+      // is an attack, and rightly so, which would test nothing about hull fill.
+      verts.push({ x: FRIEND_X - 170 + Math.cos(a) * rr, y: FRIEND_Y + Math.sin(a) * rr });
+    }
+    cases.push({
+      expected: "patrolArea",
+      note: "lumpy ring radius " + r + " must not read as a heart",
+      ctx: groupContext(),
+      points: stroke(verts, 70, 7, rnd),
+    });
+  }
+
+  // -- a lumpy ring with ONE squad selected is an ordinary patrol, not recover.
+  for (let i = 0; i < 4; i++) {
+    const r = 300 + i * 90;
+    const verts: Point[] = [];
+    for (let k = 0; k <= 40; k++) {
+      const a = (k / 40) * Math.PI * 2;
+      const rr = r * (1 + Math.sin(a * 4 + i) * 0.1);
+      verts.push({ x: FRIEND_X - 140 + Math.cos(a) * rr, y: FRIEND_Y + Math.sin(a) * rr });
+    }
+    cases.push({
+      expected: "patrol",
+      note: "lumpy ring, single squad selected",
+      ctx: context(0),
+      points: stroke(verts, 66, 6, rnd),
+    });
+  }
+
+  // -- split at many angles, none beginning on a squad ---------------------
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI;
+    const dx = Math.cos(a) * 430;
+    const dy = Math.sin(a) * 430;
+    cases.push({
+      expected: "split",
+      note: "cut at " + a.toFixed(2) + " rad",
+      ctx: groupContext(),
+      points: stroke(
+        [{ x: FRIEND_X - dx, y: FRIEND_Y - dy }, { x: FRIEND_X + dx, y: FRIEND_Y + dy }],
+        34, J, rnd,
+      ),
+    });
+  }
+
+  // -- a cut passing CLOSE to a squad without beginning on it. A few pixels is
+  //    how the formation reading used to steal a split.
+  for (let i = 0; i < 5; i++) {
+    const off = 70 + i * 22;
+    cases.push({
+      expected: "split",
+      note: "cut passing " + off + " from a squad",
+      ctx: groupContext(),
+      points: stroke(
+        [
+          { x: FRIEND_X - 150 + off, y: FRIEND_Y - 430 },
+          { x: FRIEND_X - 150 + off, y: FRIEND_Y + 430 },
+        ],
+        34, J, rnd,
+      ),
+    });
+  }
+
+  // -- a straight stroke ending on the enemy is an ATTACK even with a group
+  //    selected. Hard evidence beats shape, or ordering a group to charge
+  //    would cut it in half instead.
+  for (let i = 0; i < 5; i++) {
+    const off = (i - 2) * 16;
+    cases.push({
+      expected: "attack",
+      note: "group charge, straight onto the enemy",
+      ctx: groupContext(),
+      points: stroke(
+        [{ x: FRIEND_X + 200, y: FRIEND_Y + off }, { x: ENEMY_X + off, y: ENEMY_Y + off * 0.5 }],
+        44, J, rnd,
+      ),
+    });
+  }
+
+  // -- a curved stroke is not a cut. With a group selected it must still be a
+  //    move, or a group could never be walked round anything.
+  for (let i = 0; i < 5; i++) {
+    cases.push({
+      expected: "move",
+      note: "swept arc with a group selected",
+      ctx: groupContext(),
+      points: stroke(
+        [
+          { x: FRIEND_X + 220, y: FRIEND_Y - 40 },
+          { x: FRIEND_X + 430, y: FRIEND_Y - 320 - i * 30 },
+          // Stops well short of the enemy: ending on one would make this an
+          // attack, which is correct behaviour and not what this case probes.
+          { x: FRIEND_X + 640, y: FRIEND_Y - 30 },
+        ],
+        52, J, rnd,
+      ),
+    });
+  }
+
   return cases;
 }

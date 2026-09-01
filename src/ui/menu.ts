@@ -9,6 +9,7 @@
  */
 
 import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "../content/unit-types.ts";
+import { unitIconCanvas } from "../render/unit-icon.ts";
 import { DOCTRINES, DOCTRINE_IDS, type DoctrineId } from "../content/doctrines.ts";
 import { DIFFICULTIES, DIFFICULTY_IDS, type DifficultyId } from "../content/difficulty.ts";
 import { MAX_SQUADS, cost, validate, type ArmyList } from "../content/army.ts";
@@ -131,6 +132,12 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
     for (const id of UNIT_TYPE_IDS) {
       const u = UNIT_TYPES[id];
       const row = el("div", "unit");
+
+      // The counter you will actually be looking for on the field, drawn by the
+      // same code that draws it there.
+      const icon = el("div", "unit-icon");
+      icon.appendChild(unitIconCanvas(id, 40));
+      row.appendChild(icon);
 
       const head = el("div", "unit-head");
       head.appendChild(el("span", "unit-name", u.name));

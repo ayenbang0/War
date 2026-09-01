@@ -45,15 +45,20 @@
   .budget.over { color: #8c3a34; }
   .roster { display: grid; gap: 6px; }
   .unit {
-    display: grid; grid-template-columns: 1fr auto; gap: 2px 14px; align-items: center;
+    display: grid; grid-template-columns: 44px 1fr auto; gap: 2px 12px; align-items: center;
     border: 1px solid #cbbc9c; border-radius: 3px; padding: 7px 10px; background: #efe8d6;
   }
-  .unit-head { display: flex; gap: 10px; align-items: baseline; }
+  .unit-icon {
+    grid-column: 1; grid-row: 1 / span 3; display: flex;
+    align-items: center; justify-content: center;
+    border: 1px solid #d5c7a6; border-radius: 2px; background: #e5dcc4;
+  }
+  .unit-head { grid-column: 2; display: flex; gap: 10px; align-items: baseline; }
   .unit-name { font-weight: 600; }
   .unit-cost { color: #7a6848; font-size: 11px; }
-  .unit-role { grid-column: 1; color: #5f5138; font-size: 12px; }
-  .unit-stats { grid-column: 1; color: #8a7856; font-size: 11px; }
-  .unit-controls { grid-column: 2; grid-row: 1 / span 3; display: flex; align-items: center; gap: 8px; }
+  .unit-role { grid-column: 2; color: #5f5138; font-size: 12px; }
+  .unit-stats { grid-column: 2; color: #8a7856; font-size: 11px; }
+  .unit-controls { grid-column: 3; grid-row: 1 / span 3; display: flex; align-items: center; gap: 8px; }
   .step { width: 28px; text-align: center; padding: 4px 0; }
   .count { min-width: 18px; text-align: center; font-weight: 600; }
   .problems { color: #8c3a34; min-height: 1.4em; margin: 10px 0 0; font-size: 12px; }

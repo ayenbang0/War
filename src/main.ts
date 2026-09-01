@@ -180,6 +180,8 @@ let hudTimer = 0;
 let cachedHash = hashWorld(world);
 const MAX_STEPS_PER_FRAME = 5;
 
+let deployFogTick = 0;
+
 function frame(now: number): void {
   const dtReal = Math.min((now - last) / 1000, 0.25);
   last = now;
@@ -202,6 +204,13 @@ function frame(now: number): void {
     }
     if (steps === MAX_STEPS_PER_FRAME) accumulator = 0;
   }
+
+  // Deployment freezes the match, so the sim's vision sweep never runs and the
+  // fog would sit at "never seen" everywhere -- you would be setting your army
+  // out on a blacked-out map, unable to read the ground you were choosing.
+  // Light it from here instead. Throttled because nothing else is competing for
+  // the frame and there is no reason to re-stamp 160 discs sixty times a second.
+  if (world.deploying && deployFogTick++ % 6 === 0) world.lightGround();
 
   // During deployment the pen drags men into position instead of ordering them.
   if (world.deploying && pen.drawing && pen.points.length > 1 && commander.selected.length > 0) {

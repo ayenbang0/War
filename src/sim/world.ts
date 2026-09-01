@@ -1012,11 +1012,21 @@ export class World {
    * subject to the same fog is only credible if there is not a second, more
    * generous path for it.
    */
-  private updateVision(): void {
-    if (this.tick % SIGHT_INTERVAL !== 0) return;
+  /**
+   * Light the ground each army can currently see, and nothing else.
+   *
+   * Split out of updateVision so it can be run while the world is NOT ticking.
+   * Deployment freezes the match, so vision never swept, so every fog cell sat
+   * at "never seen" and the player set their army out on a blacked-out map --
+   * unable to read the ground they were choosing.
+   *
+   * This deliberately touches only FogField, never s.seen or g.seenBy. The fog
+   * grid is not hashed; seenBy is. Keeping off the hashed state means calling
+   * this outside the tick loop cannot desync a peer or move a golden.
+   */
+  lightGround(): void {
     const s = this.soldiers;
     for (const f of this.fog) f.beginUpdate();
-
     for (let i = 0; i < s.count; i++) {
       if (s.alive[i] !== 1) continue;
       // Every soldier lights its own surroundings, grouped or not. No unit
@@ -1025,6 +1035,12 @@ export class World {
         s.x[i], s.y[i], effectiveSight(this.terrain, this.stats(i).sight, s.x[i], s.y[i]),
       );
     }
+  }
+
+  private updateVision(): void {
+    if (this.tick % SIGHT_INTERVAL !== 0) return;
+    const s = this.soldiers;
+    this.lightGround();
 
     // Who can be perceived by whom, once per tick.
     for (let i = 0; i < s.count; i++) {

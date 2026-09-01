@@ -1947,6 +1947,49 @@ section("deployment");
     check("a lasso gathers men while setting out", w3.groups.length === 1,
       w3.groups.length + " groups, said: " + said);
   }
+
+  // Split and recover must be refused while setting out, like every other
+  // order. Only select, lasso and formation are legal before the battle starts.
+  // These two are checked by name because they were added late and are the two
+  // that reach the world through their own code paths.
+  {
+    const w4 = new World({ seed: 24, tilesWide: 60, tilesHigh: 60, soldierCapacity: 512 });
+    const left: number[] = [];
+    const right: number[] = [];
+    for (let i = 0; i < 12; i++) left.push(w4.spawnSoldier(0, "line", 800 + (i % 4) * 16, 900 + ((i / 4) | 0) * 16, 0));
+    for (let i = 0; i < 12; i++) right.push(w4.spawnSoldier(0, "line", 1200 + (i % 4) * 16, 900 + ((i / 4) | 0) * 16, 0));
+    for (let i = 0; i < 6; i++) w4.spawnSoldier(1, "line", 2400, 900, M.PI);
+    const a = w4.createGroup(0, left) as Group;
+    const b = w4.createGroup(0, right) as Group;
+    w4.deploying = true;
+    const cmd4 = new Commander(w4, 0);
+    cmd4.selected = [a.id, b.id];
+
+    const groupsBefore = w4.groups.length;
+    // A cut between the two groups, drawn clear of both.
+    const cut: { x: number; y: number }[] = [];
+    for (let i = 0; i < 30; i++) cut.push({ x: 1080, y: 600 + i * 24 });
+    const cutSaid = cmd4.commit(cut);
+    check("a split does nothing while setting out",
+      w4.groups.length === groupsBefore && w4.orders.size === 0,
+      w4.groups.length + " groups, " + w4.orders.size + " queued, said: " + cutSaid);
+
+    // A heart drawn on open ground beside the men.
+    cmd4.selected = [a.id, b.id];
+    const heartPts: { x: number; y: number }[] = [];
+    for (let i = 0; i <= 46; i++) {
+      const t = (i / 46) * M.PI * 2;
+      const hx = 16 * M.sin(t) * M.sin(t) * M.sin(t);
+      const hy = -(13 * M.cos(t) - 5 * M.cos(2 * t) - 2 * M.cos(3 * t) - M.cos(4 * t));
+      heartPts.push({ x: 1000 + (hx / 16) * 260, y: 1500 + (hy / 16) * 260 });
+    }
+    const heartSaid = cmd4.commit(heartPts);
+    check("a recover does nothing while setting out",
+      a.recoverUntil === 0 && b.recoverUntil === 0 && w4.orders.size === 0,
+      "recoverUntil " + a.recoverUntil + "/" + b.recoverUntil + ", said: " + heartSaid);
+    check("and the player is told why, for both",
+      cutSaid.length > 0 && heartSaid.length > 0, cutSaid + " | " + heartSaid);
+  }
 }
 
 // -- 9a4. a glyph on your men beats a cut across the map -----------------------
