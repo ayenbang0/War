@@ -177,6 +177,8 @@ export type Group = {
   spellReady: number;
   /** Fraction of members standing in their slots. */
   cohesion: number;
+  /** Members who broke ranks to fight last tick. Drives the halt in contact. */
+  engaged: number;
   kills: number;
   losses: number;
   casualtiesThisTick: number;

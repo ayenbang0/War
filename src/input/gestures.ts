@@ -389,16 +389,13 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
     return { kind: "attack", squads: subjects, target, path: toPath(simple) };
   }
 
-  // 1b. Group verbs. Available only with two or more squads selected, and only
-  //     for strokes that did NOT start on a squad -- the subject rule wins, so
-  //     drawing from a squad is always that squad's own order and a group can
-  //     still be sent somewhere one squad at a time.
-  if (isGroup(ctx) && anchored === null) {
-    const group = groupVerb(raw, ctx, simple, closed, span, subjects);
-    if (group) return group;
-  }
-
-  // 2. Formation. Only when the stroke is centred on the subject: a glyph is
+  // 2. Formation. A glyph drawn ON the subject re-forms it, and this is
+  //    resolved BEFORE the group verbs on purpose. Both a formation glyph and a
+  //    split are straight strokes; the difference is whether the stroke sits on
+  //    your men or out on the map. Testing split first meant a column drawn a
+  //    little off-centre -- starting just beside the group rather than across
+  //    it -- cut the selection in half instead of forming it up, which is a
+  //    miserable thing to have happen by a few pixels.
   //    drawn ON the squad, an order is drawn away from it.
   if (subject) {
     const c = centroid(raw);
@@ -409,7 +406,19 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
     }
   }
 
-  // 3. Closed strokes: hold versus patrol, split by how much ground is enclosed.
+  // 3. Group verbs. Only with two or more squads selected, and only for
+  //    strokes that did NOT start on a squad -- the subject rule wins, so
+  //    drawing from a squad is always that squad's own order and a group can
+  //    still be sent somewhere one squad at a time.
+  //     for strokes that did NOT start on a squad -- the subject rule wins, so
+  //     drawing from a squad is always that squad's own order and a group can
+  //     still be sent somewhere one squad at a time.
+  if (isGroup(ctx) && anchored === null) {
+    const group = groupVerb(raw, ctx, simple, closed, span, subjects);
+    if (group) return group;
+  }
+
+  // 4. Closed strokes: hold versus patrol, split by how much ground is enclosed.
   if (closed) {
     const holdSpan = Math.min(HOLD_SPAN_BASE + scale * HOLD_SPAN_PER_RADIUS, HOLD_SPAN_MAX);
     if (span <= holdSpan) {
@@ -421,7 +430,7 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
     return { kind: "patrol", squads: subjects, path: toPath(simple) };
   }
 
-  // 4. Open strokes: move versus retreat. Retreat has to earn it -- heading
+  // 5. Open strokes: move versus retreat. Retreat has to earn it -- heading
   //    home AND opening real distance from the nearest enemy. Without the
   //    second test every backward reposition would read as a rout.
   if (subject) {

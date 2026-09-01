@@ -23,7 +23,7 @@ import { atan2, clamp, cos, dist, max, min, rotateToward, sin, sqrt, TAU } from 
 import { Rng, Stream } from "./rng.ts";
 import { OrderQueue, type Order } from "./orders.ts";
 import { generateTerrain, TerrainGrid, TERRAIN_INFO } from "./terrain.ts";
-import { formationSlots, formationRadius } from "./formations.ts";
+import { formationSlots, formationRadius, type FormationShape } from "./formations.ts";
 import { advanceToward } from "./movement.ts";
 import { SpatialHash } from "./spatial.ts";
 import { clearLine, findPath } from "./pathfind.ts";
@@ -66,6 +66,27 @@ const ARRIVE_EASE = 4;
 const FORMATION_PACE = 0.85;
 const IN_SLOT = 7;
 const STRANDED_WADE = 0.35;
+/**
+ * How far a hand-to-hand soldier will break ranks to get at an enemy.
+ *
+ * Men with spears do not march politely past someone trying to kill them, and
+ * before this they did exactly that: fighting only happened where a formation
+ * slot happened to put two enemies within reach, so a line ordered across the
+ * field would walk straight through an enemy company and out the other side.
+ * Deliberately short -- this is stepping out of line to meet someone already on
+ * top of you, not licence to charge off after anything on the horizon.
+ */
+const ENGAGE_RANGE = 110;
+/**
+ * Share of a group that must be fighting before the group itself halts.
+ *
+ * Soldiers breaking ranks is not enough on its own: the anchor kept walking its
+ * route and simply dragged the fight along behind it, so a line "stopped to
+ * fight" while still crossing the map. A body of troops in contact stays in
+ * contact until the matter is settled -- and a march order is not a reason to
+ * turn your back on someone with a spear.
+ */
+const ENGAGE_HALT_FRACTION = 0.2;
 /** Cell size of the sight hash, in world units. */
 const SIGHT_CELL = 128;
 /** Nothing on the field perceives further than this. Bounds every sight query. */
@@ -285,6 +306,7 @@ export class World {
       recoverUntil: 0,
       spellReady: 0,
       cohesion: 1,
+      engaged: 0,
       kills: 0,
       losses: 0,
       casualtiesThisTick: 0,
@@ -327,6 +349,23 @@ export class World {
       this.soldiers.slot[m] = -1;
     }
     this.groups.splice(at, 1);
+  }
+
+  /**
+   * Re-form a group immediately, outside the order queue.
+   *
+   * Needed during deployment, where the world is deliberately not ticking:
+   * orders queue but never drain, so a formation issued while setting out would
+   * sit unapplied and then all fire at once the instant the battle began.
+   * Dressing your ranks before the off is arranging the board, not commanding
+   * in the field, so it applies directly.
+   */
+  setFormation(groupId: number, shape: FormationShape): boolean {
+    const g = this.groupById(groupId);
+    if (!g) return false;
+    g.shape = shape;
+    this.reflow(g);
+    return true;
   }
 
   /** Living members of a group. */
@@ -601,6 +640,15 @@ export class World {
         if (g.path.length < 2) continue;
       }
 
+      // In contact, and not withdrawing: stand and finish it. The order is not
+      // forgotten -- the route is kept and resumed once the fight is over.
+      const living = this.liveCount(g);
+      const holding =
+        g.stance !== "retreat" &&
+        living > 0 &&
+        g.engaged / living >= ENGAGE_HALT_FRACTION;
+      if (holding) continue;
+
       const speed = this.groupSpeed(g);
       if (speed <= 0) {
         g.path.length = 0;
@@ -739,7 +787,16 @@ export class World {
     const s = this.soldiers;
     this.hash.ensureCapacity(s.count);
     this.hash.clear();
-    for (let i = 0; i < s.count; i++) if (s.alive[i] === 1) this.hash.insert(i, s.x[i], s.y[i]);
+    this.sightHash.ensureCapacity(s.count);
+    this.sightHash.clear();
+    for (let i = 0; i < s.count; i++) {
+      if (s.alive[i] !== 1) continue;
+      this.hash.insert(i, s.x[i], s.y[i]);
+      // The coarse grid is rebuilt every tick even though perception only
+      // sweeps every few: engagement targeting reads it too, and a stale
+      // position is tolerable for fog but not for deciding who to charge.
+      this.sightHash.insert(i, s.x[i], s.y[i]);
+    }
   }
 
   // -- layers 2 and 3: slot projection, then per-soldier steering ---------------
@@ -753,6 +810,7 @@ export class World {
       const c = cos(g.facing);
       const sn = sin(g.facing);
       let inSlot = 0;
+      let fighting = 0;
 
       for (const id of living) {
         const slot = s.slot[id];
@@ -777,17 +835,59 @@ export class World {
             }
           }
         }
-        if (this.steer(id, tx, ty, speed, g.facing)) inSlot++;
+        // Melee soldiers break ranks for anyone already on top of them. A
+        // withdrawal is the one order that overrides this -- disengaging is the
+        // whole point of it -- and a group standing down to recover is helpless
+        // by design and does not get to start fights either.
+        const mayEngage = g.stance !== "retreat" && g.stance !== "recover";
+        const foe = mayEngage ? this.engagementFor(id) : -1;
+        if (foe >= 0) {
+          tx = s.x[foe];
+          ty = s.y[foe];
+        }
+
+        if (foe >= 0) fighting++;
+        if (this.steer(id, tx, ty, speed, g.facing) && foe < 0) inSlot++;
       }
       g.cohesion = inSlot / living.length;
+      g.engaged = fighting;
     }
 
-    // Soldiers nobody has grouped still stand their ground and jostle for room.
-    // They are entities in their own right, not orphans waiting for a squad.
+    // Soldiers nobody has grouped still stand their ground, jostle for room,
+    // and go for anyone who comes at them. They are entities in their own
+    // right, not orphans waiting for a squad.
     for (let id = 0; id < s.count; id++) {
       if (s.alive[id] !== 1 || s.group[id] >= 0) continue;
-      this.steer(id, s.x[id], s.y[id], 0, s.facing[id]);
+      const foe = this.engagementFor(id);
+      if (foe >= 0) this.steer(id, s.x[foe], s.y[foe], 0, s.facing[id]);
+      else this.steer(id, s.x[id], s.y[id], 0, s.facing[id]);
     }
+  }
+
+  /**
+   * The enemy this soldier should be walking at, or -1 to hold its place.
+   *
+   * Hand-to-hand only. Archers and engines have their own reach and are worse
+   * than useless in a melee, so they keep their slot and shoot; sending them to
+   * close would throw away the whole reason they are behind the front rank.
+   * Nearest wins, ties on index so both peers pick the same man.
+   */
+  private engagementFor(id: number): number {
+    const s = this.soldiers;
+    if (this.stats(id).range > MELEE_RANGE) return -1;
+    const n = this.sightHash.query(s.x[id], s.y[id], ENGAGE_RANGE, this.watchers);
+    let best = -1;
+    let bestD = ENGAGE_RANGE * ENGAGE_RANGE;
+    for (let k = 0; k < n; k++) {
+      const other = this.watchers[k];
+      if (s.alive[other] !== 1 || s.player[other] === s.player[id]) continue;
+      const dd = d2(s.x[id], s.y[id], s.x[other], s.y[other]);
+      if (dd < bestD || (dd === bestD && other < best)) {
+        bestD = dd;
+        best = other;
+      }
+    }
+    return best;
   }
 
   /** One soldier's pull toward its slot, plus separation. True if settled. */
@@ -860,11 +960,8 @@ export class World {
     const s = this.soldiers;
     for (const f of this.fog) f.beginUpdate();
 
-    this.sightHash.ensureCapacity(s.count);
-    this.sightHash.clear();
     for (let i = 0; i < s.count; i++) {
       if (s.alive[i] !== 1) continue;
-      this.sightHash.insert(i, s.x[i], s.y[i]);
       // Every soldier lights its own surroundings, grouped or not. No unit
       // perceives further than its own sight radius allows.
       this.fog[s.player[i]].stamp(

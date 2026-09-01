@@ -281,7 +281,9 @@ function drawHud(): void {
       "   holding " + world.pointsHeldBy(PLAYER) + "/" + world.controlPoints.length,
     );
   }
-  if (world.deploying) lines.push("", "set out your men, then ENTER");
+  if (world.deploying) {
+    lines.push("", "loop to group - glyph to form up - drag to place", "ENTER to begin");
+  }
   else if (world.outcome) {
     lines.push("", world.outcome.winner === PLAYER ? "VICTORY" : world.outcome.winner < 0 ? "DRAW" : "DEFEAT");
   } else if (pen.lastAction) lines.push("", pen.lastAction);

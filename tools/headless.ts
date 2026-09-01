@@ -73,6 +73,7 @@ import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "../src/content/unit-
 import type { Order } from "../src/sim/orders.ts";
 import { runConfusionMatrix, printMatrix } from "./test-gestures.ts";
 import { recognize, type GestureContext, type SquadView } from "../src/input/gestures.ts";
+import { Commander } from "../src/input/commander.ts";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -1274,6 +1275,76 @@ section("grouping");
     "20:" + ratio("line", 20).toFixed(1) + " 240:" + ratio("line", 240).toFixed(1));
 }
 
+// -- 8g3. melee soldiers engage rather than walk past --------------------------
+
+section("engagement");
+{
+  /**
+   * March a group past a screen of enemies standing in its way.
+   *
+   * The enemies are left UNGROUPED and spread across a wide band on purpose:
+   * a grouped enemy re-forms into a compact block that a route can curve
+   * around, and then this measures pathfinding rather than whether men stop to
+   * fight. A loose screen cannot be side-stepped, and it exercises the
+   * ungrouped case at the same time.
+   */
+  function marchPast(stance: "move" | "retreat"): {
+    passed: boolean; contact: boolean; endX: number; dead: number;
+  } {
+    const w = new World({ seed: 31, tilesWide: 100, tilesHigh: 60, soldierCapacity: 256 });
+    const mine: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      mine.push(w.spawnSoldier(0, "line", 800 + (i % 5) * 13, 880 + ((i / 5) | 0) * 13, 0));
+    }
+    for (let i = 0; i < 22; i++) w.spawnSoldier(1, "line", 1600, 620 + i * 30, M.PI);
+    const g = w.createGroup(0, mine) as Group;
+
+    w.orders.issue(
+      stance === "retreat"
+        ? { kind: "retreat", squad: g.id, path: [2600, 900] }
+        : { kind: "move", squad: g.id, path: [2600, 900] },
+      0,
+      1,
+    );
+    let contact = false;
+    for (let t = 0; t < TICK_RATE * 80; t++) {
+      w.step();
+      if (w.events.length > 0) contact = true;
+    }
+    let dead = 0;
+    for (let i = 0; i < w.soldiers.count; i++) if (w.soldiers.alive[i] !== 1) dead++;
+    return { passed: g.anchorX > 2300, contact, endX: g.anchorX, dead };
+  }
+
+  const advancing = marchPast("move");
+  check("a marching line stops and fights rather than walking past",
+    advancing.contact && !advancing.passed,
+    "contact " + advancing.contact + ", ended at x=" + advancing.endX.toFixed(0) +
+    ", " + advancing.dead + " dead");
+
+  // A withdrawal is the one order that overrides this. Disengaging IS the order.
+  const withdrawing = marchPast("retreat");
+  check("a withdrawal pushes through instead of stopping to fight",
+    withdrawing.endX > advancing.endX + 200,
+    "retreat reached x=" + withdrawing.endX.toFixed(0) +
+    " vs advance x=" + advancing.endX.toFixed(0));
+
+  // Shooters must not charge: their whole value is standing behind the line.
+  {
+    const w = new World({ seed: 32, tilesWide: 100, tilesHigh: 60, soldierCapacity: 256 });
+    const archers: number[] = [];
+    for (let i = 0; i < 16; i++) archers.push(w.spawnSoldier(0, "archer", 800 + (i % 4) * 13, 900 + ((i / 4) | 0) * 13, 0));
+    const foe: number[] = [];
+    for (let i = 0; i < 16; i++) foe.push(w.spawnSoldier(1, "line", 940 + (i % 4) * 13, 900 + ((i / 4) | 0) * 13, M.PI));
+    const g = w.createGroup(0, archers) as Group;
+    w.createGroup(1, foe);
+    const startX = g.anchorX;
+    for (let t = 0; t < TICK_RATE * 12; t++) w.step();
+    check("archers hold their ground instead of charging",
+      Math.abs(g.anchorX - startX) < 40, "moved " + (g.anchorX - startX).toFixed(0));
+  }
+}
+
 // -- 8h. army building ---------------------------------------------------------
 
 section("army");
@@ -1652,6 +1723,154 @@ section("levels");
     open ? (share(open, Terrain.Forest) * 100).toFixed(0) + "% wooded" : "missing");
   check("the high ground actually has hills", hills !== undefined && share(hills, Terrain.Hill) > 0.2,
     hills ? (share(hills, Terrain.Hill) * 100).toFixed(0) + "% hill" : "missing");
+}
+
+// -- 9a3. what the pen may do while setting out --------------------------------
+
+section("deployment");
+{
+  // Deployment is for arranging an army, not commanding it. Selecting,
+  // gathering and dressing ranks must work; every battlefield order must not.
+  const w = new World({ seed: 21, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+  const mine: number[] = [];
+  for (let i = 0; i < 20; i++) mine.push(w.spawnSoldier(0, "line", 900 + (i % 5) * 13, 900 + ((i / 5) | 0) * 13, 0));
+  const foe: number[] = [];
+  for (let i = 0; i < 20; i++) foe.push(w.spawnSoldier(1, "line", 1700 + (i % 5) * 13, 900 + ((i / 5) | 0) * 13, M.PI));
+  const g = w.createGroup(0, mine) as Group;
+  w.createGroup(1, foe);
+  w.deploying = true;
+
+  const cmd = new Commander(w, 0);
+  cmd.selected = [g.id];
+
+  /** Straight stroke well clear of the men: a march when the battle is on. */
+  function marchStroke(): { x: number; y: number }[] {
+    const out: { x: number; y: number }[] = [];
+    for (let i = 0; i < 30; i++) out.push({ x: 940 + i * 20, y: 1400 });
+    return out;
+  }
+  /** A tight closed loop out on the map: a hold order. */
+  function holdStroke(): { x: number; y: number }[] {
+    const out: { x: number; y: number }[] = [];
+    for (let i = 0; i <= 30; i++) {
+      const t = (i / 30) * Math.PI * 2;
+      out.push({ x: 1400 + Math.cos(t) * 90, y: 1400 + Math.sin(t) * 90 });
+    }
+    return out;
+  }
+
+  const marchSaid = cmd.commit(marchStroke());
+  check("a march does nothing while setting out",
+    g.stance === "idle" && g.path.length === 0 && w.orders.size === 0,
+    "stance " + g.stance + ", queued " + w.orders.size + ", said: " + marchSaid);
+
+  cmd.selected = [g.id];
+  const holdSaid = cmd.commit(holdStroke());
+  check("a hold order does nothing while setting out",
+    g.stance === "idle" && w.orders.size === 0, "said: " + holdSaid);
+
+  check("the player is told why nothing happened", marchSaid.length > 0 && holdSaid.length > 0,
+    marchSaid);
+
+  // Nothing may sit queued waiting to fire the instant the battle starts.
+  w.deploying = false;
+  w.step();
+  check("no order was quietly banked for later",
+    g.stance === "idle" && g.path.length === 0, "stance " + g.stance);
+
+  // Formations MUST work, and must take effect immediately -- the world is not
+  // ticking, so anything left in the queue would never be applied.
+  {
+    const w2 = new World({ seed: 22, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    const men: number[] = [];
+    for (let i = 0; i < 20; i++) men.push(w2.spawnSoldier(0, "line", 900 + (i % 5) * 13, 900 + ((i / 5) | 0) * 13, 0));
+    for (let i = 0; i < 6; i++) w2.spawnSoldier(1, "line", 2400, 900, M.PI);
+    const q = w2.createGroup(0, men) as Group;
+    w2.deploying = true;
+    const cmd2 = new Commander(w2, 0);
+    cmd2.selected = [q.id];
+
+    check("a group starts square", q.shape === "square", q.shape);
+    // A stroke drawn across the group's front is the "line" glyph.
+    const glyph: { x: number; y: number }[] = [];
+    for (let i = 0; i < 24; i++) glyph.push({ x: q.anchorX, y: q.anchorY - 60 + i * 5 });
+    const said = cmd2.commit(glyph);
+    check("a formation glyph works while setting out", q.shape === "line",
+      "shape " + q.shape + ", said: " + said);
+    check("and it applies at once rather than queueing", w2.orders.size === 0,
+      w2.orders.size + " queued");
+  }
+
+  // Gathering men into a group must work: it is the whole point of deploying.
+  {
+    const w3 = new World({ seed: 23, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    for (let i = 0; i < 12; i++) w3.spawnSoldier(0, "line", 900 + (i % 4) * 16, 900 + ((i / 4) | 0) * 16, 0);
+    for (let i = 0; i < 6; i++) w3.spawnSoldier(1, "line", 2400, 900, M.PI);
+    w3.deploying = true;
+    const cmd3 = new Commander(w3, 0);
+    const loop: { x: number; y: number }[] = [];
+    for (let i = 0; i <= 36; i++) {
+      const t = (i / 36) * Math.PI * 2;
+      loop.push({ x: 930 + Math.cos(t) * 140, y: 920 + Math.sin(t) * 140 });
+    }
+    const said = cmd3.commit(loop);
+    check("a lasso gathers men while setting out", w3.groups.length === 1,
+      w3.groups.length + " groups, said: " + said);
+  }
+}
+
+// -- 9a4. a glyph on your men beats a cut across the map -----------------------
+
+section("glyph vs split");
+{
+  // Both a formation glyph and a split are straight strokes. What separates
+  // them is whether the stroke sits ON your men or out on the map -- and a
+  // column drawn slightly off-centre must still form up rather than cut the
+  // selection in half.
+  const R = 46;
+  const squads: SquadView[] = [
+    { id: 1, player: 0, x: 900, y: 900, radius: R, facing: 0, visible: true },
+    { id: 2, player: 0, x: 1300, y: 900, radius: R, facing: 0, visible: true },
+    { id: 3, player: 0, x: 900, y: 1300, radius: R, facing: 0, visible: true },
+    { id: 4, player: 0, x: 1300, y: 1300, radius: R, facing: 0, visible: true },
+  ];
+  const ctx = (selected: number[]): GestureContext =>
+    ({ player: 0, squads, selected, homeX: 0, pendingLine: null });
+
+  /** A straight stroke of `len` centred on (cx, cy), along `angle`. */
+  function glyph(cx: number, cy: number, angle: number, len: number): { x: number; y: number }[] {
+    const out: { x: number; y: number }[] = [];
+    for (let i = 0; i < 26; i++) {
+      const t = i / 25 - 0.5;
+      out.push({ x: cx + Math.cos(angle) * len * t, y: cy + Math.sin(angle) * len * t });
+    }
+    return out;
+  }
+
+  const all = [1, 2, 3, 4];
+
+  // Along the squad's own axis, centred on it: a column.
+  const onSquad = recognize(glyph(900, 900, 0, 80), ctx(all));
+  check("a glyph centred on a group forms it up, even with a group selected",
+    onSquad?.kind === "formation" && onSquad.shape === "column",
+    onSquad ? onSquad.kind + (onSquad.kind === "formation" ? "/" + onSquad.shape : "") : "null");
+
+  // The same glyph nudged off-centre, so it no longer STARTS on the squad.
+  const offCentre = recognize(glyph(900 + 34, 900 + 20, 0, 80), ctx(all));
+  check("an off-centre glyph still forms up rather than splitting",
+    offCentre?.kind === "formation",
+    offCentre ? offCentre.kind : "null");
+
+  // A long line drawn out on the map, clear of everyone: a cut.
+  const acrossMap = recognize(glyph(1100, 1100, Math.PI / 2, 900), ctx(all));
+  check("a line drawn clear of your men splits the group",
+    acrossMap?.kind === "split", acrossMap ? acrossMap.kind : "null");
+
+  // And with a single squad selected there is no group to cut, so the same
+  // stroke is simply a march.
+  const single = recognize(glyph(1100, 1100, Math.PI / 2, 900), ctx([1]));
+  check("with one squad selected the same line is a move",
+    single?.kind === "move", single ? single.kind : "null");
 }
 
 // -- 9b. selection context -----------------------------------------------------

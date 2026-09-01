@@ -8,7 +8,7 @@
  */
 
 import type { World } from "../sim/world.ts";
-import { recognize, gestureLabel, type GestureContext, type PendingLine, type Point, type Recognized, type SquadView } from "./gestures.ts";
+import { anchorSquad, recognize, gestureLabel, type GestureContext, type PendingLine, type Point, type Recognized, type SquadView } from "./gestures.ts";
 
 /**
  * Ticks between issuing an order and it taking effect. One tick keeps orders
@@ -31,6 +31,18 @@ const PAIR_WINDOW_MS = 1200;
 
 /** Footprint of a lone soldier, for hit-testing the pen against him. */
 const LOOSE_RADIUS = 9;
+
+/**
+ * What the pen may do while the board is being set out.
+ *
+ * Deployment is for arranging your army, not commanding it: you may select,
+ * gather men into groups, dress their ranks and pick them up and put them down.
+ * Marches, attacks, hold zones, patrols, withdrawals and standing down are all
+ * orders for a battle that has not started, so those strokes do nothing at all.
+ */
+const ALLOWED_WHILE_DEPLOYING: ReadonlySet<string> = new Set([
+  "select", "lasso", "formation",
+]);
 
 /** Loose soldiers get negative handles so they never collide with group ids. */
 function looseHandle(soldier: number): number {
@@ -175,7 +187,20 @@ export class Commander {
 
   /** Re-read an in-progress stroke. Pure and cheap, so it runs every move. */
   update(points: readonly Point[]): void {
-    this.preview = points.length > 1 ? recognize(points, this.context()) : null;
+    const read = points.length > 1 ? recognize(points, this.context()) : null;
+
+    // No ghost for a stroke that will do nothing. Previewing a march during
+    // deployment would promise an order the game is about to ignore, which is
+    // worse than showing nothing.
+    this.preview =
+      read && this.world.deploying && !ALLOWED_WHILE_DEPLOYING.has(read.kind) ? null : read;
+
+    // While setting out, touching one of your own groups picks it up, so
+    // placing men is a single motion rather than tap-then-drag.
+    if (this.world.deploying && points.length > 0) {
+      const grabbed = anchorSquad(this.context(), points[0]);
+      if (grabbed !== null && grabbed >= 0) this.selected = [grabbed];
+    }
   }
 
   cancel(): void {
@@ -187,6 +212,11 @@ export class Commander {
     const r = recognize(points, this.context());
     this.preview = null;
     if (!r) return "";
+
+    if (this.world.deploying && !ALLOWED_WHILE_DEPLOYING.has(r.kind)) {
+      this.clearPending();
+      return "not until the battle begins";
+    }
 
     if (r.kind === "select") {
       this.clearPending();
@@ -332,7 +362,10 @@ export class Commander {
           return;
         }
         case "formation":
-          this.world.orders.issue({ kind: "formation", squad: id, shape: r.shape }, this.player, tick);
+          // Applied directly while deploying, because nothing is ticking to
+          // drain the queue -- see World.setFormation.
+          if (this.world.deploying) this.world.setFormation(id, r.shape);
+          else this.world.orders.issue({ kind: "formation", squad: id, shape: r.shape }, this.player, tick);
           return;
       }
     });
