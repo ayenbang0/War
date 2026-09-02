@@ -707,5 +707,38 @@ export function splitAndRecoverCases(): Case[] {
     });
   }
 
+  // -- STROKE SPEED. A fast drag produces few sample points, a slow one
+  //    produces hundreds; the recogniser sees only the polyline, so both must
+  //    read the same. This is the one axis the rest of the corpus holds fixed.
+  const here = { x: FRIEND_X, y: FRIEND_Y };
+  for (const n of [4, 6, 10, 90, 200]) {
+    cases.push({
+      expected: "move",
+      note: "march sampled at " + n + " points",
+      ctx: context(0),
+      points: stroke([here, { x: FRIEND_X + 700, y: FRIEND_Y - 160 }], n, J, rnd),
+    });
+    cases.push({
+      expected: "attack",
+      note: "charge sampled at " + n + " points",
+      ctx: context(0),
+      points: stroke([here, { x: ENEMY_X, y: ENEMY_Y }], n, J, rnd),
+    });
+  }
+  for (const n of [14, 24, 120, 260]) {
+    cases.push({
+      expected: "patrol",
+      note: "ring sampled at " + n + " points",
+      ctx: context(0),
+      points: stroke(circle(FRIEND_X - 150, FRIEND_Y, 430, 0, 1, 40), n, J, rnd),
+    });
+    cases.push({
+      expected: "recover",
+      note: "heart sampled at " + n + " points",
+      ctx: context(0),
+      points: stroke(heart(FRIEND_X + 430, FRIEND_Y, 240, 0, 46), n, J, rnd),
+    });
+  }
+
   return cases;
 }

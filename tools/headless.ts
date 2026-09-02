@@ -2422,6 +2422,86 @@ section("glyph and cut never overlap");
   check("and a cut never re-forms it", !cutEverReshaped);
 }
 
+// -- 9b4. edge cases and pathologies -------------------------------------------
+
+section("edge cases");
+{
+  // A company of ONE. Formations divide by member count in several places.
+  {
+    const w = new World({ seed: 101, tilesWide: 60, tilesHigh: 60, soldierCapacity: 128 });
+    const lone = w.spawnSoldier(0, "line", 900, 900, 0);
+    for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 1700, 1700, M.PI);
+    const g = w.createGroup(0, [lone]) as Group;
+    for (let t = 0; t < TICK_RATE * 5; t++) w.step();
+    check("a company of one man is legal and stays finite",
+      g.members.length === 1 && Number.isFinite(g.anchorX) && Number.isFinite(g.radius),
+      "anchor " + g.anchorX.toFixed(0) + " radius " + g.radius.toFixed(1));
+  }
+
+  // A very large company. Slot tables are sized from membership.
+  {
+    const w = new World({ seed: 102, tilesWide: 90, tilesHigh: 90, soldierCapacity: 1024 });
+    const ids: number[] = [];
+    for (let i = 0; i < 240; i++) ids.push(w.spawnSoldier(0, "line", 900 + (i % 20) * 13, 900 + ((i / 20) | 0) * 13, 0));
+    for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 2400, 2400, M.PI);
+    const g = w.createGroup(0, ids) as Group;
+    for (let t = 0; t < TICK_RATE * 5; t++) w.step();
+    check("a 240-man company forms up without breaking",
+      g.slots.length === g.members.length * 2 && Number.isFinite(g.radius) && g.radius > 0,
+      g.members.length + " men, radius " + g.radius.toFixed(0));
+  }
+
+  // An order into impassable ground. The route must fail safely rather than
+  // marching men into a mountain or a river.
+  {
+    const w = new World({ seed: 103, tilesWide: 80, tilesHigh: 80, soldierCapacity: 256 });
+    const ids: number[] = [];
+    for (let i = 0; i < 10; i++) ids.push(w.spawnSoldier(0, "line", 900 + (i % 5) * 14, 900, 0));
+    for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 2200, 2200, M.PI);
+    const g = w.createGroup(0, ids) as Group;
+    // Find genuinely impassable ground to aim at.
+    let target: { x: number; y: number } | null = null;
+    for (let ty = 0; ty < 80 && !target; ty++) {
+      for (let tx = 0; tx < 80; tx++) {
+        if (TERRAIN_INFO[w.terrain.typeAt(tx, ty)].moveScale <= 0) {
+          target = { x: (tx + 0.5) * TILE_SIZE, y: (ty + 0.5) * TILE_SIZE };
+          break;
+        }
+      }
+    }
+    if (target) {
+      w.orders.issue({ kind: "move", squad: g.id, path: [target.x, target.y] }, 0, w.tick + 1);
+      for (let t = 0; t < TICK_RATE * 30; t++) w.step();
+      let drowned = 0;
+      for (const m of g.members) {
+        if (w.soldiers.alive[m] !== 1) continue;
+        if (TERRAIN_INFO[w.terrain.typeAtWorld(w.soldiers.x[m], w.soldiers.y[m])].moveScale <= 0) drowned++;
+      }
+      check("an order into impassable ground strands nobody in it", drowned === 0, drowned + " in it");
+    } else {
+      check("an order into impassable ground strands nobody in it", true, "no impassable ground on this map");
+    }
+  }
+
+  // Nobody may leave the map, however hard they are pushed at the edge.
+  {
+    const w = new World({ seed: 104, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    const ids: number[] = [];
+    for (let i = 0; i < 12; i++) ids.push(w.spawnSoldier(0, "line", 40 + (i % 4) * 12, 40 + ((i / 4) | 0) * 12, 0));
+    for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 1400, 1400, M.PI);
+    const g = w.createGroup(0, ids) as Group;
+    w.orders.issue({ kind: "move", squad: g.id, path: [-4000, -4000] }, 0, w.tick + 1);
+    for (let t = 0; t < TICK_RATE * 25; t++) w.step();
+    let off = 0;
+    for (const m of g.members) {
+      if (w.soldiers.alive[m] !== 1) continue;
+      if (w.soldiers.x[m] < 0 || w.soldiers.y[m] < 0 ||
+          w.soldiers.x[m] > w.terrain.worldWidth || w.soldiers.y[m] > w.terrain.worldHeight) off++;
+    }
+    check("men ordered off the map stay on it", off === 0, off + " off the edge");
+  }
+}
+
 // -- 9c. the account of the battle ---------------------------------------------
 
 section("after-action");

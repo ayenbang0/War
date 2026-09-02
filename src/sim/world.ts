@@ -1792,12 +1792,14 @@ export class World {
    */
   private updateMorale(): void {
     const s = this.soldiers;
-    const window = TICK_RATE * 3;
+    // NOT named `window`: this file must never touch browser globals, and a
+    // local shadowing one defeats the grep that audits exactly that.
+    const contactWindow = TICK_RATE * 3;
 
     for (let id = 0; id < s.count; id++) {
       if (s.alive[id] !== 1) continue;
       const g = this.groupOf(id);
-      const inContact = g ? this.tick - g.lastContact < window : false;
+      const inContact = g ? this.tick - g.lastContact < contactWindow : false;
 
       let friends = 0;
       let foes = 0;
