@@ -73,7 +73,8 @@ export class Renderer {
     // halo. Both armies: knowing roughly where an enemy body of troops is, once
     // you have seen it, is the whole reason to pull the camera back.
     if (cam.zoom < GROUP_HALO_ZOOM) this.drawGroupHalos(world, cam, viewer, now / 1000);
-    this.drawSoldiers(world, cam, prev, alpha, now);
+    else this.drawLastSeen(world, cam, viewer, now / 1000);
+    this.drawSoldiers(world, cam, prev, alpha, now, viewer);
     this.drawWorkings(world, cam, viewer, now);
     this.drawFields(world, cam, now);
     this.drawRecovering(world, cam, viewer);
@@ -131,13 +132,14 @@ export class Renderer {
    * wheels -- strokes once more.
    */
   private drawSoldiers(
-    world: World, cam: Camera, prev: Snapshot, alpha: number, now: number,
+    world: World, cam: Camera, prev: Snapshot, alpha: number, now: number, viewer: number,
   ): void {
     const ctx = this.ctx;
     const s = world.soldiers;
     const b = cam.bounds();
     const m = 60 / cam.zoom;
     const detailed = cam.zoom >= SOLDIER_LOD_ZOOM;
+    const viewerBit = viewer === 0 ? 1 : 2;
 
     for (const player of [0, 1]) {
       for (const type of UNIT_TYPE_IDS) {
@@ -145,6 +147,15 @@ export class Renderer {
         const shown: number[] = [];
         for (let id = 0; id < s.count; id++) {
           if (s.alive[id] !== 1 || s.player[id] !== player) continue;
+          // YOU CANNOT SEE WHAT NOBODY IS LOOKING AT. An enemy is drawn only
+          // while some man of yours actually has eyes on him -- unscouted
+          // ground shows you nothing, and a screen of smoke shows you nothing.
+          // Without this the fog hid only the ground, scouting bought you
+          // nothing, and every counter on the map was legible from the start.
+          //
+          // They do not simply blink out: a company you have lost keeps a
+          // fading mark where you last saw it, drawn below.
+          if (player !== viewer && (s.seen[id] & viewerBit) === 0) continue;
           if (world.typeOf(id) !== type) continue;
           if (s.x[id] < b.x0 - m || s.x[id] > b.x1 + m) continue;
           if (s.y[id] < b.y0 - m || s.y[id] > b.y1 + m) continue;
@@ -766,6 +777,55 @@ export class Renderer {
           ctx.stroke();
         }
       }
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Where an enemy company was when you last had eyes on it.
+   *
+   * The counters themselves are only drawn while they are actually observed, so
+   * without this a company would blink out of existence the moment your scout
+   * looked away -- which reads as a glitch and throws away information you
+   * genuinely have. A mark on the last known ground is what a map table would
+   * show, and it decays, because an old report is worth less than a new one.
+   *
+   * The halo at low zoom does this same job; this is its close-up twin.
+   */
+  private drawLastSeen(world: World, cam: Camera, viewer: number, now: number): void {
+    const ctx = this.ctx;
+    ctx.save();
+    for (const g of world.groups) {
+      if (g.player === viewer || world.liveCount(g) === 0) continue;
+      if (g.seenBy[viewer]) {
+        this.lastSeen.set(g.id, { x: g.anchorX, y: g.anchorY, at: now, n: world.liveCount(g) });
+        continue;
+      }
+      const seen = this.lastSeen.get(g.id);
+      if (!seen) continue;
+      const age = now - seen.at;
+      if (age > HALO_MEMORY_SECONDS) {
+        this.lastSeen.delete(g.id);
+        continue;
+      }
+      const fade = age < 1 ? 1 : 1 - (age - 1) / (HALO_MEMORY_SECONDS - 1);
+      const sx = cam.worldToScreenX(seen.x);
+      const sy = cam.worldToScreenY(seen.y);
+      const r = Math.max(10, 26 * cam.zoom);
+      ctx.globalAlpha = 0.5 * fade;
+      ctx.strokeStyle = playerColor[g.player] ?? ink;
+      ctx.lineWidth = Math.max(1, 1.6 * cam.zoom);
+      ctx.setLineDash([4, 5]);
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // How many were there when you looked, so the mark carries a fact.
+      ctx.globalAlpha = 0.75 * fade;
+      ctx.fillStyle = playerColor[g.player] ?? ink;
+      ctx.font = Math.max(9, 11 * cam.zoom) + "px ui-monospace, monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(String(seen.n), sx, sy + 4);
     }
     ctx.restore();
   }
