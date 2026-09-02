@@ -8,10 +8,14 @@
  *
  * A commander is a set of leanings, not a set of stats. None of these makes the
  * enemy stronger; they make it PREDICTABLE IN A PARTICULAR WAY, which is the
- * thing a player can actually read and then exploit. Ruthven always comes at
- * the centre, so you give ground and take him in the flanks. Vance always goes
- * wide, so you refuse the flank and hit the middle while he is still marching.
- * That is where the fun in fighting a machine lives: a habit you can punish.
+ * thing a player can actually read and then exploit. The Boar always comes at
+ * the centre, so you give ground and take it in the flanks. The Fox always
+ * goes wide, so you refuse the flank and hit the middle while it is still
+ * marching. That is where the fun in fighting a machine lives: a habit you can
+ * punish.
+ *
+ * Named for animals rather than people, because the name is meant to BE the
+ * tell -- you should be able to guess how a Badger fights before it moves.
  *
  * Deliberately orthogonal to difficulty. The Fox at Marshal is the same
  * commander thinking faster, not a different one.
@@ -19,7 +23,7 @@
 
 import type { Playstyle } from "../sim/ai.ts";
 
-export type CommanderId = "ruthven" | "vance" | "oleg" | "kestrel";
+export type CommanderId = "boar" | "fox" | "badger" | "hare";
 
 export type Commander = {
   readonly id: CommanderId;
@@ -40,41 +44,41 @@ export type Commander = {
 };
 
 export const COMMANDERS: Record<CommanderId, Commander> = {
-  ruthven: {
-    id: "ruthven",
-    name: "Ruthven",
-    epithet: "the Butcher",
-    blurb: "Comes straight at the centre and keeps coming. Give ground and take him in the flanks.",
+  boar: {
+    id: "boar",
+    name: "Boar",
+    epithet: "who only knows forward",
+    blurb: "Comes straight at the centre and keeps coming. Give ground and take them in the flanks.",
     bias: { aggressive: 2.2, defensive: 0.35, maneuver: 0.5, reactive: 0.9 },
     boldness: 1.35,
   },
-  vance: {
-    id: "vance",
-    name: "Vance",
-    epithet: "the Fox",
-    blurb: "Never fights the battle in front of him. Refuse the flank and hit the middle while he marches.",
+  fox: {
+    id: "fox",
+    name: "Fox",
+    epithet: "never where you looked",
+    blurb: "Refuses the battle in front of them. Ignore the flank and hit the middle while they march.",
     bias: { aggressive: 0.5, defensive: 0.7, maneuver: 2.4, reactive: 1.0 },
     boldness: 0.95,
   },
-  oleg: {
-    id: "oleg",
-    name: "Oleg",
-    epithet: "the Anvil",
-    blurb: "Holds ground and makes you come to him. Bring something that breaks a line, or leave him.",
+  badger: {
+    id: "badger",
+    name: "Badger",
+    epithet: "who will not be moved",
+    blurb: "Digs in and makes you come. Bring something that breaks a line, or leave them alone.",
     bias: { aggressive: 0.4, defensive: 2.3, maneuver: 0.7, reactive: 1.1 },
     boldness: 0.7,
   },
-  kestrel: {
-    id: "kestrel",
-    name: "Kestrel",
-    epithet: "the Gambler",
-    blurb: "Will not sit still and will not dig in. Weather his first rush and he has nothing left.",
-    // Every leaning above 1 would make him simply keener than everyone else,
-    // which is not a character. His weakness is that he will not hold ground
-    // even when holding it is plainly the right answer.
+  hare: {
+    id: "hare",
+    name: "Hare",
+    epithet: "who cannot stand still",
+    blurb: "Will not sit still and will not dig in. Weather the first rush and there is nothing behind it.",
+    // Every leaning above 1 would make this one simply keener than the rest,
+    // which is not a character. The weakness is a refusal to hold ground even
+    // when holding it is plainly the right answer.
     bias: { aggressive: 1.5, defensive: 0.55, maneuver: 1.4, reactive: 1.2 },
     boldness: 1.15,
   },
 };
 
-export const COMMANDER_IDS: readonly CommanderId[] = ["ruthven", "vance", "oleg", "kestrel"];
+export const COMMANDER_IDS: readonly CommanderId[] = ["boar", "fox", "badger", "hare"];

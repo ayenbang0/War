@@ -116,8 +116,8 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
     const setCommanderBlurb = (): void => {
       cmdBlurb.textContent = commander === null
         ? "Drawn at random. You will not know who you are facing until they show you."
-        : COMMANDERS[commander].name + ", " + COMMANDERS[commander].epithet + " - " +
-          COMMANDERS[commander].blurb;
+        : "The " + COMMANDERS[commander].name + ", " + COMMANDERS[commander].epithet +
+          ". " + COMMANDERS[commander].blurb;
     };
     const commanderChoices: (CommanderId | null)[] = [null, ...COMMANDER_IDS];
     for (const id of commanderChoices) {

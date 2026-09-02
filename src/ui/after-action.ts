@@ -63,7 +63,7 @@ export function showAfterAction(
     drew ? "Stalemate" : won ? "The field is yours" : "The field is lost"));
   const foeAi = world.ai.find((a) => a.player === foe);
   panel.appendChild(el("p", "aa-detail",
-    (foeAi ? "Against " + foeAi.who.name + ", " + foeAi.who.epithet + ".  " : "") + outcome.detail));
+    (foeAi ? "Against the " + foeAi.who.name + ", " + foeAi.who.epithet + ".  " : "") + outcome.detail));
 
   // -- what killed your men, and theirs ---------------------------------------
   const mine = world.casualtiesByCause[viewer];

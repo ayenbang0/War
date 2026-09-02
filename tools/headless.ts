@@ -2102,18 +2102,18 @@ section("commanders");
     return seen;
   }
 
-  const butcher = postures("ruthven");
-  const anvil = postures("oleg");
-  const fox = postures("vance");
-  check("the Butcher fights aggressively", butcher.includes("aggressive"), butcher.join(" -> "));
-  check("the Anvil holds ground instead", anvil.includes("defensive") && !anvil.includes("aggressive"),
-    anvil.join(" -> "));
+  const boar = postures("boar");
+  const badger = postures("badger");
+  const fox = postures("fox");
+  check("the Boar fights aggressively", boar.includes("aggressive"), boar.join(" -> "));
+  check("the Badger holds ground instead", badger.includes("defensive") && !badger.includes("aggressive"),
+    badger.join(" -> "));
   check("the Fox works the flanks", fox.includes("maneuver"), fox.join(" -> "));
   check("two commanders do not fight the same battle",
-    butcher.join() !== anvil.join(),
-    "butcher " + butcher.join(" -> ") + " | anvil " + anvil.join(" -> "));
+    boar.join() !== badger.join(),
+    "boar " + boar.join(" -> ") + " | badger " + badger.join(" -> "));
   check("but a broken army holds regardless of who commands it",
-    COMMANDERS.ruthven.bias.aggressive > 1);
+    COMMANDERS.boar.bias.aggressive > 1);
 }
 
 // -- 8j. surgeons and sappers --------------------------------------------------

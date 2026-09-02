@@ -51,7 +51,7 @@ export class ArmyAI {
    * Who is running this army. Leanings only -- never better troops, never more
    * sight. An opponent that cheats is arbitrary rather than hard.
    */
-  private commander: Commander = COMMANDERS.kestrel;
+  private commander: Commander = COMMANDERS.hare;
 
   constructor(
     player: number,
