@@ -120,6 +120,16 @@ export const theLongVigil: LevelDef = {
   enemyDoctrine: "aggressive",
   suggestedDifficulty: "marshal",
   magic: 1.35,
+  // Twenty minutes on a points map is exactly where sitting still starts to
+  // look clever, so both sides get fresh companies partway through. It punishes
+  // turtling without taking the decision away: the ground you chose at minute
+  // one is not the ground you are holding at minute twelve.
+  reinforcements: [
+    { atSeconds: 6 * 60, player: 0, type: "line", count: 20, x: 12 * TILE_SIZE, y: 70 * TILE_SIZE },
+    { atSeconds: 6 * 60, player: 1, type: "line", count: 20, x: 210 * TILE_SIZE, y: 70 * TILE_SIZE },
+    { atSeconds: 12 * 60, player: 0, type: "horse", count: 10, x: 12 * TILE_SIZE, y: 80 * TILE_SIZE },
+    { atSeconds: 12 * 60, player: 1, type: "horse", count: 10, x: 210 * TILE_SIZE, y: 80 * TILE_SIZE },
+  ],
 };
 
 export const LEVELS: readonly LevelDef[] = [

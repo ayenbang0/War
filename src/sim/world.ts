@@ -19,7 +19,7 @@
  *   3. Each soldier steers toward its own slot, pushing off neighbours.
  */
 
-import { atan2, clamp, cos, dist, max, min, rotateToward, sin, sqrt, TAU } from "./math.ts";
+import { atan2, clamp, cos, dist, max, min, PI, rotateToward, sin, sqrt, TAU } from "./math.ts";
 import { Rng, Stream } from "./rng.ts";
 import { OrderQueue, type Order } from "./orders.ts";
 import { generateTerrain, Terrain, TerrainGrid, TERRAIN_INFO, TILE_SIZE } from "./terrain.ts";
@@ -55,6 +55,23 @@ export type AbilityField = {
 
 /** What is left of one ability, for one player. */
 export type AbilityCharge = { left: number; readyAt: number };
+
+/**
+ * A company arriving partway through a battle.
+ *
+ * The answer to turtling: sitting on a hill trading nothing is a fine plan
+ * right up until the ground behind you fills with men who were not there when
+ * you chose it. Spawned from the tick count alone, so a replay produces the
+ * same arrivals at the same moment.
+ */
+export type Reinforcement = {
+  readonly atSeconds: number;
+  readonly player: number;
+  readonly type: UnitTypeId;
+  readonly count: number;
+  readonly x: number;
+  readonly y: number;
+};
 import type { UnitTypeId } from "../content/unit-types.ts";
 
 export const TICK_RATE = 20;
@@ -245,6 +262,8 @@ export type WorldConfig = {
   readonly victory?: VictoryConfig;
   /** Ground worth standing on, for the objective and point modes. */
   readonly controlPoints?: readonly ControlPoint[];
+  /** Fresh companies marching on partway through the battle. */
+  readonly reinforcements?: readonly Reinforcement[];
 };
 
 export { statsFor, typeAt, typeIndex, STANCES } from "./entities.ts";
@@ -287,6 +306,7 @@ export class World {
     [new Map(), new Map()];
   readonly ai: ArmyAI[] = [];
   readonly fog: [FogField, FogField];
+  readonly reinforcements: readonly Reinforcement[];
   /**
    * Each living soldier's formation steadiness this tick: his group's cohesion,
    * or zero if he stands alone.
@@ -359,6 +379,7 @@ export class World {
     this.neighbours = new Int32Array(256);
     this.watchers = new Int32Array(capacity);
     this.fog = [new FogField(this.terrain), new FogField(this.terrain)];
+    this.reinforcements = config.reinforcements ?? [];
     this.steadiness = new Float64Array(this.soldiers.capacity);
     this.rng = {
       combat: Rng.create(this.seed, Stream.Combat),
@@ -712,6 +733,7 @@ export class World {
   step(): void {
     if (this.outcome) return;
     if (this.deploying) return;
+    this.landReinforcements();
     for (const ai of this.ai) ai.update(this);
     this.applyOrders();
     this.updateFeints();
@@ -759,6 +781,29 @@ export class World {
       g.stance = "retreat";
       g.target = -1;
       g.path = this.routeThrough(g, [g.feintHomeX, g.feintHomeY]);
+    }
+  }
+
+  /**
+   * March on anyone due this tick.
+   *
+   * Compared against the exact tick rather than "at or past it", so a wave
+   * arrives once and only once however the match is stepped.
+   */
+  private landReinforcements(): void {
+    for (const r of this.reinforcements) {
+      if (this.tick !== Math.round(r.atSeconds * TICK_RATE)) continue;
+      const ids: number[] = [];
+      for (let i = 0; i < r.count; i++) {
+        ids.push(this.spawnSoldier(
+          r.player, r.type,
+          r.x + (i % 5) * 14, r.y + ((i / 5) | 0) * 14,
+          r.player === 0 ? 0 : PI,
+        ));
+      }
+      // Arriving as a formed company, not as a crowd -- these are troops
+      // marching on, and a player has no chance to draw a loop round them.
+      if (ids.length > 0) this.createGroup(r.player, ids);
     }
   }
 

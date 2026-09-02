@@ -110,6 +110,7 @@ const world = new World({
   commander: setup.commander,
   victory: level.victory,
   controlPoints: level.controlPoints,
+  reinforcements: level.reinforcements,
 });
 world.doctrine[0] = ARMIES[0].doctrine;
 world.doctrine[1] = ARMIES[1].doctrine;

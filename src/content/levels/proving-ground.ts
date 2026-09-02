@@ -7,6 +7,7 @@
  */
 
 import type { ControlPoint, VictoryConfig } from "../../sim/victory.ts";
+import type { UnitTypeId } from "../unit-types.ts";
 import type { DoctrineId } from "../doctrines.ts";
 import type { DifficultyId } from "../difficulty.ts";
 
@@ -36,6 +37,10 @@ export type LevelDef = {
   readonly controlPoints: readonly ControlPoint[];
   /** Points each side may spend composing an army. */
   readonly budget: number;
+  /** Companies marching on partway through, if this battlefield has any. */
+  readonly reinforcements?: readonly {
+    atSeconds: number; player: number; type: UnitTypeId; count: number; x: number; y: number;
+  }[];
   /** What the machine fields and how hard it opens. */
   readonly enemyDoctrine: DoctrineId;
   readonly suggestedDifficulty: DifficultyId;

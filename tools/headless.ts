@@ -2701,6 +2701,42 @@ section("abilities");
   }
 }
 
+// -- 9b3e. fresh companies marching on -----------------------------------------
+
+section("reinforcements");
+{
+  const w = new World({
+    seed: 141, tilesWide: 80, tilesHigh: 80, soldierCapacity: 512, duration: 600,
+    reinforcements: [
+      { atSeconds: 5, player: 0, type: "line", count: 10, x: 900, y: 900 },
+      { atSeconds: 9, player: 1, type: "horse", count: 6, x: 1800, y: 1800 },
+    ],
+  });
+  for (let i = 0; i < 6; i++) w.spawnSoldier(0, "line", 1000, 1000, 0);
+  for (let i = 0; i < 6; i++) w.spawnSoldier(1, "line", 1900, 1900, M.PI);
+  const before = w.soldiers.count;
+
+  for (let t = 0; t < TICK_RATE * 4; t++) w.step();
+  check("nobody arrives before their hour", w.soldiers.count === before,
+    w.soldiers.count + " men");
+
+  for (let t = 0; t < TICK_RATE * 3; t++) w.step();
+  check("the first wave marches on", w.soldiers.count === before + 10,
+    w.soldiers.count + " men");
+  check("and arrives as a formed company, not a crowd",
+    w.groups.some((g) => g.player === 0 && g.members.length === 10),
+    w.groups.map((g) => g.player + ":" + g.members.length).join(" "));
+
+  for (let t = 0; t < TICK_RATE * 6; t++) w.step();
+  check("the enemy gets theirs too", w.soldiers.count === before + 16,
+    w.soldiers.count + " men");
+
+  // The exact-tick test: run well past, and nobody may arrive twice.
+  for (let t = 0; t < TICK_RATE * 30; t++) w.step();
+  check("a wave arrives once and only once", w.soldiers.count === before + 16,
+    w.soldiers.count + " men");
+}
+
 // -- 9b4. edge cases and pathologies -------------------------------------------
 
 section("edge cases");
