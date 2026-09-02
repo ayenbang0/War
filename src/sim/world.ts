@@ -41,6 +41,20 @@ import { FogField, concealment, effectiveSight, hasLineOfSight, rangeFromHeight 
 import { ArmyAI } from "./ai.ts";
 import type { Commander } from "../content/commanders.ts";
 import { SPELLS, hexPenalty, mendRate, nerveShift, succourRate, wardSoak, type SpellId, type Working } from "./magic.ts";
+import { ABILITIES, type AbilityId } from "../content/abilities.ts";
+
+/** A commander's ability standing on the field. */
+export type AbilityField = {
+  readonly ability: AbilityId;
+  readonly player: number;
+  readonly x: number;
+  readonly y: number;
+  readonly radius: number;
+  readonly until: number;
+};
+
+/** What is left of one ability, for one player. */
+export type AbilityCharge = { left: number; readyAt: number };
 import type { UnitTypeId } from "../content/unit-types.ts";
 
 export const TICK_RATE = 20;
@@ -178,6 +192,16 @@ const FEINT_ADVANCE_SECONDS = 7;
 const AMBUSH_TRIGGER = 150;
 /** Seconds of extra bite an ambush gets when it springs. */
 const AMBUSH_BITE_SECONDS = 3;
+/** Damage a barrage does per second to everyone standing under it. */
+const BARRAGE_DAMAGE_PER_SEC = 46;
+/** Nerve a rally restores per second to friends within earshot. */
+const RALLY_NERVE_PER_SEC = 0.12;
+/** Damage a shield wall turns aside. Capped well short of immunity. */
+const SHIELD_SOAK = 0.45;
+/** How well smoke hides whoever is standing in it. */
+const SMOKE_CONCEALMENT = 0.75;
+/** How much faster a company ordered to charge actually moves. */
+const CHARGE_HASTE = 1.45;
 const CHARGE_LULL = 40;
 /** Seconds the charge bonus lasts once contact is made. */
 const CHARGE_SECONDS = 2;
@@ -250,6 +274,17 @@ export class World {
   readonly doctrine: [DoctrineId, DoctrineId] = ["maneuver", "maneuver"];
   readonly events: CombatEvent[] = [];
   readonly workings: Working[] = [];
+  /**
+   * Commander's abilities currently standing on the field.
+   *
+   * Separate from workings because a working is something a UNIT does and these
+   * are things the commander spends -- different lifetimes, different rules,
+   * and mixing them would mean every spell check had to ask which it was.
+   */
+  readonly fields: AbilityField[] = [];
+  /** Charges left and cooldowns, per player. Set up from the army list. */
+  readonly abilityState: [Map<AbilityId, AbilityCharge>, Map<AbilityId, AbilityCharge>] =
+    [new Map(), new Map()];
   readonly ai: ArmyAI[] = [];
   readonly fog: [FogField, FogField];
   /**
@@ -429,6 +464,7 @@ export class World {
       patrolForward: true,
       recoverUntil: 0,
       chargeUntil: 0,
+      hasteUntil: 0,
       buildTicks: 0,
       feintTurn: 0,
       feintHomeX: 0,
@@ -685,6 +721,13 @@ export class World {
     this.updateVision();
     this.castSpells();
     this.updateAmbushes();
+    // The damage buffer is cleared HERE rather than inside resolveCombat, so
+    // that anything else which deals damage this tick can write into it and be
+    // applied with everything else. A barrage wrote into that buffer after
+    // resolveCombat had already emptied and applied it, so its damage was
+    // discarded every tick and the ability did nothing whatsoever.
+    this.clearDamageBuffer();
+    this.applyFields();
     this.resolveCombat();
     this.applyWorkings();
     this.updateEngineering();
@@ -724,6 +767,10 @@ export class World {
   }
 
   private applyOrder(order: Order): void {
+    if (order.kind === "ability") {
+      this.applyAbility(order.player, order.ability, order.x, order.y, order.squad);
+      return;
+    }
     const g = this.groupById(order.squad);
     if (!g) return;
     // A recovering group has stood down and is not taking orders. Enforced in
@@ -957,7 +1004,10 @@ export class World {
       n++;
     }
     if (n === 0) return 0;
-    return slowest * FORMATION_PACE * moraleSpeedScale(morale / n);
+    // At the charge: faster, and with the ranks allowed to open up, which is
+    // what the extra impact is bought with.
+    const haste = g.hasteUntil > this.tick ? CHARGE_HASTE : 1;
+    return slowest * FORMATION_PACE * haste * moraleSpeedScale(morale / n);
   }
 
   private groupTurnRate(g: Group): number {
@@ -1466,10 +1516,6 @@ export class World {
   private resolveCombat(): void {
     const s = this.soldiers;
     this.events.length = 0;
-    for (let i = 0; i < s.count; i++) {
-      s.incoming[i] = 0;
-      s.localShock[i] = 0;
-    }
     for (const g of this.groups) g.flanked = false;
 
     for (let id = 0; id < s.count; id++) {
@@ -1518,6 +1564,15 @@ export class World {
       // Up and at them, with the bite that waiting bought.
       g.stance = "attack";
       g.chargeUntil = this.tick + AMBUSH_BITE_SECONDS * TICK_RATE;
+    }
+  }
+
+  /** Empty the damage buffer for a fresh tick. */
+  private clearDamageBuffer(): void {
+    const s = this.soldiers;
+    for (let i = 0; i < s.count; i++) {
+      s.incoming[i] = 0;
+      s.localShock[i] = 0;
     }
   }
 
@@ -1611,6 +1666,7 @@ export class World {
     // A rank standing in its slot is far harder to kill than the same man
     // caught out of formation, and a man in no group at all gets nothing.
     const defence = this.stats(victim).defence * (1 + COHESION_ARMOUR * this.steadiness[victim]);
+    const shield = this.shieldSoak(s.player[victim], s.x[victim], s.y[victim]);
 
     let dmg = hitDamage(
       this.rng.combat,
@@ -1622,6 +1678,7 @@ export class World {
       s.y[victim],
     );
     if (charging) dmg *= 1 + CHARGE_BONUS;
+    if (shield > 0) dmg *= 1 - shield;
     s.incoming[victim] += dmg;
     s.struckBy[victim] = attacker;
     s.cooldown[attacker] = st.attackInterval;
@@ -1790,6 +1847,114 @@ export class World {
     let n = 0;
     for (const owner of this.heldBy) if (owner === player) n++;
     return n;
+  }
+
+  // -- commander's abilities ----------------------------------------------------
+
+  /** Stock a player's abilities at the start of a battle. */
+  armAbilities(player: number, ids: readonly AbilityId[]): void {
+    const state = this.abilityState[player];
+    state.clear();
+    for (const id of ids) {
+      const have = state.get(id);
+      // Buying the same ability twice buys its charges twice.
+      state.set(id, {
+        left: (have?.left ?? 0) + ABILITIES[id].charges,
+        readyAt: 0,
+      });
+    }
+  }
+
+  /** Can this player spend that ability right now? */
+  abilityReady(player: number, id: AbilityId): boolean {
+    const c = this.abilityState[player].get(id);
+    return c !== undefined && c.left > 0 && this.tick >= c.readyAt;
+  }
+
+  /**
+   * Spend one.
+   *
+   * Charges and cooldowns are checked HERE rather than in the interface, so the
+   * rule binds a replay and an AI exactly as it binds the player -- an order
+   * arriving for an ability with nothing left simply does nothing.
+   */
+  private applyAbility(player: number, id: AbilityId, x: number, y: number, squad: number): void {
+    if (!this.abilityReady(player, id)) return;
+    const c = this.abilityState[player].get(id);
+    if (!c) return;
+    const spec = ABILITIES[id];
+    c.left -= 1;
+    c.readyAt = this.tick + spec.cooldown * TICK_RATE;
+
+    if (id === "charge") {
+      // Given TO a company: it goes in at the run and hits far harder, at the
+      // cost of its dressing while it does.
+      const g = this.groupById(squad);
+      if (!g) return;
+      g.chargeUntil = this.tick + spec.duration * TICK_RATE;
+      g.hasteUntil = this.tick + spec.duration * TICK_RATE;
+      return;
+    }
+
+    this.fields.push({
+      ability: id,
+      player,
+      x,
+      y,
+      radius: spec.radius,
+      until: this.tick + spec.duration * TICK_RATE,
+    });
+  }
+
+  /**
+   * One tick of whatever the commander has put on the field.
+   *
+   * A barrage does not care whose men are underneath it. That is deliberate and
+   * it is the whole reason it costs points: artillery fired from off the map by
+   * somebody who cannot see the ground is exactly as dangerous to your own line
+   * as to theirs, and a player who drops one on a melee has chosen to.
+   */
+  private applyFields(): void {
+    if (this.fields.length === 0) return;
+    const s = this.soldiers;
+    for (let i = this.fields.length - 1; i >= 0; i--) {
+      if (this.tick >= this.fields[i].until) this.fields.splice(i, 1);
+    }
+    for (const f of this.fields) {
+      if (f.ability === "smoke") continue; // sight only; handled in spotted()
+      const rr = f.radius * f.radius;
+      for (let i = 0; i < s.count; i++) {
+        if (s.alive[i] !== 1) continue;
+        if (d2(f.x, f.y, s.x[i], s.y[i]) > rr) continue;
+        const friendly = s.player[i] === f.player;
+        if (f.ability === "barrage") {
+          s.incoming[i] += BARRAGE_DAMAGE_PER_SEC * TICK_DT;
+          s.struckBy[i] = -1;
+          s.struckHow[i] = HOW_RANGED;
+        } else if (f.ability === "rally" && friendly) {
+          s.morale[i] = clamp(s.morale[i] + RALLY_NERVE_PER_SEC * TICK_DT, 0, 1);
+        }
+      }
+    }
+  }
+
+  /** Damage reduction from a shield wall standing over this man. */
+  private shieldSoak(player: number, x: number, y: number): number {
+    for (const f of this.fields) {
+      if (f.ability !== "shield" || f.player !== player) continue;
+      if (d2(f.x, f.y, x, y) <= f.radius * f.radius) return SHIELD_SOAK;
+    }
+    return 0;
+  }
+
+  /** How much smoke is lying over this spot, 0 to 1. */
+  smokeAt(x: number, y: number): number {
+    let worst = 0;
+    for (const f of this.fields) {
+      if (f.ability !== "smoke") continue;
+      if (d2(f.x, f.y, x, y) <= f.radius * f.radius) worst = max(worst, SMOKE_CONCEALMENT);
+    }
+    return worst;
   }
 
   // -- engineering --------------------------------------------------------------

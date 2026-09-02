@@ -9,6 +9,7 @@
 
 import type { World } from "../sim/world.ts";
 import { anchorSquad, pointInPolygon, recognize, gestureLabel, type GestureContext, type PendingLine, type Point, type Recognized, type SquadView } from "./gestures.ts";
+import { ABILITIES, type AbilityId } from "../content/abilities.ts";
 
 /**
  * Ticks between issuing an order and it taking effect. One tick keeps orders
@@ -59,6 +60,14 @@ function looseSoldier(handle: number): number {
 
 export class Commander {
   selected: number[] = [];
+  /**
+   * The ability waiting for somewhere to be put, or null.
+   *
+   * Arming is a keypress and PLACING is a pen stroke, which keeps the left
+   * button the only thing that ever points at the world. An armed ability
+   * swallows the next stroke entirely rather than also giving an order with it.
+   */
+  armed: AbilityId | null = null;
   /** What the recognizer currently reads the in-progress stroke as. */
   preview: Recognized | null = null;
 
@@ -150,6 +159,57 @@ export class Commander {
     };
   }
 
+  /**
+   * Arm an ability, or disarm it if it was already armed.
+   *
+   * Refuses one with nothing left or still cooling down, so the interface never
+   * pretends to hold something it cannot spend.
+   */
+  arm(id: AbilityId): string {
+    if (this.armed === id) {
+      this.armed = null;
+      return "";
+    }
+    if (!this.world.abilityReady(this.player, id)) {
+      const c = this.world.abilityState[this.player].get(id);
+      if (!c) return ABILITIES[id].name + ": none bought";
+      if (c.left <= 0) return ABILITIES[id].name + ": none left";
+      return ABILITIES[id].name + ": not ready";
+    }
+    this.armed = id;
+    return ABILITIES[id].name + " - draw where";
+  }
+
+  /**
+   * Spend the armed ability at the end of a stroke.
+   *
+   * Returns null when nothing was armed, so the caller can fall through to the
+   * ordinary reading of the stroke.
+   */
+  private placeArmed(points: readonly Point[]): string | null {
+    const id = this.armed;
+    if (id === null || points.length === 0) return null;
+    this.armed = null;
+    if (this.world.deploying) return "not until the battle begins";
+    if (!this.world.abilityReady(this.player, id)) return ABILITIES[id].name + ": not ready";
+
+    const at = points[points.length - 1];
+    // A charge is given to a company, so it needs one: whichever of your own
+    // the stroke ended on, else whatever is selected.
+    let squad = -1;
+    if (ABILITIES[id].target === "own" && ABILITIES[id].id === "charge") {
+      const on = anchorSquad(this.context(), at);
+      squad = on !== null && on >= 0 ? on : (this.selected.find((h) => h >= 0) ?? -1);
+      if (squad < 0) return "charge: give it to a company";
+    }
+    this.world.orders.issue(
+      { kind: "ability", squad, ability: id, x: at.x, y: at.y },
+      this.player,
+      this.world.tick + ORDER_DELAY,
+    );
+    return ABILITIES[id].name;
+  }
+
   /** A recovering group has stood down and will not accept orders. */
   private locked(id: number): boolean {
     const q = this.world.groupById(id);
@@ -233,6 +293,13 @@ export class Commander {
 
   /** Commit a finished stroke. Returns a short label for the HUD. */
   commit(points: readonly Point[]): string {
+    // An armed ability takes the stroke and nothing else happens with it, so
+    // placing a barrage can never also march the company you drew across.
+    const placed = this.placeArmed(points);
+    if (placed !== null) {
+      this.preview = null;
+      return placed;
+    }
     const r = recognize(points, this.context());
     this.preview = null;
     if (!r) return "";

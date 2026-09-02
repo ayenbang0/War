@@ -8,6 +8,7 @@
 
 import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "./unit-types.ts";
 import { DOCTRINES, type DoctrineId } from "./doctrines.ts";
+import { ABILITIES, abilityCost, type AbilityId } from "./abilities.ts";
 
 /**
  * Points available to each side.
@@ -27,11 +28,16 @@ export const DEFAULT_BUDGET = 94;
  * meant to pay for.
  */
 export const MAX_SQUADS = 25;
+/** How many times one ability may be bought. Twice is a deep magazine, not a
+ *  different strategy. */
+export const MAX_OF_ONE_ABILITY = 2;
 
 export type ArmyList = {
   readonly doctrine: DoctrineId;
   /** One entry per squad, in deployment order. */
   readonly squads: readonly UnitTypeId[];
+  /** Abilities bought, paid for out of the SAME budget as the men. */
+  readonly abilities?: readonly AbilityId[];
 };
 
 export type Validation = {
@@ -44,6 +50,9 @@ export type Validation = {
 export function cost(list: ArmyList): number {
   let n = 0;
   for (const id of list.squads) n += UNIT_TYPES[id].cost;
+  // Abilities come out of the same purse as the men, which is the entire
+  // design: a barrage is paid for in companies you will not have.
+  for (const id of list.abilities ?? []) n += abilityCost(id, list.doctrine);
   return n;
 }
 
@@ -58,6 +67,13 @@ export function validate(list: ArmyList, budget = DEFAULT_BUDGET): Validation {
   }
   if (list.squads.length === 0) problems.push("an army needs at least one squad");
   if (!DOCTRINES[list.doctrine]) problems.push("unknown doctrine: " + list.doctrine);
+
+  for (const id of list.abilities ?? []) {
+    const n = (list.abilities ?? []).filter((a2) => a2 === id).length;
+    if (n > MAX_OF_ONE_ABILITY) {
+      problems.push(ABILITIES[id].name + ": " + n + " of at most " + MAX_OF_ONE_ABILITY);
+    }
+  }
 
   // Per-type caps are what stop a single unit type dominating (spec 3.2).
   for (const id of UNIT_TYPE_IDS) {

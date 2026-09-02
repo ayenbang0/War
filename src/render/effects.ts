@@ -16,6 +16,10 @@ import { playerColor } from "./palette.ts";
 const SHOT_FLIGHT = 0.28;
 /** Seconds an impact mark lingers. */
 const IMPACT_LIFE = 0.42;
+/** Seconds a thrown spark lives. */
+const SPARK_LIFE = 0.5;
+/** Seconds a scuff of dust lingers. */
+const DUST_LIFE = 1.1;
 /** Hard cap so a long battle cannot grow the list without bound. */
 const MAX_EFFECTS = 900;
 
@@ -26,9 +30,36 @@ type Shot = {
 
 type Impact = { x: number; y: number; born: number; player: number; lethal: boolean };
 
+/** A short-lived spray of debris thrown out from a blow. */
+type Spark = { x: number; y: number; vx: number; vy: number; born: number; life: number; hot: boolean };
+
+/** Dust kicked up by men on the move. */
+type Dust = { x: number; y: number; born: number; r: number };
+
 export class Effects {
   private shots: Shot[] = [];
   private impacts: Impact[] = [];
+  private sparks: Spark[] = [];
+  private dust: Dust[] = [];
+  /** Deterministic-enough jitter for the sprays. Presentation only. */
+  private seed = 0x9e3779b9;
+
+  /** A small, cheap, repeatable random. Never touches the simulation. */
+  private rand(): number {
+    this.seed = (this.seed * 1664525 + 1013904223) >>> 0;
+    return this.seed / 4294967296;
+  }
+
+  /** Men on the move scuff the ground. Called by the renderer, not the sim. */
+  kickDust(x: number, y: number, now: number, radius: number): void {
+    if (this.dust.length > MAX_EFFECTS) return;
+    this.dust.push({
+      x: x + (this.rand() - 0.5) * radius,
+      y: y + (this.rand() - 0.5) * radius,
+      born: now,
+      r: radius * (0.25 + this.rand() * 0.3),
+    });
+  }
 
   /** Take one tick's worth of blows. Call after every world.step(). */
   ingest(events: readonly CombatEvent[], now: number): void {
@@ -44,11 +75,39 @@ export class Effects {
         // itself is animated on the soldier, not here.
         this.impacts.push({ x: e.x1, y: e.y1, born: now, player: e.player, lethal: e.lethal });
       }
+      // Every blow throws something out. A killing blow throws more, and hotter
+      // -- the difference between "hit" and "killed" has to be legible at a
+      // glance without reading a number anywhere.
+      const n = e.lethal ? 7 : 3;
+      for (let k = 0; k < n; k++) {
+        if (this.sparks.length > MAX_EFFECTS) break;
+        const a2 = this.rand() * Math.PI * 2;
+        const sp = (e.lethal ? 60 : 34) * (0.4 + this.rand());
+        this.sparks.push({
+          x: e.x1, y: e.y1,
+          vx: Math.cos(a2) * sp, vy: Math.sin(a2) * sp,
+          born: now, life: SPARK_LIFE * (0.6 + this.rand() * 0.7), hot: e.lethal,
+        });
+      }
     }
   }
 
   draw(ctx: CanvasRenderingContext2D, cam: Camera, now: number): void {
     this.expire(now);
+
+    // Dust first: it belongs on the ground, under everything else.
+    ctx.save();
+    for (const d of this.dust) {
+      const t = (now - d.born) / DUST_LIFE;
+      if (t >= 1) continue;
+      ctx.globalAlpha = 0.2 * (1 - t);
+      ctx.fillStyle = "#8a7a5c";
+      ctx.beginPath();
+      ctx.arc(cam.worldToScreenX(d.x), cam.worldToScreenY(d.y),
+        Math.max(1, d.r * (0.6 + t * 1.5) * cam.zoom), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
 
     // Arrows, drawn as short streaks along their line of flight.
     ctx.save();
@@ -95,10 +154,32 @@ export class Effects {
         ctx.stroke();
       }
     }
+
+    // Sparks thrown out of every blow.
+    ctx.lineCap = "round";
+    for (const sp of this.sparks) {
+      const t = (now - sp.born) / sp.life;
+      if (t >= 1) continue;
+      const x = sp.x + sp.vx * t * 0.5;
+      const y = sp.y + sp.vy * t * 0.5;
+      ctx.globalAlpha = (1 - t) * (sp.hot ? 0.85 : 0.5);
+      ctx.strokeStyle = sp.hot ? "#8c3a34" : "#5a4a33";
+      ctx.lineWidth = Math.max(0.7, (sp.hot ? 1.5 : 1) * cam.zoom);
+      ctx.beginPath();
+      ctx.moveTo(cam.worldToScreenX(x), cam.worldToScreenY(y));
+      ctx.lineTo(cam.worldToScreenX(x - sp.vx * 0.06), cam.worldToScreenY(y - sp.vy * 0.06));
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
   private expire(now: number): void {
+    if (this.sparks.length > 0) {
+      this.sparks = this.sparks.filter((sp) => now - sp.born < sp.life);
+    }
+    if (this.dust.length > 0) {
+      this.dust = this.dust.filter((d) => now - d.born < DUST_LIFE);
+    }
     if (this.shots.length > 0) {
       this.shots = this.shots.filter((s) => now - s.born < SHOT_FLIGHT);
     }
@@ -108,6 +189,6 @@ export class Effects {
   }
 
   get count(): number {
-    return this.shots.length + this.impacts.length;
+    return this.shots.length + this.impacts.length + this.sparks.length + this.dust.length;
   }
 }

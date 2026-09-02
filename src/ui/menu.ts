@@ -13,6 +13,16 @@ import { unitIconCanvas } from "../render/unit-icon.ts";
 import { DOCTRINES, DOCTRINE_IDS, type DoctrineId } from "../content/doctrines.ts";
 import { DIFFICULTIES, DIFFICULTY_IDS, type DifficultyId } from "../content/difficulty.ts";
 import { COMMANDERS, COMMANDER_IDS, type Commander, type CommanderId } from "../content/commanders.ts";
+import { ABILITIES, ABILITY_IDS, abilityCost, type AbilityId } from "../content/abilities.ts";
+
+/** A one-glyph mark per ability, so the store rows are not all identical. */
+const ABILITY_MARK: Record<AbilityId, string> = {
+  barrage: "✹",
+  charge: "➤",
+  shield: "◧",
+  smoke: "░",
+  rally: "⚑",
+};
 import { MAX_SQUADS, cost, validate, type ArmyList } from "../content/army.ts";
 import { LEVELS, type LevelDef } from "../content/levels/index.ts";
 
@@ -22,6 +32,8 @@ export type Setup = {
   readonly army: ArmyList;
   /** Who the machine's army answers to. */
   readonly commander: Commander;
+  /** Abilities bought, in the order they are bound to keys 1..5. */
+  readonly abilities: readonly AbilityId[];
 };
 
 const el = (tag: string, cls?: string, text?: string): HTMLElement => {
@@ -44,6 +56,7 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
     let difficulty: DifficultyId = level.suggestedDifficulty;
     /** null means "draw one at random", which is the default. */
     let commander: CommanderId | null = null;
+    const bought: AbilityId[] = [];
     let doctrine: DoctrineId = "maneuver";
     const picked: UnitTypeId[] = [];
 
@@ -148,6 +161,7 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
         for (const c of docRow.children) c.classList.remove("on");
         b.classList.add("on");
         docBlurb.textContent = d.blurb;
+        refresh();
       };
       if (id === doctrine) {
         b.classList.add("on");
@@ -205,6 +219,51 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
     }
     panel.appendChild(list);
 
+    // -- the ability store --------------------------------------------------
+    // Priced off the SAME budget as the men, and priced BY doctrine, so
+    // choosing a doctrine is choosing which moments you can afford.
+    panel.appendChild(el("h2", undefined, "Your orders in reserve"));
+    panel.appendChild(el("p", "blurb",
+      "Paid for out of the same points as your men. Keys 1 to 5 in battle, then draw where."));
+    const abilityList = el("div", "roster");
+    const abilityCounters = new Map<AbilityId, HTMLElement>();
+    const abilityPrices = new Map<AbilityId, HTMLElement>();
+    for (const id of ABILITY_IDS) {
+      const a2 = ABILITIES[id];
+      const row = el("div", "unit");
+      const icon = el("div", "unit-icon");
+      icon.appendChild(el("span", "ability-mark", ABILITY_MARK[id]));
+      row.appendChild(icon);
+      const head = el("div", "unit-head");
+      head.appendChild(el("span", "unit-name", a2.name));
+      const price = el("span", "unit-cost", "");
+      head.appendChild(price);
+      abilityPrices.set(id, price);
+      row.appendChild(head);
+      row.appendChild(el("div", "unit-role", a2.blurb));
+      row.appendChild(el("div", "unit-stats",
+        a2.charges + " uses   " + a2.cooldown + "s between   " +
+        (a2.radius > 0 ? a2.radius + " across   " : "") + a2.duration + "s"));
+      const controls = el("div", "unit-controls");
+      const minus = el("button", "step", "−") as HTMLButtonElement;
+      const count = el("span", "count", "0");
+      const plus = el("button", "step", "+") as HTMLButtonElement;
+      minus.onclick = () => {
+        const at = bought.lastIndexOf(id);
+        if (at >= 0) bought.splice(at, 1);
+        refresh();
+      };
+      plus.onclick = () => {
+        bought.push(id);
+        refresh();
+      };
+      controls.append(minus, count, plus);
+      row.appendChild(controls);
+      abilityCounters.set(id, count);
+      abilityList.appendChild(row);
+    }
+    panel.appendChild(abilityList);
+
     const problems = el("p", "problems");
     panel.appendChild(problems);
 
@@ -241,8 +300,9 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
       resolve({
         level,
         difficulty,
-        army: { doctrine, squads: picked.slice() },
+        army: { doctrine, squads: picked.slice(), abilities: bought.slice() },
         commander: COMMANDERS[chosen],
+        abilities: bought.slice(),
       });
     };
 
@@ -252,12 +312,23 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
         const c = counters.get(id);
         if (c) c.textContent = String(n);
       }
-      const spent = cost({ doctrine, squads: picked });
-      const v = validate({ doctrine, squads: picked }, level.budget);
+      for (const id of ABILITY_IDS) {
+        const n = bought.filter((a2) => a2 === id).length;
+        const c = abilityCounters.get(id);
+        if (c) c.textContent = String(n);
+        // Prices move with the doctrine, so the store has to be re-priced
+        // whenever the doctrine changes, not written once.
+        const price = abilityPrices.get(id);
+        if (price) price.textContent = abilityCost(id, doctrine) + " pts";
+      }
+      const list: ArmyList = { doctrine, squads: picked, abilities: bought };
+      const spent = cost(list);
+      const v = validate(list, level.budget);
       budgetLine.textContent =
         spent + " of " + level.budget + " points   -   " +
         picked.length + " of " + MAX_SQUADS + " companies   -   " +
-        picked.reduce((n, p) => n + UNIT_TYPES[p].soldiers, 0) + " men";
+        picked.reduce((n, p) => n + UNIT_TYPES[p].soldiers, 0) + " men" +
+        (bought.length > 0 ? "   -   " + bought.length + " in reserve" : "");
       budgetLine.classList.toggle("over", spent > level.budget);
       problems.textContent = v.problems.join("   ");
       start.disabled = !v.ok;

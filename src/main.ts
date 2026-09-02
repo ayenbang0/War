@@ -15,6 +15,7 @@ import { TILE_SIZE } from "./sim/terrain.ts";
 import { validate, type ArmyList } from "./content/army.ts";
 import { DIFFICULTIES } from "./content/difficulty.ts";
 import { type UnitTypeId } from "./content/unit-types.ts";
+import { ABILITIES, type AbilityId } from "./content/abilities.ts";
 import { openMenu, type Setup } from "./ui/menu.ts";
 import { openHome } from "./ui/home.ts";
 import { Tutorial } from "./ui/tutorial.ts";
@@ -33,6 +34,9 @@ function tutorialSetup(): Setup {
     difficulty: "recruit",
     army: { doctrine: "defensive", squads: ["line", "line", "archer", "skirmisher"] },
     commander: COMMANDERS.badger,
+    // The lesson is about the pen. Abilities are a separate idea and would be
+    // one more thing to drop on a first run.
+    abilities: [],
   };
 }
 import { showAfterAction } from "./ui/after-action.ts";
@@ -109,6 +113,21 @@ const world = new World({
 });
 world.doctrine[0] = ARMIES[0].doctrine;
 world.doctrine[1] = ARMIES[1].doctrine;
+/**
+ * The abilities bound to keys 1..n, each appearing once.
+ *
+ * Buying an ability twice buys a deeper magazine, not a second thing to press,
+ * so the keys address DISTINCT abilities -- otherwise buying two barrages put a
+ * barrage on key 2 and pushed the shield out to key 3, which is not something a
+ * player could be expected to work out mid-battle.
+ */
+const abilityKeys: AbilityId[] = [];
+for (const id of setup.abilities) if (!abilityKeys.includes(id)) abilityKeys.push(id);
+
+world.armAbilities(PLAYER, setup.abilities);
+// The machine is given the same kit, so nothing the player can spend is
+// something the player alone can spend.
+world.armAbilities(1, setup.abilities);
 
 /**
  * Deploy INDIVIDUAL soldiers. No groups are created here, by design: a group is
@@ -212,6 +231,13 @@ window.addEventListener("keydown", (e) => {
     pen.lastAction = "battle begins";
   } else if (e.code === "Escape" && tutorial) {
     window.location.reload();
+  } else if (e.code.startsWith("Digit") && !world.deploying) {
+    // 1..5 arm an ability; the next pen stroke says where it goes. The left
+    // button stays the only thing that ever points at the world.
+    const n = Number(e.code.slice(5)) - 1;
+    if (n >= 0 && n < abilityKeys.length) {
+      pen.lastAction = commander.arm(abilityKeys[n]);
+    }
   } else if (e.code === "F2") {
     e.preventDefault();
     showDebug = !showDebug;
@@ -240,6 +266,7 @@ const MAX_STEPS_PER_FRAME = 5;
 const BREAK_NOTICE_MS = 4200;
 
 let deployFogTick = 0;
+let lastDust = 0;
 let reported = false;
 /** The last company to break, shown briefly and then allowed to fade. */
 let lastBreak = "";
@@ -327,6 +354,16 @@ function frame(now: number): void {
   const alpha = paused ? 1 : Math.min(accumulator / TICK_DT, 1);
   const clock = now / 1000;
   renderer.draw(world, cam, prev, alpha, commander.selected, clock, PLAYER);
+  // Companies on the move scuff the ground. Purely visual and driven from the
+  // render clock, so it never touches a tick.
+  if (!paused && now - lastDust > 70) {
+    lastDust = now;
+    for (const g of world.groups) {
+      if (g.stance !== "move" && g.stance !== "attack" && g.stance !== "retreat") continue;
+      if (world.liveCount(g) === 0) continue;
+      effects.kickDust(g.anchorX, g.anchorY, clock, Math.max(24, g.radius));
+    }
+  }
   effects.draw(ctx, cam, clock);
   drawInk(ctx, cam, pen.points, commander.preview, commander.pendingRail);
 
@@ -389,6 +426,24 @@ function drawHud(): void {
     // the full account belongs in the after-action report.
     lines.push("", lastBreak);
   } else if (pen.lastAction) lines.push("", pen.lastAction);
+
+  // What is in reserve, and whether it can be spent right now. Two lines at
+  // most, and only when the player actually bought something.
+  if (abilityKeys.length > 0 && !world.deploying && !world.outcome) {
+    lines.push("");
+    for (let i = 0; i < abilityKeys.length; i++) {
+      const id = abilityKeys[i];
+      const c = world.abilityState[PLAYER].get(id);
+      const left = c ? c.left : 0;
+      const cooling = c && world.tick < c.readyAt
+        ? "  " + Math.ceil((c.readyAt - world.tick) / TICK_RATE) + "s"
+        : "";
+      lines.push(
+        (commander.armed === id ? "> " : "  ") + (i + 1) + " " +
+        ABILITIES[id].name + "  x" + left + cooling,
+      );
+    }
+  }
 
   // The lesson owns the panel while it is running.
   if (tutorial) lines.push(...tutorial.lines());

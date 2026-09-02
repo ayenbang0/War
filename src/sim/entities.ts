@@ -229,6 +229,8 @@ export type Group = {
   recoverUntil: number;
   /** Tick until which this company counts as charging, for the impact bonus. */
   chargeUntil: number;
+  /** Tick until which it moves at the run, having been ordered to charge. */
+  hasteUntil: number;
   /** Accumulated digging effort toward a fieldwork on the ground it holds. */
   buildTicks: number;
   /**

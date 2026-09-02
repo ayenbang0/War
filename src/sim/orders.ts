@@ -14,6 +14,7 @@
  */
 
 import type { FormationShape } from "./formations.ts";
+import type { AbilityId } from "../content/abilities.ts";
 
 export type OrderBody =
   /** Walk the route. Paths are world-space [x0, y0, x1, y1, ...]. */
@@ -33,13 +34,20 @@ export type OrderBody =
   /** Lie in wait: hold fire, keep still, and strike whoever walks into it. */
   | { kind: "ambush"; squad: number }
   /** Advance the route, wait to be seen, then withdraw the way you came. */
-  | { kind: "feint"; squad: number; path: readonly number[] };
+  | { kind: "feint"; squad: number; path: readonly number[] }
+  /**
+   * Spend a commander's ability on a patch of ground.
+   *
+   * `squad` is the company it attaches to for the ones that need one (a charge
+   * is given TO somebody), or -1 for the ones that simply land somewhere.
+   */
+  | { kind: "ability"; squad: number; ability: AbilityId; x: number; y: number };
 
 export type OrderKind = OrderBody["kind"];
 
 export const ORDER_KINDS: readonly OrderKind[] = [
   "move", "attack", "hold", "formation", "retreat", "patrol", "recover",
-  "ambush", "feint",
+  "ambush", "feint", "ability",
 ];
 
 export type Order = OrderBody & {

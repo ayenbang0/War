@@ -56,6 +56,7 @@ import { evaluate, score } from "../src/sim/victory.ts";
 import { effectiveSight, hasLineOfSight, rangeFromHeight, FogField } from "../src/sim/vision.ts";
 import { PLAYSTYLES } from "../src/sim/ai.ts";
 import { COMMANDERS, COMMANDER_IDS, type CommanderId } from "../src/content/commanders.ts";
+import { ABILITIES, ABILITY_IDS, abilityCost } from "../src/content/abilities.ts";
 import { DOCTRINES, DOCTRINE_IDS } from "../src/content/doctrines.ts";
 import { DEFAULT_BUDGET, MAX_SQUADS, cost, defaultArmy, validate } from "../src/content/army.ts";
 import { LEVELS } from "../src/content/levels/index.ts";
@@ -2595,6 +2596,108 @@ section("volleys");
     for (let t = 0; t < TICK_RATE * 25; t++) w.step();
     check("standing down replenishes the quivers", w.soldiers.ammo[ids[0]] > 2,
       "ammo " + w.soldiers.ammo[ids[0]].toFixed(1));
+  }
+}
+
+// -- 9b3d. the commander's abilities -------------------------------------------
+
+section("abilities");
+{
+  check("an ability costs points out of the same purse as the men",
+    cost({ doctrine: "aggressive", squads: ["line"], abilities: ["barrage"] }) >
+    cost({ doctrine: "aggressive", squads: ["line"] }));
+  check("doctrine sets the price list",
+    abilityCost("barrage", "aggressive") < abilityCost("barrage", "defensive") &&
+    abilityCost("shield", "defensive") < abilityCost("shield", "aggressive"),
+    "barrage " + abilityCost("barrage", "aggressive") + "/" + abilityCost("barrage", "defensive"));
+  check("no doctrine is cheap at everything",
+    (["aggressive", "defensive", "maneuver", "magic"] as const).every((d) => {
+      const costs = ABILITY_IDS.map((id) => abilityCost(id, d) / ABILITIES[id].cost);
+      return costs.some((c) => c < 1) && costs.some((c) => c > 1);
+    }));
+
+  // A barrage kills what stands under it, WHOEVER it belongs to.
+  {
+    const w = new World({ seed: 131, tilesWide: 80, tilesHigh: 80, soldierCapacity: 512 });
+    const mine: number[] = [];
+    for (let i = 0; i < 12; i++) mine.push(w.spawnSoldier(0, "line", 1200 + (i % 4) * 14, 1200 + ((i / 4) | 0) * 14, 0));
+    for (let i = 0; i < 12; i++) w.spawnSoldier(1, "line", 1260 + (i % 4) * 14, 1200 + ((i / 4) | 0) * 14, M.PI);
+    w.createGroup(0, mine);
+    w.armAbilities(0, ["barrage"]);
+    const hpBefore = w.soldiers.hp[mine[0]];
+    w.orders.issue({ kind: "ability", squad: -1, ability: "barrage", x: 1230, y: 1215 }, 0, w.tick + 1);
+    for (let t = 0; t < TICK_RATE * 4; t++) w.step();
+    check("a barrage lands where it was put", w.soldiers.hp[mine[0]] < hpBefore,
+      hpBefore.toFixed(0) + " -> " + w.soldiers.hp[mine[0]].toFixed(0));
+    // Both sides, properly checked -- the earlier version had an || fallback
+    // that would have passed on the friendly damage alone.
+    let hurtTheirs = 0;
+    for (let i = 0; i < w.soldiers.count; i++) {
+      if (w.soldiers.player[i] === 1 && w.soldiers.hp[i] < w.soldiers.maxHp[i]) hurtTheirs++;
+    }
+    check("and does not care whose men are under it",
+      w.soldiers.hp[mine[0]] < hpBefore && hurtTheirs > 0,
+      "own man at " + w.soldiers.hp[mine[0]].toFixed(0) + ", " + hurtTheirs + " of theirs hurt");
+  }
+
+  // Charges and cooldowns are enforced in the SIM, not the interface.
+  {
+    const w = new World({ seed: 132, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    for (let i = 0; i < 4; i++) w.spawnSoldier(0, "line", 900, 900, 0);
+    for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 1500, 1500, M.PI);
+    w.armAbilities(0, ["barrage"]);
+    const charges = ABILITIES.barrage.charges;
+    for (let k = 0; k < charges + 3; k++) {
+      w.orders.issue({ kind: "ability", squad: -1, ability: "barrage", x: 1500, y: 1500 }, 0, w.tick + 1);
+      w.step();
+    }
+    const left = w.abilityState[0].get("barrage");
+    check("spending more than you bought is simply refused",
+      left !== undefined && left.left >= 0 && left.left < charges,
+      "left " + (left ? left.left : "?"));
+
+    // Fired back to back, the cooldown must have stopped most of them.
+    check("and a cooldown stops it being spammed",
+      left !== undefined && left.left >= charges - 1,
+      "only " + (charges - (left?.left ?? 0)) + " got through");
+  }
+
+  // A shield turns blows aside; smoke hides the men under it.
+  {
+    function bloodshed(withShield: boolean): number {
+      const w = new World({ seed: 133, tilesWide: 80, tilesHigh: 80, soldierCapacity: 512 });
+      const mine: number[] = [];
+      for (let i = 0; i < 16; i++) mine.push(w.spawnSoldier(0, "line", 1200 + (i % 4) * 14, 1200 + ((i / 4) | 0) * 14, 0));
+      for (let i = 0; i < 24; i++) w.spawnSoldier(1, "guard", 1270 + (i % 6) * 14, 1200 + ((i / 6) | 0) * 14, M.PI);
+      const g = w.createGroup(0, mine) as Group;
+      w.createGroup(1, [...Array(24).keys()].map((k) => k + 16));
+      if (withShield) {
+        w.armAbilities(0, ["shield"]);
+        w.orders.issue({ kind: "ability", squad: g.id, ability: "shield", x: g.anchorX, y: g.anchorY }, 0, w.tick + 1);
+      }
+      for (let t = 0; t < TICK_RATE * 11; t++) w.step();
+      let hp = 0;
+      for (const m of mine) if (w.soldiers.alive[m] === 1) hp += w.soldiers.hp[m];
+      return hp;
+    }
+    check("a shield wall keeps men alive that would otherwise fall",
+      bloodshed(true) > bloodshed(false),
+      "shielded " + bloodshed(true).toFixed(0) + " hp vs bare " + bloodshed(false).toFixed(0));
+  }
+
+  // Rally puts nerve back into everyone within earshot.
+  {
+    const w = new World({ seed: 134, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    const mine: number[] = [];
+    for (let i = 0; i < 10; i++) mine.push(w.spawnSoldier(0, "line", 900 + (i % 5) * 14, 900, 0));
+    for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 1600, 1600, M.PI);
+    const g = w.createGroup(0, mine) as Group;
+    for (const m of mine) w.soldiers.morale[m] = 0.25;
+    w.armAbilities(0, ["rally"]);
+    w.orders.issue({ kind: "ability", squad: g.id, ability: "rally", x: g.anchorX, y: g.anchorY }, 0, w.tick + 1);
+    for (let t = 0; t < TICK_RATE * 6; t++) w.step();
+    check("a rally steadies the men who hear it", w.soldiers.morale[mine[0]] > 0.3,
+      w.soldiers.morale[mine[0]].toFixed(2));
   }
 }
 

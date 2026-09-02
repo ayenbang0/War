@@ -75,6 +75,8 @@ export class Renderer {
     if (cam.zoom < GROUP_HALO_ZOOM) this.drawGroupHalos(world, cam, viewer, now / 1000);
     this.drawSoldiers(world, cam, prev, alpha, now);
     this.drawWorkings(world, cam, viewer, now);
+    this.drawFields(world, cam, now);
+    this.drawRecovering(world, cam, viewer);
     this.drawFog(world, cam, viewer);
   }
 
@@ -508,6 +510,122 @@ export class Renderer {
    * ground never seen is dark. Remembering the terrain while forgetting what
    * stands on it is what makes scouting worth doing.
    */
+  /**
+   * The commander's abilities, standing on the ground where they were put.
+   *
+   * Each is drawn as the thing it is rather than as a coloured circle: a
+   * barrage is shells falling, a screen is drifting smoke, a shield wall is
+   * locked shields. An ability the player paid points for has to be visible
+   * enough to be worth the points.
+   */
+  private drawFields(world: World, cam: Camera, now: number): void {
+    if (world.fields.length === 0) return;
+    const ctx = this.ctx;
+    ctx.save();
+    for (const f of world.fields) {
+      const sx = cam.worldToScreenX(f.x);
+      const sy = cam.worldToScreenY(f.y);
+      const r = f.radius * cam.zoom;
+      const left = (f.until - world.tick) / 20;
+
+      if (f.ability === "barrage") {
+        // Shells landing: a scatter of bursts that moves every frame, so the
+        // ground plainly reads as being under fire rather than merely tinted.
+        ctx.globalAlpha = 0.22;
+        ctx.fillStyle = "#8c3a34";
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 0.9;
+        ctx.strokeStyle = "#7d2b24";
+        ctx.lineWidth = Math.max(1, 2 * cam.zoom);
+        for (let k = 0; k < 9; k++) {
+          // Deterministic per shell and per moment: stable enough not to
+          // strobe, lively enough to read as a bombardment.
+          const seed = k * 2.399 + Math.floor(now * 6) * 0.7;
+          const a2 = seed % (Math.PI * 2);
+          const rad = ((seed * 37) % 100) / 100 * r * 0.9;
+          const bx = sx + Math.cos(a2) * rad;
+          const by = sy + Math.sin(a2) * rad;
+          const burst = Math.max(2, 7 * cam.zoom);
+          ctx.beginPath();
+          ctx.moveTo(bx - burst, by);
+          ctx.lineTo(bx + burst, by);
+          ctx.moveTo(bx, by - burst);
+          ctx.lineTo(bx, by + burst);
+          ctx.stroke();
+        }
+      } else if (f.ability === "smoke") {
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = "#9a9384";
+        for (let k = 0; k < 7; k++) {
+          const a2 = (k / 7) * Math.PI * 2 + now * 0.25;
+          const rad = r * 0.45;
+          ctx.beginPath();
+          ctx.arc(sx + Math.cos(a2) * rad, sy + Math.sin(a2) * rad, r * 0.55, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else if (f.ability === "shield") {
+        ctx.globalAlpha = 0.5;
+        ctx.strokeStyle = "#3b5f8a";
+        ctx.lineWidth = Math.max(1.5, 3 * cam.zoom);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.stroke();
+        // Overlapping shields around the rim, so it reads as a wall of men.
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = "#3b5f8a";
+        for (let k = 0; k < 16; k++) {
+          const a2 = (k / 16) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.arc(sx + Math.cos(a2) * r, sy + Math.sin(a2) * r, Math.max(2, 5 * cam.zoom), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else if (f.ability === "rally") {
+        // A pulse going out, timed off how long is left.
+        const pulse = 1 - (left / 6) % 1;
+        ctx.globalAlpha = 0.5 * (1 - pulse);
+        ctx.strokeStyle = "#3b5f8a";
+        ctx.lineWidth = Math.max(1.5, 3 * cam.zoom);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r * (0.3 + pulse * 0.7), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  /**
+   * A ring counting down over a company that has stood down.
+   *
+   * Recovering costs thirty helpless seconds and the only sign of it was a word
+   * in the corner. A shrinking arc says both "these men cannot act" and "for
+   * this much longer" without the player reading anything.
+   */
+  private drawRecovering(world: World, cam: Camera, viewer: number): void {
+    const ctx = this.ctx;
+    ctx.save();
+    for (const g of world.groups) {
+      if (g.player !== viewer || g.recoverUntil <= world.tick) continue;
+      const total = RECOVER_LOCK_SECONDS * 20;
+      const frac = (g.recoverUntil - world.tick) / total;
+      const sx = cam.worldToScreenX(g.anchorX);
+      const sy = cam.worldToScreenY(g.anchorY);
+      const r = Math.max(14, (g.radius + 14) * cam.zoom);
+      ctx.strokeStyle = RECOVER_COLOR;
+      ctx.globalAlpha = 0.3;
+      ctx.lineWidth = Math.max(1.5, 3 * cam.zoom);
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 0.95;
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   private drawFog(world: World, cam: Camera, viewer: number): void {
     const fog = world.fog[viewer];
     const ctx = this.ctx;
