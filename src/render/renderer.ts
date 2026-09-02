@@ -575,15 +575,15 @@ export class Renderer {
       if (f.ability === "barrage") {
         // Shells landing: a scatter of bursts that moves every frame, so the
         // ground plainly reads as being under fire rather than merely tinted.
-        ctx.globalAlpha = 0.22;
-        ctx.fillStyle = "#8c3a34";
+        ctx.globalAlpha = 0.34;
+        ctx.fillStyle = "#c4402f";
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.fill();
-        ctx.globalAlpha = 0.9;
-        ctx.strokeStyle = "#7d2b24";
-        ctx.lineWidth = Math.max(1, 2 * cam.zoom);
-        for (let k = 0; k < 9; k++) {
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = "#ff6a3d";
+        ctx.lineWidth = Math.max(2, 4.5 * cam.zoom);
+        for (let k = 0; k < 16; k++) {
           // Deterministic per shell and per moment: stable enough not to
           // strobe, lively enough to read as a bombardment.
           const seed = k * 2.399 + Math.floor(now * 6) * 0.7;
@@ -591,7 +591,7 @@ export class Renderer {
           const rad = ((seed * 37) % 100) / 100 * r * 0.9;
           const bx = sx + Math.cos(a2) * rad;
           const by = sy + Math.sin(a2) * rad;
-          const burst = Math.max(2, 7 * cam.zoom);
+          const burst = Math.max(4, 15 * cam.zoom);
           ctx.beginPath();
           ctx.moveTo(bx - burst, by);
           ctx.lineTo(bx + burst, by);
@@ -600,8 +600,8 @@ export class Renderer {
           ctx.stroke();
         }
       } else if (f.ability === "smoke") {
-        ctx.globalAlpha = 0.55;
-        ctx.fillStyle = "#9a9384";
+        ctx.globalAlpha = 0.78;
+        ctx.fillStyle = "#b3ac9c";
         for (let k = 0; k < 7; k++) {
           const a2 = (k / 7) * Math.PI * 2 + now * 0.25;
           const rad = r * 0.45;
@@ -610,19 +610,19 @@ export class Renderer {
           ctx.fill();
         }
       } else if (f.ability === "shield") {
-        ctx.globalAlpha = 0.5;
-        ctx.strokeStyle = "#3b5f8a";
-        ctx.lineWidth = Math.max(1.5, 3 * cam.zoom);
+        ctx.globalAlpha = 0.95;
+        ctx.strokeStyle = "#4f86c6";
+        ctx.lineWidth = Math.max(3, 6 * cam.zoom);
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.stroke();
         // Overlapping shields around the rim, so it reads as a wall of men.
-        ctx.globalAlpha = 0.35;
+        ctx.globalAlpha = 0.7;
         ctx.fillStyle = "#3b5f8a";
         for (let k = 0; k < 16; k++) {
           const a2 = (k / 16) * Math.PI * 2;
           ctx.beginPath();
-          ctx.arc(sx + Math.cos(a2) * r, sy + Math.sin(a2) * r, Math.max(2, 5 * cam.zoom), 0, Math.PI * 2);
+          ctx.arc(sx + Math.cos(a2) * r, sy + Math.sin(a2) * r, Math.max(4, 9 * cam.zoom), 0, Math.PI * 2);
           ctx.fill();
         }
       } else if (f.ability === "bulwark") {
@@ -650,14 +650,14 @@ export class Renderer {
         // A hanging light with rays going out, and a ring where the light
         // stops -- the edge matters, because it is the edge of what you can see.
         const flicker = 0.82 + 0.18 * Math.sin(now * 9);
-        ctx.globalAlpha = 0.14 * flicker;
-        ctx.fillStyle = "#e8d38a";
+        ctx.globalAlpha = 0.3 * flicker;
+        ctx.fillStyle = "#ffe89a";
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.fill();
-        ctx.globalAlpha = 0.7 * flicker;
-        ctx.strokeStyle = "#c9a441";
-        ctx.lineWidth = Math.max(1, 2 * cam.zoom);
+        ctx.globalAlpha = flicker;
+        ctx.strokeStyle = "#ffc93a";
+        ctx.lineWidth = Math.max(2, 4 * cam.zoom);
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.stroke();
@@ -728,32 +728,43 @@ export class Renderer {
 
       if (kind === "brace") {
         // Shields across the front, facing the way the company faces.
-        ctx.globalAlpha = 0.75;
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = "#f0e2b8";
+        ctx.lineWidth = Math.max(4, 9 * cam.zoom);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, g.facing - 1.1, g.facing + 1.1);
+        ctx.stroke();
+        ctx.globalAlpha = 0.95;
         ctx.strokeStyle = tint;
-        ctx.lineWidth = Math.max(2, 4 * cam.zoom);
+        ctx.lineWidth = Math.max(2, 5 * cam.zoom);
         ctx.beginPath();
         ctx.arc(sx, sy, r, g.facing - 1.1, g.facing + 1.1);
         ctx.stroke();
       } else if (kind === "fortify") {
         // Planted: a closed, heavy ring with nothing open about it.
-        ctx.globalAlpha = 0.85;
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = "#f0e2b8";
+        ctx.lineWidth = Math.max(5, 11 * cam.zoom);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.stroke();
         ctx.strokeStyle = tint;
         ctx.lineWidth = Math.max(3, 6 * cam.zoom);
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.stroke();
-        ctx.globalAlpha = 0.18;
+        ctx.globalAlpha = 0.3;
         ctx.fillStyle = tint;
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.fill();
       } else if (kind === "dodge") {
         // After-images: the company reads as never quite where you aimed.
-        ctx.globalAlpha = 0.3;
         ctx.strokeStyle = tint;
-        ctx.lineWidth = Math.max(1, 2 * cam.zoom);
-        for (let k = 0; k < 3; k++) {
-          const off = (k + 1) * 5 * cam.zoom;
+        ctx.lineWidth = Math.max(2, 3.5 * cam.zoom);
+        for (let k = 0; k < 4; k++) {
+          ctx.globalAlpha = 0.55 - k * 0.1;
+          const off = (k + 1) * 9 * cam.zoom;
           const a2 = now * 3 + k * 2.1;
           ctx.beginPath();
           ctx.arc(sx + Math.cos(a2) * off, sy + Math.sin(a2) * off, r * 0.8, 0, Math.PI * 2);
@@ -763,14 +774,14 @@ export class Renderer {
         // Speed lines, laid out behind the direction of travel.
         ctx.globalAlpha = 0.8;
         ctx.strokeStyle = tint;
-        ctx.lineWidth = Math.max(1.5, 3 * cam.zoom);
+        ctx.lineWidth = Math.max(2.5, 5 * cam.zoom);
         const back = g.facing + Math.PI;
         for (let k = -2; k <= 2; k++) {
           const off = k * 7 * cam.zoom;
           const px = -Math.sin(g.facing) * off;
           const py = Math.cos(g.facing) * off;
-          const len = (26 + Math.abs(k) * -4) * cam.zoom;
-          ctx.globalAlpha = 0.7 - Math.abs(k) * 0.15;
+          const len = (58 + Math.abs(k) * -8) * cam.zoom;
+          ctx.globalAlpha = 1 - Math.abs(k) * 0.18;
           ctx.beginPath();
           ctx.moveTo(sx + px + Math.cos(back) * r * 0.6, sy + py + Math.sin(back) * r * 0.6);
           ctx.lineTo(sx + px + Math.cos(back) * (r * 0.6 + len), sy + py + Math.sin(back) * (r * 0.6 + len));

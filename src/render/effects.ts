@@ -17,11 +17,13 @@ const SHOT_FLIGHT = 0.28;
 /** Seconds an impact mark lingers. */
 const IMPACT_LIFE = 0.42;
 /** Seconds a thrown spark lives. */
-const SPARK_LIFE = 0.5;
+const SPARK_LIFE = 0.62;
 /** Seconds a scuff of dust lingers. */
 const DUST_LIFE = 1.1;
 /** Seconds the flash of a special lasts. Short and sharp on purpose. */
 const FLASH_LIFE = 0.55;
+/** A kill flashes and is gone. Short, so a scrum stays legible. */
+const KILL_FLASH_LIFE = 0.3;
 /** Hard cap so a long battle cannot grow the list without bound. */
 const MAX_EFFECTS = 900;
 
@@ -85,7 +87,9 @@ export class Effects {
       x: x + (this.rand() - 0.5) * radius,
       y: y + (this.rand() - 0.5) * radius,
       born: now,
-      r: radius * (0.25 + this.rand() * 0.3),
+      // Deliberately small. Marching is the background of the picture, not the
+      // event -- it should never compete with a blow landing.
+      r: radius * (0.14 + this.rand() * 0.16),
     });
   }
 
@@ -106,16 +110,21 @@ export class Effects {
       // Every blow throws something out. A killing blow throws more, and hotter
       // -- the difference between "hit" and "killed" has to be legible at a
       // glance without reading a number anywhere.
-      const n = e.lethal ? 7 : 3;
+      const n = e.lethal ? 11 : 6;
       for (let k = 0; k < n; k++) {
         if (this.sparks.length > MAX_EFFECTS) break;
         const a2 = this.rand() * Math.PI * 2;
-        const sp = (e.lethal ? 60 : 34) * (0.4 + this.rand());
+        const sp = (e.lethal ? 190 : 95) * (0.4 + this.rand());
         this.sparks.push({
           x: e.x1, y: e.y1,
           vx: Math.cos(a2) * sp, vy: Math.sin(a2) * sp,
           born: now, life: SPARK_LIFE * (0.6 + this.rand() * 0.7), hot: e.lethal,
         });
+      }
+      // A kill gets its own ring, so a death reads instantly from across the
+      // field rather than having to be picked out of the scrum.
+      if (e.lethal && this.flashes.length <= MAX_EFFECTS) {
+        this.flashes.push({ x: e.x1, y: e.y1, born: now, kind: "kill", player: e.player });
       }
     }
   }
@@ -128,7 +137,7 @@ export class Effects {
     for (const d of this.dust) {
       const t = (now - d.born) / DUST_LIFE;
       if (t >= 1) continue;
-      ctx.globalAlpha = 0.2 * (1 - t);
+      ctx.globalAlpha = 0.09 * (1 - t);
       ctx.fillStyle = "#8a7a5c";
       ctx.beginPath();
       ctx.arc(cam.worldToScreenX(d.x), cam.worldToScreenY(d.y),
@@ -150,12 +159,18 @@ export class Effects {
       const tx = s.x0 + (s.x1 - s.x0) * lag;
       const ty = s.y0 + (s.y1 - s.y0) * lag;
       ctx.strokeStyle = playerColor[s.player] ?? "#3f3527";
-      ctx.globalAlpha = 0.85 * (1 - t * 0.35);
-      ctx.lineWidth = Math.max(0.8, 1.5 * cam.zoom);
+      ctx.globalAlpha = 1 - t * 0.25;
+      ctx.lineWidth = Math.max(1.4, 3 * cam.zoom);
       ctx.beginPath();
       ctx.moveTo(cam.worldToScreenX(tx), cam.worldToScreenY(ty));
       ctx.lineTo(cam.worldToScreenX(hx), cam.worldToScreenY(hy));
       ctx.stroke();
+      // A bright head, so a volley in flight reads as a volley.
+      ctx.globalAlpha = 1 - t * 0.4;
+      ctx.fillStyle = "#f0e2b8";
+      ctx.beginPath();
+      ctx.arc(cam.worldToScreenX(hx), cam.worldToScreenY(hy), Math.max(1.2, 2.4 * cam.zoom), 0, Math.PI * 2);
+      ctx.fill();
     }
 
     // Impacts: a small burst, heavier when the blow was fatal.
@@ -164,10 +179,10 @@ export class Effects {
       if (t >= 1) continue;
       const sx = cam.worldToScreenX(im.x);
       const sy = cam.worldToScreenY(im.y);
-      const r = (im.lethal ? 6 : 3) * cam.zoom * (0.5 + t * 1.4);
-      ctx.globalAlpha = (1 - t) * (im.lethal ? 0.9 : 0.55);
-      ctx.strokeStyle = im.lethal ? "#7d2b24" : (playerColor[im.player] ?? "#3f3527");
-      ctx.lineWidth = Math.max(0.8, (im.lethal ? 1.8 : 1.1) * cam.zoom);
+      const r = (im.lethal ? 13 : 7) * cam.zoom * (0.5 + t * 2.2);
+      ctx.globalAlpha = (1 - t) * (im.lethal ? 1 : 0.8);
+      ctx.strokeStyle = im.lethal ? "#e0452f" : (playerColor[im.player] ?? "#3f3527");
+      ctx.lineWidth = Math.max(1.4, (im.lethal ? 3.4 : 2.2) * cam.zoom);
       if (im.lethal) {
         // A fallen soldier gets a cross, which reads at a glance as a loss.
         ctx.beginPath();
@@ -190,26 +205,43 @@ export class Effects {
       if (t >= 1) continue;
       const x = sp.x + sp.vx * t * 0.5;
       const y = sp.y + sp.vy * t * 0.5;
-      ctx.globalAlpha = (1 - t) * (sp.hot ? 0.85 : 0.5);
-      ctx.strokeStyle = sp.hot ? "#8c3a34" : "#5a4a33";
-      ctx.lineWidth = Math.max(0.7, (sp.hot ? 1.5 : 1) * cam.zoom);
+      ctx.globalAlpha = (1 - t) * (sp.hot ? 1 : 0.8);
+      ctx.strokeStyle = sp.hot ? "#e0452f" : "#c08a3a";
+      ctx.lineWidth = Math.max(1.2, (sp.hot ? 3 : 2) * cam.zoom);
       ctx.beginPath();
       ctx.moveTo(cam.worldToScreenX(x), cam.worldToScreenY(y));
-      ctx.lineTo(cam.worldToScreenX(x - sp.vx * 0.06), cam.worldToScreenY(y - sp.vy * 0.06));
+      // A long tail: the streak is most of what reads at speed.
+      ctx.lineTo(cam.worldToScreenX(x - sp.vx * 0.16), cam.worldToScreenY(y - sp.vy * 0.16));
       ctx.stroke();
     }
 
     // The moment itself: an expanding ring, hard-edged and quick.
     for (const f of this.flashes) {
-      const t = (now - f.born) / FLASH_LIFE;
+      // A kill is snappier than a special. Many men die at once in a scrum, and
+      // at the full length the rings stacked into a wall that buried the
+      // counters underneath -- you could not see the fight for the effects.
+      const life = f.kind === "kill" ? KILL_FLASH_LIFE : FLASH_LIFE;
+      const t = (now - f.born) / life;
       if (t >= 1) continue;
       const sx = cam.worldToScreenX(f.x);
       const sy = cam.worldToScreenY(f.y);
-      ctx.globalAlpha = (1 - t) * 0.9;
-      ctx.strokeStyle = f.kind === "blink" ? "#7a4a9a" : "#c9a441";
-      ctx.lineWidth = Math.max(1.5, (1 - t) * 5 * cam.zoom);
+      const colour = f.kind === "blink" ? "#a86fd0"
+        : f.kind === "kill" ? "#e0452f"
+          : f.kind === "breakBow" ? "#e8a33a"
+            : "#f4d76a";
+      const grow = f.kind === "kill" ? 46 : 150;
+      const rr = Math.max(5, (14 + t * grow) * cam.zoom);
+      // A filled core that dies fast, under a ring that keeps going: the pop.
+      ctx.globalAlpha = (1 - t) * (1 - t) * (f.kind === "kill" ? 0.42 : 0.7);
+      ctx.fillStyle = colour;
       ctx.beginPath();
-      ctx.arc(sx, sy, Math.max(4, (16 + t * 90) * cam.zoom), 0, Math.PI * 2);
+      ctx.arc(sx, sy, rr * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = (1 - t) * (f.kind === "kill" ? 0.8 : 1);
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = Math.max(1.5, (1 - t) * (f.kind === "kill" ? 4.5 : 9) * cam.zoom);
+      ctx.beginPath();
+      ctx.arc(sx, sy, rr, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.restore();
@@ -217,7 +249,9 @@ export class Effects {
 
   private expire(now: number): void {
     if (this.flashes.length > 0) {
-      this.flashes = this.flashes.filter((f) => now - f.born < FLASH_LIFE);
+      this.flashes = this.flashes.filter(
+        (f) => now - f.born < (f.kind === "kill" ? KILL_FLASH_LIFE : FLASH_LIFE),
+      );
     }
     if (this.sparks.length > 0) {
       this.sparks = this.sparks.filter((sp) => now - sp.born < sp.life);
