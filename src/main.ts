@@ -15,7 +15,26 @@ import { TILE_SIZE } from "./sim/terrain.ts";
 import { validate, type ArmyList } from "./content/army.ts";
 import { DIFFICULTIES } from "./content/difficulty.ts";
 import { type UnitTypeId } from "./content/unit-types.ts";
-import { openMenu } from "./ui/menu.ts";
+import { openMenu, type Setup } from "./ui/menu.ts";
+import { openHome } from "./ui/home.ts";
+import { Tutorial } from "./ui/tutorial.ts";
+import { COMMANDERS } from "./content/commanders.ts";
+import { LEVELS } from "./content/levels/index.ts";
+
+/**
+ * The lesson's fixed setup: the smallest field, a plain mixed force, and the
+ * most passive commander in the game. A tutorial interrupted by a cavalry
+ * charge is not a tutorial.
+ */
+function tutorialSetup(): Setup {
+  const level = LEVELS.reduce((a, b) => (a.tilesWide * a.tilesHigh <= b.tilesWide * b.tilesHigh ? a : b));
+  return {
+    level,
+    difficulty: "recruit",
+    army: { doctrine: "defensive", squads: ["line", "line", "archer", "skirmisher"] },
+    commander: COMMANDERS.badger,
+  };
+}
 import { showAfterAction } from "./ui/after-action.ts";
 import { UNIT_TYPES } from "./content/unit-types.ts";
 import { Camera } from "./render/camera.ts";
@@ -34,9 +53,17 @@ const ctx: CanvasRenderingContext2D = ctx2d;
 
 const PLAYER = 0;
 
+// The front screen first. A first-time player meeting a point-buy table before
+// they know what the game is has been given a spreadsheet, not a game.
+const home = await openHome(document.getElementById("home") as HTMLElement);
+const teaching = home === "tutorial";
+
 // Nothing can be built until the player has chosen: the world needs the level,
-// their doctrine, and an enemy army sized by the difficulty they picked.
-const setup = await openMenu(document.getElementById("menu") as HTMLElement);
+// their doctrine, and an enemy army sized by the difficulty they picked. The
+// lesson skips all of that and uses a fixed, quiet setup.
+const setup = teaching
+  ? tutorialSetup()
+  : await openMenu(document.getElementById("menu") as HTMLElement);
 const level = setup.level;
 const diff = DIFFICULTIES[setup.difficulty];
 
@@ -115,8 +142,24 @@ function inDeploymentZone(x: number, y: number): boolean {
 }
 
 const cam = new Camera(world.terrain.worldWidth, world.terrain.worldHeight);
-cam.x = (myZone ? myZone.x + myZone.w / 2 : 20) * TILE_SIZE;
-cam.y = world.terrain.worldHeight * 0.5;
+// Open looking at YOUR OWN MEN, not at the middle of your deployment zone.
+// The zone is much taller than the force set out in it, so the camera started
+// well below the army -- you began every match, and the tutorial, staring at
+// empty ground with your soldiers off the top of the screen.
+{
+  const s = world.soldiers;
+  let cx = 0;
+  let cy = 0;
+  let n = 0;
+  for (let i = 0; i < s.count; i++) {
+    if (s.alive[i] !== 1 || s.player[i] !== PLAYER) continue;
+    cx += s.x[i];
+    cy += s.y[i];
+    n++;
+  }
+  cam.x = n > 0 ? cx / n : (myZone ? myZone.x + myZone.w / 2 : 20) * TILE_SIZE;
+  cam.y = n > 0 ? cy / n : world.terrain.worldHeight * 0.5;
+}
 cam.zoom = 1.1;
 
 const renderer = new Renderer(ctx, world.terrain);
@@ -153,12 +196,20 @@ function snapshotInto(t: Snapshot): void {
 }
 snapshotInto(prev);
 
+const tutorial = teaching ? new Tutorial(world, commander) : null;
+if (teaching) {
+  // The lesson is about the pen, not about setting an army out.
+  world.deploying = false;
+}
+
 let paused = false;
 let showDebug = false;
 window.addEventListener("keydown", (e) => {
   if (e.code === "Enter" && world.deploying) {
     world.deploying = false;
     pen.lastAction = "battle begins";
+  } else if (e.code === "Escape" && tutorial) {
+    window.location.reload();
   } else if (e.code === "F2") {
     e.preventDefault();
     showDebug = !showDebug;
@@ -172,7 +223,9 @@ window.addEventListener("keydown", (e) => {
 });
 
 if (import.meta.env.DEV) {
-  (window as unknown as { war: unknown }).war = { world, cam, level, commander, pen, hashWorld, UNIT_TYPES };
+  (window as unknown as { war: unknown }).war = {
+    world, cam, level, commander, pen, hashWorld, UNIT_TYPES, tutorial,
+  };
 }
 
 let last = performance.now();
@@ -241,6 +294,8 @@ function frame(now: number): void {
   // Light it from here instead. Throttled because nothing else is competing for
   // the frame and there is no reason to re-stamp 160 discs sixty times a second.
   if (world.deploying && deployFogTick++ % 6 === 0) world.lightGround();
+
+  tutorial?.update();
 
   // During deployment the pen drags men into position instead of ordering them.
   if (world.deploying && pen.drawing && pen.points.length > 1 && commander.selected.length > 0) {
@@ -332,6 +387,9 @@ function drawHud(): void {
     // the full account belongs in the after-action report.
     lines.push("", lastBreak);
   } else if (pen.lastAction) lines.push("", pen.lastAction);
+
+  // The lesson owns the panel while it is running.
+  if (tutorial) lines.push(...tutorial.lines());
 
   if (showDebug) {
     lines.push(

@@ -2544,6 +2544,33 @@ section("orders in practice");
       cmd.selected.length === 1 && cmd.selected[0] !== g.id, JSON.stringify(cmd.selected));
   }
 
+  // A tight loop round part of a company BEGINS on top of that company, so the
+  // anchor rule claimed it and read it as a formation glyph -- every honest
+  // attempt to cut a company in two re-formed it instead. A closed stroke drawn
+  // while holding nothing is always a gather, whatever it started over.
+  {
+    const w = new World({ seed: 51, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
+    const ids: number[] = [];
+    for (let i = 0; i < 24; i++) ids.push(w.spawnSoldier(0, "line", 900 + (i % 6) * 26, 1000 + ((i / 6) | 0) * 26, 0));
+    army(w, 1, 2600, 1100);
+    const g = w.createGroup(0, ids) as Group;
+    const shapeBefore = g.shape;
+    const cmd = new Commander(w, 0);
+    cmd.selected = [];
+    // Centred ON the men and small enough that the anchor would have taken it.
+    const loop: { x: number; y: number }[] = [];
+    for (let k = 0; k <= 40; k++) {
+      const a2 = (k / 40) * M.PI * 2;
+      loop.push({ x: g.anchorX + M.cos(a2) * 60, y: g.anchorY - 26 + M.sin(a2) * 34 });
+    }
+    const said = cmd.commit(loop);
+    check("a tight loop begun ON a company still carves rather than re-forming it",
+      said.startsWith("split off"), said);
+    check("and the company it came from kept its shape",
+      w.groups.filter((q) => q.player === 0).length === 2 && g.shape === shapeBefore,
+      w.groups.filter((q) => q.player === 0).length + " companies, shape " + g.shape);
+  }
+
   // A loop thrown round a WHOLE company leaves it whole -- that is gathering,
   // not carving, and it must not be reported as a split.
   {

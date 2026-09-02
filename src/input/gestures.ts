@@ -375,6 +375,15 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
   if (anchored !== null && closed) {
     const on = squadById(ctx, anchored);
     if (on && span > on.radius * 4.5) anchored = null;
+    // A CLOSED stroke drawn while holding nothing is always a gather, whatever
+    // it started on top of. The anchor exists so a stroke drawn FROM a company
+    // TO somewhere is that company's order, which is about open strokes going
+    // places; with nothing selected there is no order to give, and inventing a
+    // subject turns "loop round these men" into "re-form whatever I started
+    // over". That broke carving outright: a loop drawn tightly round half a
+    // company necessarily begins on top of it, so every honest attempt to cut
+    // a company in two was read as a formation glyph instead.
+    if (ctx.selected.length === 0) anchored = null;
   }
   const subjects = anchored !== null ? [anchored] : ctx.selected.slice();
 
