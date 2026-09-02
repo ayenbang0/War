@@ -2358,6 +2358,70 @@ section("decisions matter");
   }
 }
 
+// -- 9b3. the glyph/cut boundary, swept ----------------------------------------
+
+section("glyph and cut never overlap");
+{
+  // Both a formation glyph and a split are straight strokes with two or more
+  // companies selected. What separates them is only WHERE the stroke sits, so
+  // the honest test is to sweep a glyph sideways off a company and find the
+  // point where the reading changes -- and to check there is no band in between
+  // where it is ambiguous, and no case where the wrong one fires.
+  //
+  // Driven in the live game as real pointer strokes first; this pins the result.
+  const w = new World({ seed: 91, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
+  const a: number[] = [];
+  const b2: number[] = [];
+  for (let i = 0; i < 20; i++) a.push(w.spawnSoldier(0, "line", 900 + (i % 5) * 16, 900 + ((i / 5) | 0) * 16, 0));
+  for (let i = 0; i < 20; i++) b2.push(w.spawnSoldier(0, "line", 900 + (i % 5) * 16, 1500 + ((i / 5) | 0) * 16, 0));
+  for (let i = 0; i < 6; i++) w.spawnSoldier(1, "line", 2600, 1200, M.PI);
+  const g1 = w.createGroup(0, a) as Group;
+  const g2 = w.createGroup(0, b2) as Group;
+  const cmd = new Commander(w, 0);
+
+  const glyphAt = (g: Group, off: number): { x: number; y: number }[] => {
+    const c = M.cos(g.facing);
+    const sn = M.sin(g.facing);
+    const L = M.min(g.radius * 0.9, 70);
+    const out: { x: number; y: number }[] = [];
+    for (let i = 0; i <= 26; i++) {
+      const t = -1 + (2 * i) / 26;
+      out.push({ x: g.anchorX + c * L * t - sn * off, y: g.anchorY + sn * L * t + c * off });
+    }
+    return out;
+  };
+
+  let formedUpTo = -1;
+  let splitFrom = 1e9;
+  let everCarved = false;
+  let cutEverReshaped = false;
+  for (let k = 0; k <= 12; k++) {
+    const off = k * g1.radius * 0.5;
+    g1.shape = "square";
+    cmd.flushPending(Number.MAX_SAFE_INTEGER);
+    cmd.selected = [g1.id, g2.id];
+    const companiesBefore = w.groups.length;
+    const said = cmd.commit(glyphAt(g1, off));
+    for (let t = 0; t < 6; t++) w.step();
+    if (w.groups.length !== companiesBefore) everCarved = true;
+    if (said.startsWith("form")) formedUpTo = off;
+    else {
+      splitFrom = M.min(splitFrom, off);
+      if (g1.shape !== "square") cutEverReshaped = true;
+    }
+  }
+
+  check("a glyph on the company always forms it up", formedUpTo >= g1.radius * 0.9,
+    "formed out to " + formedUpTo.toFixed(0) + " of radius " + g1.radius.toFixed(0));
+  check("a stroke clear of the company is always a cut", splitFrom < 1e9 && splitFrom > formedUpTo,
+    "cuts from " + splitFrom.toFixed(0) + ", glyphs to " + formedUpTo.toFixed(0));
+  check("with clear air between the two, so a shaky hand cannot land between",
+    splitFrom - formedUpTo >= g1.radius * 0.4,
+    "gap " + (splitFrom - formedUpTo).toFixed(0) + " on a radius of " + g1.radius.toFixed(0));
+  check("a glyph never cuts the company up", !everCarved);
+  check("and a cut never re-forms it", !cutEverReshaped);
+}
+
 // -- 9c. the account of the battle ---------------------------------------------
 
 section("after-action");
