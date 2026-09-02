@@ -64,6 +64,9 @@ export class Commander {
 
   /** A split line waiting to see whether a parallel one follows. */
   private pendingLine: PendingLine = null;
+  /** The route just ordered, while a retrace of it would still mean "feint". */
+  private pendingRoute: number[] | null = null;
+  private pendingRouteDeadline = 0;
   private pendingKeep: number[] = [];
   private pendingDeadline = 0;
 
@@ -143,6 +146,7 @@ export class Commander {
       selected: this.selected,
       homeX,
       pendingLine: this.pendingLine,
+      pendingRoute: nowMs() < this.pendingRouteDeadline ? this.pendingRoute : null,
     };
   }
 
@@ -289,6 +293,32 @@ export class Commander {
         : "split " + r.keep.length + "/" + r.squads.length + "  (parallel line = rows)";
     }
 
+    if (r.kind === "ambush") {
+      this.clearPending();
+      const tick = this.world.tick + ORDER_DELAY;
+      let issued = 0;
+      for (const id of this.materialise(r.squads)) {
+        if (this.locked(id)) continue;
+        this.world.orders.issue({ kind: "ambush", squad: id }, this.player, tick);
+        issued++;
+      }
+      return issued > 0 ? "lie in wait" : "locked (recovering)";
+    }
+
+    if (r.kind === "feint") {
+      this.clearPending();
+      const tick = this.world.tick + ORDER_DELAY;
+      let issued = 0;
+      for (const id of this.materialise(r.squads)) {
+        if (this.locked(id)) continue;
+        this.world.orders.issue(
+          { kind: "feint", squad: id, path: r.path.slice() }, this.player, tick,
+        );
+        issued++;
+      }
+      return issued > 0 ? "feint - advance and withdraw" : "locked (recovering)";
+    }
+
     if (r.kind === "grid") {
       this.clearPending();
       const tick = this.world.tick + ORDER_DELAY;
@@ -367,6 +397,10 @@ export class Commander {
 
       switch (r.kind) {
         case "move":
+          // Hold on to the route: retracing it inside the pair window is how a
+          // feint is asked for, reusing the same window the grid gesture uses.
+          this.pendingRoute = r.path.slice();
+          this.pendingRouteDeadline = nowMs() + PAIR_WINDOW_MS;
           this.world.orders.issue(
             { kind: "move", squad: id, path: fanOut(r.path, lateral) },
             this.player,

@@ -740,5 +740,87 @@ export function splitAndRecoverCases(): Case[] {
     });
   }
 
+  // -- AMBUSH: a zigzag. Nothing else in the vocabulary doubles back more than
+  //    once, so this is well clear of the rest -- but it must be drawn where a
+  //    march, a glyph and a withdrawal are all still legal readings.
+  for (let i = 0; i < 6; i++) {
+    const legs: Point[] = [];
+    // SEVEN points, not five: reversals are sign changes between consecutive
+    // turns, so five points give three turns and at most two changes -- below
+    // the three the recogniser asks for. Kept compact and well clear of the
+    // enemy, since a stroke ending on one is an attack whatever its shape.
+    const amp = 120 + i * 22;
+    let x = FRIEND_X - 120;
+    const y = FRIEND_Y;
+    for (let k = 0; k < 7; k++) {
+      legs.push({ x, y: y + (k % 2 === 0 ? -amp : amp) });
+      x += 95;
+    }
+    cases.push({
+      expected: "ambush",
+      note: "zigzag of 7 points, amplitude " + amp,
+      ctx: context(0),
+      points: stroke(legs, 64, J, rnd),
+    });
+  }
+
+  // A dog-legged march has ONE bend and must stay a march -- this is the pair
+  // that would collide if reversals were counted loosely.
+  for (let i = 0; i < 5; i++) {
+    cases.push({
+      expected: "move",
+      note: "single dog-leg, not a zigzag",
+      ctx: context(0),
+      points: stroke(
+        [here2(), { x: FRIEND_X + 340, y: FRIEND_Y - 240 - i * 30 }, { x: FRIEND_X + 720, y: FRIEND_Y + 60 }],
+        48, J, rnd,
+      ),
+    });
+  }
+
+  // -- FEINT: a stroke retracing the route just ordered. Only meaningful with
+  //    a pending route, so the same stroke with none must read as a march.
+  {
+    const outward: number[] = [FRIEND_X, FRIEND_Y, FRIEND_X + 760, FRIEND_Y - 120];
+    for (let i = 0; i < 5; i++) {
+      const ctxWith: GestureContext = { ...context(0), pendingRoute: outward };
+      cases.push({
+        expected: "feint",
+        note: "retrace of the route just ordered",
+        ctx: ctxWith,
+        points: stroke(
+          [{ x: FRIEND_X + 20, y: FRIEND_Y + (i - 2) * 12 },
+           { x: FRIEND_X + 740, y: FRIEND_Y - 120 + (i - 2) * 12 }],
+          40, J, rnd,
+        ),
+      });
+      cases.push({
+        expected: "move",
+        note: "the very same stroke with no route pending is a march",
+        ctx: context(0),
+        points: stroke(
+          [{ x: FRIEND_X + 20, y: FRIEND_Y + (i - 2) * 12 },
+           { x: FRIEND_X + 740, y: FRIEND_Y - 120 + (i - 2) * 12 }],
+          40, J, rnd,
+        ),
+      });
+    }
+    // A march somewhere ELSE while a route is pending is not a retrace of it.
+    for (let i = 0; i < 4; i++) {
+      cases.push({
+        expected: "move",
+        note: "a different march while a route is pending",
+        ctx: { ...context(0), pendingRoute: outward },
+        points: stroke(
+          [here2(), { x: FRIEND_X + 200, y: FRIEND_Y + 620 + i * 40 }], 40, J, rnd,
+        ),
+      });
+    }
+  }
+
   return cases;
+}
+
+function here2(): Point {
+  return { x: FRIEND_X, y: FRIEND_Y };
 }

@@ -55,6 +55,51 @@ export type SquadView = {
 /** A straight line held briefly, waiting to see if a parallel one follows. */
 export type PendingLine = { readonly a: Point; readonly b: Point } | null;
 
+/**
+ * How many times a stroke genuinely doubles back.
+ *
+ * Measured as sign changes in the turn at each interior vertex of the COARSE
+ * simplification, and only for turns sharp enough to be deliberate. A hand
+ * wobbling along a straight line changes turn sign constantly, and counting
+ * those would make every march an ambush.
+ */
+function reversals(simple: readonly Point[]): number {
+  if (simple.length < 4) return 0;
+  let n = 0;
+  let last = 0;
+  for (let i = 1; i + 1 < simple.length; i++) {
+    const t = turnAt(simple, i);
+    if (Math.abs(t) < 0.9) continue;
+    const sign = t > 0 ? 1 : -1;
+    if (last !== 0 && sign !== last) n++;
+    last = sign;
+  }
+  return n;
+}
+
+/** Does this stroke run back along the one just drawn? */
+function retraces(raw: readonly Point[], prev: readonly number[]): boolean {
+  if (prev.length < 4 || raw.length < 2) return false;
+  const ax = prev[0];
+  const ay = prev[1];
+  const bx = prev[prev.length - 2];
+  const by = prev[prev.length - 1];
+  const len = Math.hypot(bx - ax, by - ay);
+  if (len < 1e-6) return false;
+  // Every point of the new stroke has to lie near the old line, and the two
+  // must span roughly the same ground -- a short scribble over one end of a
+  // long march is not a retrace of it.
+  const tol = Math.max(70, len * 0.22);
+  for (const p of raw) {
+    const t = ((p.x - ax) * (bx - ax) + (p.y - ay) * (by - ay)) / (len * len);
+    const cl = t < 0 ? 0 : t > 1 ? 1 : t;
+    if (Math.hypot(p.x - (ax + (bx - ax) * cl), p.y - (ay + (by - ay) * cl)) > tol) return false;
+  }
+  const first = raw[0];
+  const last = raw[raw.length - 1];
+  return Math.hypot(last.x - first.x, last.y - first.y) > len * 0.5;
+}
+
 export type GestureContext = {
   readonly player: number;
   readonly squads: readonly SquadView[];
@@ -64,6 +109,8 @@ export type GestureContext = {
   readonly homeX: number;
   /** Set while a split line is awaiting a possible parallel partner. */
   readonly pendingLine?: PendingLine;
+  /** The route just ordered, if it is still inside the pairing window. */
+  readonly pendingRoute?: readonly number[] | null;
 };
 
 /** Two or more selected squads form a GROUP, which unlocks the group verbs. */
@@ -88,6 +135,10 @@ export type Recognized =
   | { kind: "patrolArea"; squads: number[]; x: number; y: number; radius: number }
   /** Stand down and recover. Costs 30 seconds of total vulnerability. */
   | { kind: "recover"; squads: number[] }
+  /** Lie in wait here: hold fire, keep still, strike whoever walks in. */
+  | { kind: "ambush"; squads: number[] }
+  /** Advance this route and come back: a real advance, honestly withdrawn. */
+  | { kind: "feint"; squads: number[]; path: number[] }
   /** A loop drawn around loose men, with nothing selected: gather them up. */
   /**
    * Gather everything the loop encloses into one company.
@@ -437,6 +488,33 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
     }
   }
 
+  // 2b. Ambush. A zigzag -- three or more genuine direction reversals.
+  //
+  //     Chosen because NOTHING else in the vocabulary reverses direction more
+  //     than once: a march is straight or gently swept, a glyph is one or two
+  //     strokes, a ring turns steadily the same way. Counting reversals on the
+  //     coarse simplification is what keeps a shaky straight line from
+  //     accumulating false ones.
+  //
+  //     Deliberately NOT gated on the stroke being open. A tall zigzag has a
+  //     long path between endpoints that are close together, so the closed test
+  //     calls it closed and it fell through to the heart -- a zigzag was being
+  //     read as "stand down". Repeated reversal is the stronger signal by far:
+  //     a ring turns steadily one way and a heart has a single cusp, so neither
+  //     reverses three times.
+  if (reversals(simple) >= 3) {
+    return { kind: "ambush", squads: subjects.slice() };
+  }
+
+  // 2c. Feint. A stroke that retraces the route just drawn, within the same
+  //     pair window the grid gesture uses. Reusing that machinery rather than
+  //     inventing another shape keeps the vocabulary from growing another way
+  //     to be misread -- and "draw it again" is a natural way to say "and
+  //     come back".
+  if (!closed && ctx.pendingRoute && retraces(raw, ctx.pendingRoute)) {
+    return { kind: "feint", squads: subjects.slice(), path: toPath(route) };
+  }
+
   // 3. Recover. Available to ANY selection, not just a group of several.
   //
   //    Resolved BEFORE the group verbs, and that ordering is the whole point:
@@ -530,6 +608,10 @@ export function gestureLabel(r: Recognized | null): string {
       return "patrol area";
     case "recover":
       return "recover";
+    case "ambush":
+      return "ambush";
+    case "feint":
+      return "feint";
     case "lasso":
       return "group " + r.squads.length;
     default:

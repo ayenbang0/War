@@ -41,7 +41,11 @@ export type UnitType = {
   readonly attackInterval: number;
   /** How far this unit sees on level open ground, in world units. */
   readonly sight: number;
-  /** Point-buy cost (Phase 6). */
+  /**
+   * Point-buy cost, on a deliberately small and readable scale: a line company
+   * is 3 and the dearest thing on the field is 9. Big numbers would carry no
+   * more meaning and would be harder to add up in your head while composing.
+   */
   readonly cost: number;
   /** Maximum of this type in one army. Special units are deliberately scarce. */
   readonly maxPerArmy: number;

@@ -165,11 +165,16 @@ export class Soldiers {
   }
 }
 
-export type Stance = "idle" | "move" | "attack" | "hold" | "retreat" | "patrol" | "recover";
+export type Stance =
+  | "idle" | "move" | "attack" | "hold" | "retreat" | "patrol" | "recover" | "ambush";
 
 /** Fixed order, so a stance hashes as a stable index. Append only. */
+/**
+ * APPEND ONLY. Hashed by index, so inserting anywhere but the end would
+ * reinterpret every recorded replay and golden.
+ */
 export const STANCES: readonly Stance[] = [
-  "idle", "move", "attack", "hold", "retreat", "patrol", "recover",
+  "idle", "move", "attack", "hold", "retreat", "patrol", "recover", "ambush",
 ];
 
 /**
@@ -215,6 +220,15 @@ export type Group = {
   chargeUntil: number;
   /** Accumulated digging effort toward a fieldwork on the ground it holds. */
   buildTicks: number;
+  /**
+   * Tick at which a feint turns around, or 0. A feint is a genuine advance
+   * followed by a genuine withdrawal -- the deception is that the enemy cannot
+   * tell which it is until it happens.
+   */
+  feintTurn: number;
+  /** Where a feint came from, and so where it goes back to. */
+  feintHomeX: number;
+  feintHomeY: number;
   spellReady: number;
   /** Fraction of members standing in their slots. */
   cohesion: number;

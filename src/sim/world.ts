@@ -167,6 +167,17 @@ const LOOSE_SHOCK_RADIUS = 95;
  * bothering to draw a company at all.
  */
 const LOOSE_ROSTER = 7;
+/** Seconds a feint presses forward before turning back. */
+const FEINT_ADVANCE_SECONDS = 7;
+/**
+ * How close an enemy must come before an ambush springs.
+ *
+ * Short: the whole point is letting them walk right onto you. Longer than
+ * melee reach so the first volley still lands before contact.
+ */
+const AMBUSH_TRIGGER = 150;
+/** Seconds of extra bite an ambush gets when it springs. */
+const AMBUSH_BITE_SECONDS = 3;
 const CHARGE_LULL = 40;
 /** Seconds the charge bonus lasts once contact is made. */
 const CHARGE_SECONDS = 2;
@@ -416,6 +427,9 @@ export class World {
       recoverUntil: 0,
       chargeUntil: 0,
       buildTicks: 0,
+      feintTurn: 0,
+      feintHomeX: 0,
+      feintHomeY: 0,
       spellReady: 0,
       cohesion: 1,
       engaged: 0,
@@ -661,11 +675,13 @@ export class World {
     if (this.deploying) return;
     for (const ai of this.ai) ai.update(this);
     this.applyOrders();
+    this.updateFeints();
     this.updateGroups();
     this.rebuildHash();
     this.updateSoldiers();
     this.updateVision();
     this.castSpells();
+    this.updateAmbushes();
     this.resolveCombat();
     this.applyWorkings();
     this.updateEngineering();
@@ -679,6 +695,25 @@ export class World {
       holdSeconds: this.holdSeconds,
       points: this.points,
     });
+  }
+
+  /**
+   * Turn a feint around.
+   *
+   * The deception is not a trick played on the AI -- it reacts to what it
+   * genuinely sees, and what it sees is a real advance. The feint is simply an
+   * advance with a withdrawal already scheduled, which is what makes it cost
+   * something if the enemy calls it.
+   */
+  private updateFeints(): void {
+    for (const g of this.groups) {
+      if (g.feintTurn === 0 || this.tick < g.feintTurn) continue;
+      g.feintTurn = 0;
+      if (g.recoverUntil > this.tick) continue;
+      g.stance = "retreat";
+      g.target = -1;
+      g.path = this.routeThrough(g, [g.feintHomeX, g.feintHomeY]);
+    }
   }
 
   private applyOrders(): void {
@@ -727,6 +762,22 @@ export class World {
         g.shape = order.shape;
         this.reflow(g);
         return;
+      case "ambush":
+        g.stance = "ambush";
+        g.target = -1;
+        g.path.length = 0;
+        return;
+      case "feint": {
+        // Remember where it started: a feint is an advance that goes back, and
+        // "back" has to mean the ground it actually left.
+        g.feintHomeX = g.anchorX;
+        g.feintHomeY = g.anchorY;
+        g.feintTurn = this.tick + FEINT_ADVANCE_SECONDS * TICK_RATE;
+        g.stance = "move";
+        g.target = -1;
+        g.path = this.routeThrough(g, order.path);
+        return;
+      }
       case "recover":
         g.stance = "recover";
         g.target = -1;
@@ -1021,7 +1072,8 @@ export class World {
         // withdrawal is the one order that overrides this -- disengaging is the
         // whole point of it -- and a group standing down to recover is helpless
         // by design and does not get to start fights either.
-        const mayEngage = g.stance !== "retreat" && g.stance !== "recover";
+        const mayEngage =
+          g.stance !== "retreat" && g.stance !== "recover" && g.stance !== "ambush";
         const foe = mayEngage ? this.engagementFor(id) : -1;
         // Keep where he was SUPPOSED to stand: a man fighting from his place in
         // the line is still a formed company, and cohesion has to be able to
@@ -1243,7 +1295,13 @@ export class World {
    */
   private spotted(id: number, watcher: number): boolean {
     const s = this.soldiers;
-    const hidden = concealment(this.terrain, s.x[id], s.y[id]);
+    let hidden = concealment(this.terrain, s.x[id], s.y[id]);
+    // Lying in wait, keeping still: far harder to pick out, and more so in
+    // ground that was worth hiding in. An ambush in the open is still an
+    // ambush, but it is not concealment -- the bonus scales with the cover the
+    // player chose to sit in.
+    const own = this.groupOf(id);
+    if (own && own.stance === "ambush") hidden = min(0.85, hidden + 0.25 + hidden * 0.6);
     const n = this.sightHash.query(s.x[id], s.y[id], MAX_SIGHT, this.watchers);
     let raycasts = 0;
     for (let k = 0; k < n; k++) {
@@ -1410,11 +1468,47 @@ export class World {
         s.cooldown[id] -= TICK_DT;
         continue;
       }
+      // Men lying in wait hold their fire until someone walks onto them. That
+      // is the whole trade: you give up shooting at range for a first blow
+      // delivered at point-blank with the enemy unready.
+      const own = this.groupOf(id);
+      if (own && own.stance === "ambush") continue;
       const st = this.stats(id);
       if (st.range > MELEE_RANGE) this.shoot(id, st);
       else this.hack(id, st);
     }
     this.applyDamage();
+  }
+
+  /**
+   * Spring any ambush an enemy has walked into.
+   *
+   * Checked per company rather than per man: an ambush is sprung together or
+   * not at all, which is what makes it worth more than the same men shooting
+   * as they each happen to acquire a target.
+   */
+  private updateAmbushes(): void {
+    const s = this.soldiers;
+    for (const g of this.groups) {
+      if (g.stance !== "ambush") continue;
+      let sprung = false;
+      for (const m of g.members) {
+        if (s.alive[m] !== 1) continue;
+        const n = this.hash.query(s.x[m], s.y[m], AMBUSH_TRIGGER, this.neighbours);
+        for (let k = 0; k < n; k++) {
+          const other = this.neighbours[k];
+          if (s.alive[other] === 1 && s.player[other] !== g.player) {
+            sprung = true;
+            break;
+          }
+        }
+        if (sprung) break;
+      }
+      if (!sprung) continue;
+      // Up and at them, with the bite that waiting bought.
+      g.stance = "attack";
+      g.chargeUntil = this.tick + AMBUSH_BITE_SECONDS * TICK_RATE;
+    }
   }
 
   /** Hand to hand: neighbours come from the hash, whose cells are sized for it. */

@@ -29,12 +29,17 @@ export type OrderBody =
   /** Walk the circuit forever, reversing at the ends of an open route. */
   | { kind: "patrol"; squad: number; path: readonly number[] }
   /** Stand down, close ranks, regain morale and hit points. */
-  | { kind: "recover"; squad: number };
+  | { kind: "recover"; squad: number }
+  /** Lie in wait: hold fire, keep still, and strike whoever walks into it. */
+  | { kind: "ambush"; squad: number }
+  /** Advance the route, wait to be seen, then withdraw the way you came. */
+  | { kind: "feint"; squad: number; path: readonly number[] };
 
 export type OrderKind = OrderBody["kind"];
 
 export const ORDER_KINDS: readonly OrderKind[] = [
   "move", "attack", "hold", "formation", "retreat", "patrol", "recover",
+  "ambush", "feint",
 ];
 
 export type Order = OrderBody & {

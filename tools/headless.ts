@@ -1487,8 +1487,10 @@ section("army");
 
   check("over budget is rejected",
     !validate({ doctrine: "maneuver", squads: new Array(15).fill("guard") }).ok);
+  // Sized from the cap rather than hard-coded, so raising the cap retunes the
+  // test instead of breaking it.
   check("too many squads is rejected",
-    validate({ doctrine: "maneuver", squads: new Array(20).fill("line") }, 999)
+    validate({ doctrine: "maneuver", squads: new Array(MAX_SQUADS + 5).fill("line") }, 999)
       .problems.some((p2) => p2.includes("too many squads")));
   check("a single type cannot dominate",
     validate({ doctrine: "maneuver", squads: new Array(9).fill("line") }, 999)
@@ -2420,6 +2422,105 @@ section("glyph and cut never overlap");
     "gap " + (splitFrom - formedUpTo).toFixed(0) + " on a radius of " + g1.radius.toFixed(0));
   check("a glyph never cuts the company up", !everCarved);
   check("and a cut never re-forms it", !cutEverReshaped);
+}
+
+// -- 9b3b. lying in wait, and going back on purpose ----------------------------
+
+section("ambush and feint");
+{
+  // An ambush holds its fire until somebody walks onto it, then hits hard.
+  {
+    const w = new World({ seed: 111, tilesWide: 80, tilesHigh: 80, soldierCapacity: 512 });
+    const hiders: number[] = [];
+    for (let i = 0; i < 16; i++) hiders.push(w.spawnSoldier(0, "archer", 1200 + (i % 4) * 14, 1200 + ((i / 4) | 0) * 14, 0));
+    // Far enough away that archers (range 250) would normally be shooting.
+    const comers: number[] = [];
+    for (let i = 0; i < 16; i++) comers.push(w.spawnSoldier(1, "line", 1560 + (i % 4) * 14, 1200 + ((i / 4) | 0) * 14, M.PI));
+    const g = w.createGroup(0, hiders) as Group;
+    const foe = w.createGroup(1, comers) as Group;
+    w.orders.issue({ kind: "ambush", squad: g.id }, 0, w.tick + 1);
+    for (let t = 0; t < TICK_RATE * 3; t++) w.step();
+
+    check("men lying in wait hold their fire", g.stance === "ambush" && w.events.length === 0,
+      g.stance + ", " + w.events.length + " blows");
+    const casualtiesBefore = foe.losses;
+
+    // Now walk them in.
+    w.orders.issue({ kind: "move", squad: foe.id, path: [g.anchorX, g.anchorY] }, 1, w.tick + 1);
+    let sprungAt = -1;
+    for (let t = 0; t < TICK_RATE * 60; t++) {
+      w.step();
+      if (sprungAt < 0 && g.stance === "attack") sprungAt = w.tick;
+    }
+    check("and spring it when the enemy walks in", sprungAt > 0, "sprung at tick " + sprungAt);
+    check("the enemy pays for walking into it", foe.losses > casualtiesBefore,
+      foe.losses + " lost");
+  }
+
+  // Lying still in cover is genuinely harder to see than standing about.
+  {
+    function spottedCount(ambushing: boolean): number {
+      const w = new World({ seed: 112, tilesWide: 80, tilesHigh: 80, soldierCapacity: 512 });
+      const hiders: number[] = [];
+      for (let i = 0; i < 12; i++) hiders.push(w.spawnSoldier(0, "line", 1300 + (i % 4) * 14, 1300 + ((i / 4) | 0) * 14, 0));
+      for (let i = 0; i < 12; i++) w.spawnSoldier(1, "scout", 1720 + (i % 4) * 14, 1300 + ((i / 4) | 0) * 14, M.PI);
+      const g = w.createGroup(0, hiders) as Group;
+      if (ambushing) g.stance = "ambush";
+      for (let t = 0; t < TICK_RATE * 4; t++) {
+        w.step();
+        if (ambushing) g.stance = "ambush"; // hold the stance through the sweep
+      }
+      let seen = 0;
+      for (const m of g.members) if (w.soldiers.alive[m] === 1 && (w.soldiers.seen[m] & 2) !== 0) seen++;
+      return seen;
+    }
+    const openly = spottedCount(false);
+    const hidden = spottedCount(true);
+    check("men lying in wait are harder to spot than men standing about",
+      hidden <= openly, hidden + " seen while hiding vs " + openly + " standing");
+  }
+
+  // A feint is a real advance with a real withdrawal already scheduled.
+  {
+    const w = new World({ seed: 113, tilesWide: 90, tilesHigh: 90, soldierCapacity: 512 });
+    const ids: number[] = [];
+    for (let i = 0; i < 12; i++) ids.push(w.spawnSoldier(0, "line", 900 + (i % 4) * 14, 1200 + ((i / 4) | 0) * 14, 0));
+    for (let i = 0; i < 6; i++) w.spawnSoldier(1, "line", 2500, 1200, M.PI);
+    const g = w.createGroup(0, ids) as Group;
+    const startX = g.anchorX;
+    w.orders.issue({ kind: "feint", squad: g.id, path: [startX + 900, g.anchorY] }, 0, w.tick + 1);
+
+    let furthest = startX;
+    let turned = false;
+    for (let t = 0; t < TICK_RATE * 40; t++) {
+      w.step();
+      if (g.anchorX > furthest) furthest = g.anchorX;
+      if (g.stance === "retreat") turned = true;
+    }
+    check("a feint genuinely advances", furthest > startX + 120,
+      "reached " + (furthest - startX).toFixed(0) + " out");
+    check("and then genuinely turns back", turned, "stance " + g.stance);
+    check("heading for the ground it started from",
+      g.anchorX < furthest - 40, "at " + g.anchorX.toFixed(0) + ", furthest " + furthest.toFixed(0));
+  }
+
+  // Both are orders, so both are refused while setting out.
+  {
+    const w = new World({ seed: 114, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    const ids: number[] = [];
+    for (let i = 0; i < 8; i++) ids.push(w.spawnSoldier(0, "line", 900 + (i % 4) * 14, 900, 0));
+    for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 1500, 1500, M.PI);
+    const g = w.createGroup(0, ids) as Group;
+    w.deploying = true;
+    const cmd = new Commander(w, 0);
+    cmd.selected = [g.id];
+    const zig: { x: number; y: number }[] = [];
+    for (let k = 0; k < 7; k++) zig.push({ x: g.anchorX - 120 + k * 95, y: g.anchorY + (k % 2 === 0 ? -140 : 140) });
+    const said = cmd.commit(zig);
+    for (let t = 0; t < 6; t++) w.step();
+    check("lying in wait does nothing while setting out",
+      g.stance !== "ambush" && w.orders.size === 0, g.stance + ", said: " + said);
+  }
 }
 
 // -- 9b4. edge cases and pathologies -------------------------------------------

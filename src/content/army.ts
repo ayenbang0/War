@@ -9,10 +9,24 @@
 import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "./unit-types.ts";
 import { DOCTRINES, type DoctrineId } from "./doctrines.ts";
 
-/** Points available to each side. Enough for roughly fifteen squads. */
-export const DEFAULT_BUDGET = 55;
-/** The spec's cap on how many squads one player commands. */
-export const MAX_SQUADS = 15;
+/**
+ * Points available to each side.
+ *
+ * Raised by about 1.7x over the original 55 so an army is a genuinely bigger
+ * force -- more companies on the field, and room to afford the specialists
+ * without giving up your line.
+ */
+export const DEFAULT_BUDGET = 94;
+/**
+ * Cap on how many companies one player commands.
+ *
+ * Raised alongside the budget, and it HAD to be: with the cap left at fifteen,
+ * extra points could only buy dearer companies, never more of them, so an army
+ * with half again the points fielded no more men. Idea.txt says "~15 units";
+ * this is a deliberate departure in favour of the larger battles the budget is
+ * meant to pay for.
+ */
+export const MAX_SQUADS = 25;
 
 export type ArmyList = {
   readonly doctrine: DoctrineId;
@@ -62,11 +76,17 @@ export function validate(list: ArmyList, budget = DEFAULT_BUDGET): Validation {
  * so it stays valid if costs are retuned.
  */
 export function defaultArmy(doctrine: DoctrineId = "maneuver", budget = DEFAULT_BUDGET): ArmyList {
+  // Long enough to actually spend the budget. The order is the preference
+  // order, so a smaller purse still buys a sensible core first: line, then
+  // shooters and eyes, then the specialists.
   const wish: UnitTypeId[] = [
     "line", "line", "line", "archer", "scout",
     "line", "archer", "skirmisher", "horse", "mage",
     "skirmisher", "scout", "horse", "guard", "siege",
-    "skirmisher", "archer", "line",
+    "skirmisher", "archer", "line", "healer", "builder",
+    "line", "skirmisher", "archer", "horse", "guard",
+    "line", "scout", "line", "healer", "builder",
+    "skirmisher", "mage", "siege",
   ];
   const squads: UnitTypeId[] = [];
   let spent = 0;

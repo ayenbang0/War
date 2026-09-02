@@ -79,6 +79,8 @@ function enemyArmy(budget: number): ArmyList {
   const wish: UnitTypeId[] = [
     "line", "archer", "line", "scout", "horse", "line", "skirmisher",
     "archer", "guard", "line", "horse", "mage", "skirmisher", "siege", "archer",
+    "line", "healer", "skirmisher", "builder", "line", "scout", "guard",
+    "archer", "horse", "line", "skirmisher", "mage", "line",
   ];
   const squads: UnitTypeId[] = [];
   for (const id of wish) {
