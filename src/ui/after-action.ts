@@ -61,7 +61,9 @@ export function showAfterAction(
   const drew = outcome.winner < 0;
   panel.appendChild(el("h1", "aa-verdict " + (won ? "aa-won" : drew ? "aa-drew" : "aa-lost"),
     drew ? "Stalemate" : won ? "The field is yours" : "The field is lost"));
-  panel.appendChild(el("p", "aa-detail", outcome.detail));
+  const foeAi = world.ai.find((a) => a.player === foe);
+  panel.appendChild(el("p", "aa-detail",
+    (foeAi ? "Against " + foeAi.who.name + ", " + foeAi.who.epithet + ".  " : "") + outcome.detail));
 
   // -- what killed your men, and theirs ---------------------------------------
   const mine = world.casualtiesByCause[viewer];

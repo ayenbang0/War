@@ -39,6 +39,7 @@ import { COMPANY_BREAK, globalMorale, nextMorale } from "./morale.ts";
 import { DEFAULT_VICTORY, evaluate, type ArmyState, type ControlPoint, type Outcome, type VictoryConfig } from "./victory.ts";
 import { FogField, concealment, effectiveSight, hasLineOfSight, rangeFromHeight } from "./vision.ts";
 import { ArmyAI } from "./ai.ts";
+import type { Commander } from "../content/commanders.ts";
 import { SPELLS, hexPenalty, mendRate, nerveShift, succourRate, wardSoak, type SpellId, type Working } from "./magic.ts";
 import type { UnitTypeId } from "../content/unit-types.ts";
 
@@ -201,6 +202,8 @@ export type WorldConfig = {
   readonly aiPlayers?: readonly number[];
   /** How well those commanders are run. Not what they can see or field. */
   readonly aiTuning?: { think: number; commit: number; focus: number };
+  /** Who commands the machine's army. Leanings only, never advantages. */
+  readonly commander?: Commander;
   /** How this match is won. Defaults to breaking the enemy's nerve. */
   readonly victory?: VictoryConfig;
   /** Ground worth standing on, for the objective and point modes. */
@@ -315,7 +318,9 @@ export class World {
       ai: Rng.create(this.seed, Stream.Ai),
       spawn: Rng.create(this.seed, Stream.Spawn),
     };
-    for (const p of config.aiPlayers ?? []) this.ai.push(new ArmyAI(p, config.aiTuning));
+    for (const p of config.aiPlayers ?? []) {
+      this.ai.push(new ArmyAI(p, config.aiTuning, config.commander));
+    }
   }
 
   // -- soldiers ---------------------------------------------------------------

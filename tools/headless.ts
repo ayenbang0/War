@@ -55,6 +55,7 @@ import { MELEE_RANGE } from "../src/sim/combat.ts";
 import { evaluate, score } from "../src/sim/victory.ts";
 import { effectiveSight, hasLineOfSight, rangeFromHeight, FogField } from "../src/sim/vision.ts";
 import { PLAYSTYLES } from "../src/sim/ai.ts";
+import { COMMANDERS, COMMANDER_IDS, type CommanderId } from "../src/content/commanders.ts";
 import { DOCTRINES, DOCTRINE_IDS } from "../src/content/doctrines.ts";
 import { DEFAULT_BUDGET, MAX_SQUADS, cost, defaultArmy, validate } from "../src/content/army.ts";
 import { LEVELS } from "../src/content/levels/index.ts";
@@ -2059,6 +2060,61 @@ section("glyph vs split");
 }
 
 // -- 9a5. split, recover, and curved routes ------------------------------------
+
+// -- 8i2. an opponent with a face ----------------------------------------------
+
+section("commanders");
+{
+  check("every commander has a habit stated plainly enough to punish",
+    COMMANDER_IDS.every((id) => COMMANDERS[id].blurb.length > 30 && COMMANDERS[id].epithet.length > 0));
+  check("no commander is simply better at everything",
+    COMMANDER_IDS.every((id) => {
+      const b = COMMANDERS[id].bias;
+      return PLAYSTYLES.some((p) => b[p] < 1) && PLAYSTYLES.some((p) => b[p] > 1);
+    }));
+
+  // The point of a named commander is that he fights differently. Same seed,
+  // same armies, same ground -- only the man in charge changes.
+  function postures(id: CommanderId): string[] {
+    const w = new World({
+      seed: provingGround.seed,
+      tilesWide: provingGround.tilesWide,
+      tilesHigh: provingGround.tilesHigh,
+      duration: 6 * 60,
+      soldierCapacity: 1024,
+      aiPlayers: [1],
+      commander: COMMANDERS[id],
+    });
+    for (const zone of provingGround.deployment) {
+      for (let i = 0; i < ARMY.length; i++) {
+        unit(w, zone.player, ARMY[i],
+          (zone.x + 4 + (i % 3) * 7) * TILE_SIZE,
+          (zone.y + 5 + ((i / 3) | 0) * 10) * TILE_SIZE,
+          zone.player === 0 ? 0 : M.PI);
+      }
+    }
+    const seen: string[] = [];
+    for (let t = 0; t < TICK_RATE * 6 * 60 && !w.outcome; t++) {
+      w.step();
+      const style = w.ai[0].style;
+      if (seen[seen.length - 1] !== style) seen.push(style);
+    }
+    return seen;
+  }
+
+  const butcher = postures("ruthven");
+  const anvil = postures("oleg");
+  const fox = postures("vance");
+  check("the Butcher fights aggressively", butcher.includes("aggressive"), butcher.join(" -> "));
+  check("the Anvil holds ground instead", anvil.includes("defensive") && !anvil.includes("aggressive"),
+    anvil.join(" -> "));
+  check("the Fox works the flanks", fox.includes("maneuver"), fox.join(" -> "));
+  check("two commanders do not fight the same battle",
+    butcher.join() !== anvil.join(),
+    "butcher " + butcher.join(" -> ") + " | anvil " + anvil.join(" -> "));
+  check("but a broken army holds regardless of who commands it",
+    COMMANDERS.ruthven.bias.aggressive > 1);
+}
 
 // -- 8j. surgeons and sappers --------------------------------------------------
 

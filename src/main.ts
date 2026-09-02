@@ -74,6 +74,7 @@ const world = new World({
   soldierCapacity: 4096,
   aiPlayers: [1],
   aiTuning: { think: diff.thinkInterval, commit: diff.commitTicks, focus: diff.focus },
+  commander: setup.commander,
   victory: level.victory,
   controlPoints: level.controlPoints,
 });

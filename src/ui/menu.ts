@@ -12,6 +12,7 @@ import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "../content/unit-type
 import { unitIconCanvas } from "../render/unit-icon.ts";
 import { DOCTRINES, DOCTRINE_IDS, type DoctrineId } from "../content/doctrines.ts";
 import { DIFFICULTIES, DIFFICULTY_IDS, type DifficultyId } from "../content/difficulty.ts";
+import { COMMANDERS, COMMANDER_IDS, type Commander, type CommanderId } from "../content/commanders.ts";
 import { MAX_SQUADS, cost, validate, type ArmyList } from "../content/army.ts";
 import { LEVELS, type LevelDef } from "../content/levels/index.ts";
 
@@ -19,6 +20,8 @@ export type Setup = {
   readonly level: LevelDef;
   readonly difficulty: DifficultyId;
   readonly army: ArmyList;
+  /** Who the machine's army answers to. */
+  readonly commander: Commander;
 };
 
 const el = (tag: string, cls?: string, text?: string): HTMLElement => {
@@ -39,6 +42,8 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
   return new Promise((resolve) => {
     let level: LevelDef = LEVELS[0];
     let difficulty: DifficultyId = level.suggestedDifficulty;
+    /** null means "draw one at random", which is the default. */
+    let commander: CommanderId | null = null;
     let doctrine: DoctrineId = "maneuver";
     const picked: UnitTypeId[] = [];
 
@@ -99,6 +104,37 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
     }
     panel.appendChild(diffRow);
     panel.appendChild(diffBlurb);
+
+    // -- commander ----------------------------------------------------------
+    // Separate from difficulty on purpose: difficulty is how well the machine
+    // is run, this is who is running it. The blurb states the habit outright,
+    // because the whole point of a named opponent is a tendency you can read
+    // and then punish.
+    panel.appendChild(el("h2", undefined, "Their commander"));
+    const cmdRow = el("div", "choices");
+    const cmdBlurb = el("p", "blurb");
+    const setCommanderBlurb = (): void => {
+      cmdBlurb.textContent = commander === null
+        ? "Drawn at random. You will not know who you are facing until they show you."
+        : COMMANDERS[commander].name + ", " + COMMANDERS[commander].epithet + " - " +
+          COMMANDERS[commander].blurb;
+    };
+    const commanderChoices: (CommanderId | null)[] = [null, ...COMMANDER_IDS];
+    for (const id of commanderChoices) {
+      const label = id === null ? "Unknown" : COMMANDERS[id].name;
+      const b = el("button", "choice", label) as HTMLButtonElement;
+      b.onclick = () => {
+        commander = id;
+        for (const c of cmdRow.children) c.classList.remove("on");
+        b.classList.add("on");
+        setCommanderBlurb();
+      };
+      if (id === commander) b.classList.add("on");
+      cmdRow.appendChild(b);
+    }
+    setCommanderBlurb();
+    panel.appendChild(cmdRow);
+    panel.appendChild(cmdBlurb);
 
     // -- doctrine -----------------------------------------------------------
     panel.appendChild(el("h2", undefined, "Doctrine"));
@@ -198,7 +234,16 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
     start.onclick = () => {
       if (!validate({ doctrine, squads: picked }, level.budget).ok) return;
       root.style.display = "none";
-      resolve({ level, difficulty, army: { doctrine, squads: picked.slice() } });
+      // "Unknown" draws one now, so the match is still fully determined by the
+      // setup that comes out of here -- the world is built from this and
+      // nothing may decide it later.
+      const chosen = commander ?? COMMANDER_IDS[(Math.random() * COMMANDER_IDS.length) | 0];
+      resolve({
+        level,
+        difficulty,
+        army: { doctrine, squads: picked.slice() },
+        commander: COMMANDERS[chosen],
+      });
     };
 
     function refresh(): void {

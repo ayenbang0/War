@@ -14,6 +14,7 @@
 
 import { atan2, clamp, cos, min, sin, sqrt } from "./math.ts";
 import type { Group, World } from "./world.ts";
+import { COMMANDERS, type Commander } from "../content/commanders.ts";
 
 /** Ticks between decisions. Re-planning every tick makes squads twitch. */
 const THINK_INTERVAL = 20;
@@ -46,13 +47,29 @@ export class ArmyAI {
   private lastKnownY = 0;
   private hasContact = false;
 
-  constructor(player: number, tuning?: { think: number; commit: number; focus: number }) {
+  /**
+   * Who is running this army. Leanings only -- never better troops, never more
+   * sight. An opponent that cheats is arbitrary rather than hard.
+   */
+  private commander: Commander = COMMANDERS.kestrel;
+
+  constructor(
+    player: number,
+    tuning?: { think: number; commit: number; focus: number },
+    commander?: Commander,
+  ) {
     this.player = player;
     if (tuning) {
       this.think = tuning.think;
       this.commit = tuning.commit;
       this.focus = tuning.focus;
     }
+    if (commander) this.commander = commander;
+  }
+
+  /** Who the player is fighting, for the menu and the after-action report. */
+  get who(): Commander {
+    return this.commander;
   }
 
   /** Called once per tick from World.step, before orders are drained. */
@@ -99,21 +116,33 @@ export class ArmyAI {
 
     const me = world.armyState(this.player);
     const foe = world.armyState(1 - this.player);
-    const ratio = foe.strength > 0 ? me.strength / foe.strength : 2;
-    const shaken = me.morale < foe.morale - 0.12;
+    // A bold commander reads the same field as more favourable than it is, and
+    // so presses attacks a cautious one would refuse.
+    const ratio = (foe.strength > 0 ? me.strength / foe.strength : 2) * this.commander.boldness;
+    const shaken = me.morale < foe.morale - 0.12 * this.commander.boldness;
 
-    let next: Playstyle;
-    if (shaken || me.morale < 0.35) {
-      // Losing the nerve battle: stop trading and hold ground.
-      next = "defensive";
-    } else if (ratio > 1.25 && me.morale > 0.6) {
-      next = "aggressive";
-    } else if (ratio < 0.85) {
-      // Outnumbered but steady: refuse a straight fight, work the flanks.
-      next = "maneuver";
-    } else {
-      next = world.rng.ai.chance(0.4) ? "maneuver" : "reactive";
+    // Score every posture the situation allows, then let the commander's
+    // leanings pick between them. The situation still rules -- a commander who
+    // ignored a collapsing army would be broken, not characterful -- but
+    // between two defensible choices, character decides, and that is what makes
+    // an opponent readable across a match.
+    const fit: Record<Playstyle, number> = {
+      aggressive: ratio > 1.05 && me.morale > 0.5 ? 1 : 0.12,
+      defensive: shaken || me.morale < 0.4 ? 1 : 0.2,
+      maneuver: ratio < 1.1 ? 0.8 : 0.4,
+      reactive: 0.55,
+    };
+    let next: Playstyle = "reactive";
+    let best = -1;
+    for (const style of PLAYSTYLES) {
+      const weight = fit[style] * this.commander.bias[style];
+      if (weight > best) {
+        best = weight;
+        next = style;
+      }
     }
+    // A broken army holds regardless of who is in charge.
+    if (me.morale < 0.28) next = "defensive";
 
     if (next !== this.style) {
       this.style = next;
