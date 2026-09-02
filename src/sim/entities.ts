@@ -213,6 +213,8 @@ export type Group = {
   recoverUntil: number;
   /** Tick until which this company counts as charging, for the impact bonus. */
   chargeUntil: number;
+  /** Accumulated digging effort toward a fieldwork on the ground it holds. */
+  buildTicks: number;
   spellReady: number;
   /** Fraction of members standing in their slots. */
   cohesion: number;

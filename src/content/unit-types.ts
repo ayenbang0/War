@@ -10,7 +10,7 @@ import type { SpellId } from "../sim/magic.ts";
 
 export type UnitTypeId =
   | "line" | "skirmisher" | "archer" | "horse" | "guard"
-  | "mage" | "scout" | "siege";
+  | "mage" | "scout" | "siege" | "healer" | "builder";
 
 export type UnitType = {
   readonly id: UnitTypeId;
@@ -49,6 +49,11 @@ export type UnitType = {
   readonly spell?: SpellId;
   /** Can batter fortifications and bridges when there is nothing to shoot. */
   readonly siege?: boolean;
+  /**
+   * Raises fieldworks on the ground it is holding (spec 6.2, "terrain
+   * manipulation: small barriers, temporary cover").
+   */
+  readonly builds?: boolean;
 };
 
 export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
@@ -190,8 +195,53 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     maxPerArmy: 2,
     siege: true,
   },
+  healer: {
+    id: "healer",
+    name: "Surgeons",
+    role: "Keeps a company on its feet. Mends wounds and steadies nerve, and cannot fight at all.",
+    soldiers: 6,
+    hp: 60,
+    speed: 40,
+    turnRate: 1.8,
+    defaultShape: "loose",
+    // Nominally armed and deliberately hopeless at it: the point of surgeons is
+    // that buying them costs you fighting strength.
+    attack: 4,
+    defence: 30,
+    range: 9,
+    attackInterval: 2.4,
+    sight: 400,
+    cost: 5,
+    maxPerArmy: 2,
+    spell: "succour",
+  },
+  builder: {
+    id: "builder",
+    name: "Sappers",
+    role: "Digs in. Raises fieldworks on the ground it holds, and breaks down walls and bridges.",
+    soldiers: 8,
+    hp: 80,
+    speed: 34,
+    turnRate: 1.4,
+    defaultShape: "loose",
+    attack: 10,
+    defence: 60,
+    range: 9,
+    attackInterval: 1.6,
+    sight: 340,
+    cost: 5,
+    maxPerArmy: 2,
+    siege: true,
+    builds: true,
+  },
 };
 
+/**
+ * APPEND ONLY. Soldiers.type is an index into this list and is hashed, so
+ * inserting anywhere but the end would silently reinterpret every recorded
+ * replay and every golden -- a line company would become a scout.
+ */
 export const UNIT_TYPE_IDS: readonly UnitTypeId[] = [
   "line", "skirmisher", "archer", "horse", "guard", "mage", "scout", "siege",
+  "healer", "builder",
 ];

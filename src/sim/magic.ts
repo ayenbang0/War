@@ -17,7 +17,7 @@
 
 import { clamp, min } from "./math.ts";
 
-export type SpellId = "ward" | "hex" | "mend";
+export type SpellId = "ward" | "hex" | "mend" | "succour";
 
 export type Spell = {
   readonly id: SpellId;
@@ -57,9 +57,27 @@ export const SPELLS: Record<SpellId, Spell> = {
     cooldown: 20,
     onAllies: true,
   },
+  /**
+   * The surgeons' working: healing over time and steadied nerve together
+   * (spec 6.2 lists both). Wider and far more frequent than an adept's mend,
+   * but it does nothing offensive at all -- surgeons treat men, they do not
+   * fight, and an army that spends points on them is buying staying power
+   * rather than force.
+   */
+  succour: {
+    id: "succour",
+    name: "Succour",
+    radius: 210,
+    // Held to the same rules as every other working: nothing lasts beyond
+    // fifteen seconds, and nothing may be sustained without a gap. Surgeons get
+    // the shortest gap of any caster rather than an unbroken effect.
+    duration: 13,
+    cooldown: 15,
+    onAllies: true,
+  },
 };
 
-export const SPELL_IDS: readonly SpellId[] = ["ward", "hex", "mend"];
+export const SPELL_IDS: readonly SpellId[] = ["ward", "hex", "mend", "succour"];
 
 /** A working currently standing on the field. */
 export type Working = {
@@ -89,9 +107,17 @@ export function mendRate(power: number, maxHp: number): number {
   return maxHp * 0.035 * clamp(power, 0, 2.5);
 }
 
+/** Hit points succour restores per second. Steadier than a mend, and surer. */
+export function succourRate(power: number, maxHp: number): number {
+  return maxHp * 0.055 * clamp(power, 0, 2.5);
+}
+
 /** Morale a ward steadies, or a hex saps, per second. */
 export function nerveShift(spell: SpellId, power: number): number {
   if (spell === "ward") return 0.012 * power;
   if (spell === "hex") return -0.018 * power;
+  // Succour is the morale boost the spec asks for: a surgeon working among the
+  // wounded is worth more to a company's nerve than to its hit points.
+  if (spell === "succour") return 0.026 * power;
   return 0.006 * power;
 }

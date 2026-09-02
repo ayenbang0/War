@@ -200,6 +200,32 @@ export class TerrainGrid {
     return true;
   }
 
+  /**
+   * Raise a fieldwork on a tile (spec 6.2, "terrain manipulation: small
+   * barriers, temporary cover").
+   *
+   * Only open ground can be dug: you cannot fortify a river, a wood or a
+   * mountainside, and letting sappers wall off water would let them bridge it.
+   * Bumps the revision like any other terrain change, which is what re-bakes
+   * the render chunks and tells every company its route may have changed.
+   */
+  fortify(tx: number, ty: number): boolean {
+    if (!this.inBounds(tx, ty)) return false;
+    const i = ty * this.width + tx;
+    const t = this.type[i] as TerrainType;
+    if (t !== Terrain.Plain && t !== Terrain.Road && t !== Terrain.Scree) return false;
+    this.type[i] = Terrain.Fortification;
+    this.integrity[i] = 255;
+    this.revision++;
+    return true;
+  }
+
+  /** True where a fieldwork could be raised. */
+  fortifiableAt(tx: number, ty: number): boolean {
+    const t = this.typeAt(tx, ty);
+    return t === Terrain.Plain || t === Terrain.Road || t === Terrain.Scree;
+  }
+
   /** True where a tile can be worn down at all. */
   destructibleAt(tx: number, ty: number): boolean {
     return DESTRUCTIBLE[this.typeAt(tx, ty)] !== undefined;

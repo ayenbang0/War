@@ -40,6 +40,8 @@ export const SIZE: Record<UnitTypeId, number> = {
   mage: 0.95,
   scout: 0.8,
   siege: 1.6,
+  healer: 0.85,
+  builder: 0.95,
 };
 
 function tri(b: Brush, len: number, wide: number, back: number): void {
@@ -100,6 +102,16 @@ export function bodyPath(type: UnitTypeId, b: Brush): void {
     case "siege":
       // A blunt engine, wider than it is long.
       box(b, 0.85, 1.0);
+      return;
+    case "healer":
+      // Rounded like the adept -- neither is a fighter -- but noticeably
+      // smaller, so the two are never confused at a glance.
+      b.ctx.moveTo(b.x + b.r * 0.62, b.y);
+      b.ctx.arc(b.x, b.y, b.r * 0.62, 0, Math.PI * 2);
+      return;
+    case "builder":
+      // Squat and square: men who dig rather than march.
+      box(b, 0.62, 0.66);
       return;
   }
 }
@@ -167,6 +179,21 @@ export function detailPath(type: UnitTypeId, b: Brush): void {
       // A standard, so the anchor of a line is findable in a melee.
       ctx.moveTo(x - c * r * 0.3, y - s * r * 0.3);
       ctx.lineTo(x - c * r * 0.3 + px * r * 1.4, y - s * r * 0.3 + py * r * 1.4);
+      return;
+    }
+    case "healer": {
+      // A cross. The one unmistakable mark on the field, and the only one that
+      // means "do not shoot at this".
+      ctx.moveTo(x - c * r * 0.5, y - s * r * 0.5);
+      ctx.lineTo(x + c * r * 0.5, y + s * r * 0.5);
+      ctx.moveTo(x - px * r * 0.5, y - py * r * 0.5);
+      ctx.lineTo(x + px * r * 0.5, y + py * r * 0.5);
+      return;
+    }
+    case "builder": {
+      // A spade over the shoulder, angled so it reads as a tool, not a weapon.
+      ctx.moveTo(x - c * r * 0.4 - px * r * 0.5, y - s * r * 0.4 - py * r * 0.5);
+      ctx.lineTo(x + c * r * 0.7 + px * r * 0.4, y + s * r * 0.7 + py * r * 0.4);
       return;
     }
     default:

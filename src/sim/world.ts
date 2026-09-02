@@ -22,7 +22,7 @@
 import { atan2, clamp, cos, dist, max, min, rotateToward, sin, sqrt, TAU } from "./math.ts";
 import { Rng, Stream } from "./rng.ts";
 import { OrderQueue, type Order } from "./orders.ts";
-import { generateTerrain, TerrainGrid, TERRAIN_INFO } from "./terrain.ts";
+import { generateTerrain, Terrain, TerrainGrid, TERRAIN_INFO, TILE_SIZE } from "./terrain.ts";
 import { formationSlots, formationRadius, type FormationShape } from "./formations.ts";
 import { advanceToward } from "./movement.ts";
 import { SpatialHash } from "./spatial.ts";
@@ -39,7 +39,7 @@ import { COMPANY_BREAK, globalMorale, nextMorale } from "./morale.ts";
 import { DEFAULT_VICTORY, evaluate, type ArmyState, type ControlPoint, type Outcome, type VictoryConfig } from "./victory.ts";
 import { FogField, concealment, effectiveSight, hasLineOfSight, rangeFromHeight } from "./vision.ts";
 import { ArmyAI } from "./ai.ts";
-import { SPELLS, hexPenalty, mendRate, nerveShift, wardSoak, type Working } from "./magic.ts";
+import { SPELLS, hexPenalty, mendRate, nerveShift, succourRate, wardSoak, type SpellId, type Working } from "./magic.ts";
 import type { UnitTypeId } from "../content/unit-types.ts";
 
 export const TICK_RATE = 20;
@@ -171,6 +171,10 @@ const CHARGE_LULL = 40;
 const CHARGE_SECONDS = 2;
 /** Extra damage while charging. Rewards committing at speed rather than drifting in. */
 const CHARGE_BONUS = 0.45;
+/** Digger-ticks of work a fieldwork costs. Eight sappers take about ten seconds. */
+const FORTIFY_WORK = 1600;
+/** Damage one siege-capable soldier does to works per tick. */
+const BATTER_PER_ENGINE = 0.9;
 const RECOVER_MORALE_PER_SEC = 0.06;
 const RECOVER_HP_FRACTION_PER_SEC = 0.04;
 export const RECOVER_LOCK_SECONDS = 30;
@@ -406,6 +410,7 @@ export class World {
       patrolForward: true,
       recoverUntil: 0,
       chargeUntil: 0,
+      buildTicks: 0,
       spellReady: 0,
       cohesion: 1,
       engaged: 0,
@@ -658,6 +663,7 @@ export class World {
     this.castSpells();
     this.resolveCombat();
     this.applyWorkings();
+    this.updateEngineering();
     this.updateMorale();
     this.updateObjectives();
     this.tick++;
@@ -1275,8 +1281,16 @@ export class World {
       );
       if (caster === undefined) continue;
 
-      let choose: "ward" | "hex" | "mend";
-      if (g.stance === "attack") choose = "hex";
+      // A caster works what it KNOWS, not whatever the stance suggests. Adepts
+      // read the order they were given -- hex when told to attack, ward when
+      // told to hold -- but surgeons only ever do the one thing, and picking
+      // their working by stance would have them hexing the enemy.
+      const known = UNIT_TYPES[this.typeOf(caster)].spell;
+      let choose: SpellId;
+      if (known === "succour") {
+        if (!this.woundedNear(g) && this.tick - g.lastContact > TICK_RATE * 6) continue;
+        choose = "succour";
+      } else if (g.stance === "attack") choose = "hex";
       else if (g.stance === "hold" || g.stance === "recover") choose = "ward";
       else if (this.woundedNear(g)) choose = "mend";
       else continue;
@@ -1352,8 +1366,12 @@ export class World {
         if (SPELLS[w.spell].onAllies !== friendly) continue;
         if (d2(w.x, w.y, s.x[i], s.y[i]) > w.radius * w.radius) continue;
         s.morale[i] = clamp(s.morale[i] + nerveShift(w.spell, w.power) * TICK_DT, 0, 1);
-        if (w.spell !== "mend" || s.hp[i] >= s.maxHp[i]) continue;
-        s.hp[i] = min(s.maxHp[i], s.hp[i] + mendRate(w.power, s.maxHp[i]) * TICK_DT);
+        if (s.hp[i] >= s.maxHp[i]) continue;
+        if (w.spell === "mend") {
+          s.hp[i] = min(s.maxHp[i], s.hp[i] + mendRate(w.power, s.maxHp[i]) * TICK_DT);
+        } else if (w.spell === "succour") {
+          s.hp[i] = min(s.maxHp[i], s.hp[i] + succourRate(w.power, s.maxHp[i]) * TICK_DT);
+        }
       }
     }
   }
@@ -1657,6 +1675,107 @@ export class World {
     let n = 0;
     for (const owner of this.heldBy) if (owner === player) n++;
     return n;
+  }
+
+  // -- engineering --------------------------------------------------------------
+
+  /**
+   * Sappers digging in, and engines bringing walls down.
+   *
+   * Both halves of the spec's terrain manipulation, driven from one pass so the
+   * two can never disagree about what is destructible. Note that until now the
+   * `siege` flag on a unit was read by NOTHING: siege engines carried it, the
+   * terrain had a full damage model, and no unit in the game could actually
+   * knock anything over.
+   *
+   * Companies are walked in order and members are sorted, so the tile a company
+   * works on is a pure function of hashed state.
+   */
+  private updateEngineering(): void {
+    const s = this.soldiers;
+    for (const g of this.groups) {
+      let diggers = 0;
+      let breakers = 0;
+      for (const m of g.members) {
+        if (s.alive[m] !== 1) continue;
+        const spec = UNIT_TYPES[this.typeOf(m)];
+        if (spec.builds) diggers++;
+        if (spec.siege) breakers++;
+      }
+
+      // DIGGING IN. Only while holding ground and out of contact -- men cannot
+      // entrench with someone standing over them, and tying it to the hold
+      // order means the player decides where a field is fortified.
+      if (
+        diggers > 0 && g.stance === "hold" &&
+        this.tick - g.lastContact > TICK_RATE * 3
+      ) {
+        const tx = (g.anchorX / TILE_SIZE) | 0;
+        const ty = (g.anchorY / TILE_SIZE) | 0;
+        if (this.terrain.fortifiableAt(tx, ty)) {
+          g.buildTicks += diggers;
+          if (g.buildTicks >= FORTIFY_WORK) {
+            g.buildTicks = 0;
+            this.terrain.fortify(tx, ty);
+          }
+        } else {
+          g.buildTicks = 0;
+        }
+      } else {
+        g.buildTicks = 0;
+      }
+
+      // BREAKING DOWN. An engine with nothing to shoot turns on the works in
+      // front of it: a wall it cannot get past, or a bridge better denied to
+      // the enemy than left standing.
+      if (breakers > 0 && (g.stance === "attack" || g.stance === "move")) {
+        const reach = this.stats(g.members[0]).range;
+        const target = this.nearestWorks(g.anchorX, g.anchorY, max(reach, TILE_SIZE * 2));
+        if (target >= 0) {
+          const tx = target % this.terrain.width;
+          const ty = (target / this.terrain.width) | 0;
+          this.terrain.damage(tx, ty, breakers * BATTER_PER_ENGINE);
+        }
+      }
+    }
+  }
+
+  /**
+   * The nearest works worth knocking down, by tile index, or -1.
+   *
+   * Walls and bridges OUTRANK woods, and the tile the company is standing on is
+   * never a target. Taking the plain nearest destructible tile meant a battery
+   * that happened to be parked in a forest spent the battle demolishing the
+   * trees around its own feet while the wall in front of it stood untouched.
+   * A wall or a bridge is an obstacle; a wood is only cover.
+   *
+   * Ties break on the lower tile index so two peers always pick the same wall.
+   */
+  private nearestWorks(x: number, y: number, reach: number): number {
+    const cx = (x / TILE_SIZE) | 0;
+    const cy = (y / TILE_SIZE) | 0;
+    const span = max(1, (reach / TILE_SIZE) | 0);
+    let best = -1;
+    let bestD = reach * reach;
+    let bestRank = 9;
+    for (let ty = cy - span; ty <= cy + span; ty++) {
+      for (let tx = cx - span; tx <= cx + span; tx++) {
+        if (tx === cx && ty === cy) continue;
+        if (!this.terrain.destructibleAt(tx, ty)) continue;
+        const type = this.terrain.typeAt(tx, ty);
+        const rank = type === Terrain.Forest ? 1 : 0;
+        const wx = (tx + 0.5) * TILE_SIZE;
+        const wy = (ty + 0.5) * TILE_SIZE;
+        const dd = d2(x, y, wx, wy);
+        if (dd >= reach * reach) continue;
+        if (rank < bestRank || (rank === bestRank && dd < bestD)) {
+          bestRank = rank;
+          bestD = dd;
+          best = ty * this.terrain.width + tx;
+        }
+      }
+    }
+    return best;
   }
 
   // -- morale -------------------------------------------------------------------

@@ -36,10 +36,14 @@ const STYLE: Record<UnitTypeId, string> = {
   horse: "Horse",
   mage: "Adepts",
   siege: "Battery",
+  healer: "Surgeons",
+  builder: "Sappers",
 };
 
 /** Types named for a person rather than numbered. */
-const NAMED: ReadonlySet<string> = new Set(["horse", "guard", "mage", "siege", "scout"]);
+const NAMED: ReadonlySet<string> = new Set([
+  "horse", "guard", "mage", "siege", "scout", "healer", "builder",
+]);
 
 /**
  * Name a company from its id and whatever it is mostly made of.

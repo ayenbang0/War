@@ -2060,6 +2060,132 @@ section("glyph vs split");
 
 // -- 9a5. split, recover, and curved routes ------------------------------------
 
+// -- 8j. surgeons and sappers --------------------------------------------------
+
+section("surgeons and sappers");
+{
+  // Surgeons mend wounded men. The spec asks for healing over time and morale
+  // boosts (6.2); this is both.
+  {
+    const w = new World({ seed: 81, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    const hurt: number[] = [];
+    for (let i = 0; i < 10; i++) hurt.push(w.spawnSoldier(0, "line", 900 + (i % 5) * 15, 900, 0));
+    const medics: number[] = [];
+    for (let i = 0; i < 6; i++) medics.push(w.spawnSoldier(0, "healer", 900 + (i % 3) * 14, 940, 0));
+    // Somebody has to be left alive on the other side, or the match ends by
+    // annihilation on tick one and step() returns without doing anything.
+    for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 1700, 1700, M.PI);
+    for (const m of hurt) w.soldiers.hp[m] = 40;
+    const before = w.soldiers.hp[hurt[0]];
+    w.soldiers.morale[hurt[0]] = 0.4;
+    const g = w.createGroup(0, medics) as Group;
+    g.lastContact = 0;
+    for (let t = 0; t < TICK_RATE * 20; t++) w.step();
+
+    check("surgeons work succour, not a hex",
+      w.workings.length === 0 || w.workings.every((k) => k.spell === "succour"),
+      w.workings.map((k) => k.spell).join(",") || "none active");
+    check("wounded men near surgeons recover hit points",
+      w.soldiers.hp[hurt[0]] > before,
+      before.toFixed(0) + " -> " + w.soldiers.hp[hurt[0]].toFixed(0));
+    check("and steady their nerve", w.soldiers.morale[hurt[0]] > 0.4,
+      w.soldiers.morale[hurt[0]].toFixed(2));
+    check("surgeons are no use in a fight",
+      UNIT_TYPES.healer.attack < UNIT_TYPES.line.attack / 4,
+      "attack " + UNIT_TYPES.healer.attack);
+  }
+
+  // Sappers dig in on ground they are told to hold.
+  {
+    const w = new World({ seed: 82, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    // Set them down on ground that can actually be dug. Spawning at a fixed
+    // spot put them in a wood, where the test passed while proving nothing.
+    let dig = { x: 0, y: 0 };
+    outer: for (let ty0 = 20; ty0 < 40; ty0++) {
+      for (let tx0 = 20; tx0 < 40; tx0++) {
+        if (w.terrain.fortifiableAt(tx0, ty0)) {
+          dig = { x: (tx0 + 0.5) * TILE_SIZE, y: (ty0 + 0.5) * TILE_SIZE };
+          break outer;
+        }
+      }
+    }
+    const men: number[] = [];
+    for (let i = 0; i < 8; i++) men.push(w.spawnSoldier(0, "builder", dig.x + (i % 4) * 6, dig.y, 0));
+    for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 1700, 1700, M.PI);
+    const g = w.createGroup(0, men) as Group;
+    const tx = (g.anchorX / TILE_SIZE) | 0;
+    const ty = (g.anchorY / TILE_SIZE) | 0;
+    const diggable = w.terrain.fortifiableAt(tx, ty);
+    g.stance = "hold";
+    const revBefore = w.terrain.revision;
+    for (let t = 0; t < TICK_RATE * 30; t++) w.step();
+
+    check("the sappers are standing on ground that can be dug", diggable,
+      "terrain " + w.terrain.typeAt(tx, ty));
+    check("sappers holding open ground raise a fieldwork",
+      w.terrain.typeAt(tx, ty) === Terrain.Fortification,
+      "terrain now " + w.terrain.typeAt(tx, ty));
+    check("and that re-bakes the map", w.terrain.revision > revBefore);
+  }
+
+  // But not while somebody is fighting them.
+  {
+    const w = new World({ seed: 82, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    const men: number[] = [];
+    for (let i = 0; i < 8; i++) men.push(w.spawnSoldier(0, "builder", 900 + (i % 4) * 14, 900, 0));
+    for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 1700, 1700, M.PI);
+    const g = w.createGroup(0, men) as Group;
+    g.stance = "hold";
+    const tx = (g.anchorX / TILE_SIZE) | 0;
+    const ty = (g.anchorY / TILE_SIZE) | 0;
+    for (let t = 0; t < TICK_RATE * 30; t++) {
+      w.step();
+      g.lastContact = w.tick; // somebody is on them the whole time
+    }
+    check("men under attack cannot entrench",
+      w.terrain.typeAt(tx, ty) !== Terrain.Fortification);
+  }
+
+  // Siege-capable men bring works down. Until now the `siege` flag was read by
+  // nothing at all -- engines carried it and no unit could knock anything over.
+  {
+    const w = new World({ seed: 83, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    const men: number[] = [];
+    for (let i = 0; i < 4; i++) men.push(w.spawnSoldier(0, "siege", 900 + i * 16, 900, 0));
+    for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 1700, 1700, M.PI);
+    const g = w.createGroup(0, men) as Group;
+    // Find diggable ground beside them rather than assuming the tile east of
+    // the anchor is open -- at some seeds it is forest, and the "wall" was
+    // never built, so the battering test passed against nothing at all.
+    const cx = (g.anchorX / TILE_SIZE) | 0;
+    const cy = (g.anchorY / TILE_SIZE) | 0;
+    let tx = -1;
+    let ty = -1;
+    for (const [dx, dy] of [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]) {
+      if (w.terrain.fortifiableAt(cx + dx, cy + dy)) {
+        tx = cx + dx;
+        ty = cy + dy;
+        break;
+      }
+    }
+    w.terrain.fortify(tx, ty);
+    check("a wall stands in front of them",
+      tx >= 0 && w.terrain.typeAt(tx, ty) === Terrain.Fortification,
+      tx < 0 ? "no diggable ground beside them" : "terrain " + w.terrain.typeAt(tx, ty));
+    g.stance = "attack";
+    for (let t = 0; t < TICK_RATE * 90 && w.terrain.typeAt(tx, ty) === Terrain.Fortification; t++) w.step();
+    check("engines batter a wall down", w.terrain.typeAt(tx, ty) !== Terrain.Fortification,
+      "terrain " + w.terrain.typeAt(tx, ty));
+  }
+
+  check("both new classes are scarce and cost real points",
+    UNIT_TYPES.healer.maxPerArmy <= 3 && UNIT_TYPES.builder.maxPerArmy <= 3 &&
+    UNIT_TYPES.healer.cost >= 4 && UNIT_TYPES.builder.cost >= 4);
+  check("adding them did not renumber the existing units",
+    UNIT_TYPE_IDS[0] === "line" && UNIT_TYPE_IDS[7] === "siege",
+    UNIT_TYPE_IDS.join(","));
+}
+
 // -- 9b2. does commanding well actually beat not commanding at all? ------------
 
 section("decisions matter");

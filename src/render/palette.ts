@@ -56,6 +56,8 @@ const TONE: Record<string, number> = {
   mage: 0.15,
   skirmisher: 0.17,
   scout: 0.26,
+  builder: -0.10,
+  healer: 0.21,
 };
 
 /** Shared dark endpoint: an ink, not black, so shadows stay in the family. */
