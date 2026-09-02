@@ -61,7 +61,7 @@ import { DOCTRINES, DOCTRINE_IDS } from "../src/content/doctrines.ts";
 import { DEFAULT_BUDGET, MAX_SQUADS, cost, defaultArmy, validate } from "../src/content/army.ts";
 import { LEVELS } from "../src/content/levels/index.ts";
 import { statsFor } from "../src/sim/world.ts";
-import { SPELLS, SPELL_IDS, hexPenalty, wardSoak } from "../src/sim/magic.ts";
+import { OFFENSIVE_SPELLS, SPELLS, SPELL_IDS, SUPPORTIVE_SPELLS, hexPenalty, wardSoak, type SpellId } from "../src/sim/magic.ts";
 import { hitDamage } from "../src/sim/combat.ts";
 import { ROUT_THRESHOLD } from "../src/sim/morale.ts";
 import { hashWorld, hashTerrain, hashRngStream, hashPaths } from "../src/sim/hash.ts";
@@ -2127,6 +2127,68 @@ section("commanders");
     "boar " + boar.join(" -> ") + " | badger " + badger.join(" -> "));
   check("but a broken army holds regardless of who commands it",
     COMMANDERS.boar.bias.aggressive > 1);
+}
+
+// -- 8i3. what the adepts actually do ------------------------------------------
+
+section("adept spells");
+{
+  check("there is a real spell list, not three things",
+    SPELL_IDS.length >= 8, SPELL_IDS.length + " spells");
+  check("some of them kill and some of them only tilt",
+    SPELL_IDS.some((id) => SPELLS[id].kind === "burst") &&
+    SPELL_IDS.some((id) => SPELLS[id].kind === "field"));
+  check("every offensive spell lands on enemies and every supportive one on friends",
+    OFFENSIVE_SPELLS.every((id) => !SPELLS[id].onAllies) &&
+    SUPPORTIVE_SPELLS.every((id) => SPELLS[id].onAllies || id === "mend"));
+  check("bursts still obey the medium-magic rules",
+    SPELL_IDS.every((id) => SPELLS[id].radius < 260 && SPELLS[id].duration <= 15 &&
+      SPELLS[id].cooldown > SPELLS[id].duration),
+    SPELL_IDS.map((id) => id + " " + SPELLS[id].duration + "/" + SPELLS[id].cooldown).join(" "));
+
+  // Adepts do not all reach for the same thing. Run several matches and count
+  // how many different spells actually get worked.
+  {
+    const worked = new Set<string>();
+    for (let seed = 200; seed < 208; seed++) {
+      const w = new World({ seed, tilesWide: 70, tilesHigh: 70, soldierCapacity: 512 });
+      const casters: number[] = [];
+      for (let i = 0; i < 8; i++) casters.push(w.spawnSoldier(0, "mage", 1200 + (i % 4) * 14, 1200, 0));
+      const foes: number[] = [];
+      for (let i = 0; i < 16; i++) foes.push(w.spawnSoldier(1, "line", 1420 + (i % 4) * 14, 1200 + ((i / 4) | 0) * 14, M.PI));
+      const g = w.createGroup(0, casters) as Group;
+      w.createGroup(1, foes);
+      g.stance = "attack";
+      for (let t = 0; t < TICK_RATE * 90; t++) {
+        w.step();
+        for (const k of w.workings) worked.add(k.spell);
+      }
+    }
+    check("adepts reach for more than one spell", worked.size >= 3,
+      [...worked].join(", "));
+    check("and at least one of them is a spell that kills",
+      [...worked].some((id) => SPELLS[id as SpellId].kind === "burst"),
+      [...worked].join(", "));
+  }
+
+  // A fireball actually hurts the men it lands on.
+  {
+    const w = new World({ seed: 210, tilesWide: 70, tilesHigh: 70, soldierCapacity: 512 });
+    const casters: number[] = [];
+    for (let i = 0; i < 8; i++) casters.push(w.spawnSoldier(0, "mage", 1200 + (i % 4) * 14, 1200, 0));
+    const foes: number[] = [];
+    for (let i = 0; i < 16; i++) foes.push(w.spawnSoldier(1, "line", 1400 + (i % 4) * 14, 1200 + ((i / 4) | 0) * 14, M.PI));
+    const g = w.createGroup(0, casters) as Group;
+    w.createGroup(1, foes);
+    g.stance = "attack";
+    let hpBefore = 0;
+    for (const f of foes) hpBefore += w.soldiers.hp[f];
+    for (let t = 0; t < TICK_RATE * 60; t++) w.step();
+    let hpAfter = 0;
+    for (const f of foes) if (w.soldiers.alive[f] === 1) hpAfter += w.soldiers.hp[f];
+    check("adepts do real harm to an enemy in front of them", hpAfter < hpBefore,
+      hpBefore.toFixed(0) + " -> " + hpAfter.toFixed(0) + " hp");
+  }
 }
 
 // -- 8j. surgeons and sappers --------------------------------------------------

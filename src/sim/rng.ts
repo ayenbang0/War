@@ -22,6 +22,9 @@ export const Stream = {
   Morale: 0x51ab3f0d,
   Ai: 0x9d2c5e83,
   Spawn: 0x4f1bbcdd,
+  /** Which spell an adept reaches for. Its own stream, so adding a spell to
+   *  the list never shifts a combat or morale roll. */
+  Magic: 0x1b873593,
 } as const;
 
 export type StreamId = (typeof Stream)[keyof typeof Stream];

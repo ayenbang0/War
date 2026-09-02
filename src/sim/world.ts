@@ -40,7 +40,10 @@ import { DEFAULT_VICTORY, evaluate, type ArmyState, type ControlPoint, type Outc
 import { FogField, concealment, effectiveSight, hasLineOfSight, rangeFromHeight } from "./vision.ts";
 import { ArmyAI } from "./ai.ts";
 import type { Commander } from "../content/commanders.ts";
-import { SPELLS, hexPenalty, mendRate, nerveShift, succourRate, wardSoak, type SpellId, type Working } from "./magic.ts";
+import {
+  OFFENSIVE_SPELLS, SPELLS, SUPPORTIVE_SPELLS, hexPenalty, mendRate, nerveShift,
+  succourRate, wardSoak, type SpellId, type Working,
+} from "./magic.ts";
 import { ABILITIES, type AbilityId } from "../content/abilities.ts";
 
 /** A commander's ability standing on the field. */
@@ -349,6 +352,7 @@ export class World {
     readonly morale: Rng;
     readonly ai: Rng;
     readonly spawn: Rng;
+    readonly magic: Rng;
   };
 
   /** Soldiers deployed by each army, kept so morale can hold the dead on the books. */
@@ -401,6 +405,7 @@ export class World {
       morale: Rng.create(this.seed, Stream.Morale),
       ai: Rng.create(this.seed, Stream.Ai),
       spawn: Rng.create(this.seed, Stream.Spawn),
+      magic: Rng.create(this.seed, Stream.Magic),
     };
     for (const p of config.aiPlayers ?? []) {
       this.ai.push(new ArmyAI(p, config.aiTuning, config.commander));
@@ -756,14 +761,12 @@ export class World {
     this.rebuildHash();
     this.updateSoldiers();
     this.updateVision();
+    // Cleared before ANYTHING writes damage for this tick. A fireball is
+    // buffered by castSpells, and clearing after that wiped it -- the same
+    // mistake the barrage made, one step further up the tick.
+    this.clearDamageBuffer();
     this.castSpells();
     this.updateAmbushes();
-    // The damage buffer is cleared HERE rather than inside resolveCombat, so
-    // that anything else which deals damage this tick can write into it and be
-    // applied with everything else. A barrage wrote into that buffer after
-    // resolveCombat had already emptied and applied it, so its damage was
-    // discarded every tick and the ability did nothing whatsoever.
-    this.clearDamageBuffer();
     this.applyFields();
     this.resolveCombat();
     this.applyWorkings();
@@ -1067,7 +1070,9 @@ export class World {
     // At the charge: faster, and with the ranks allowed to open up, which is
     // what the extra impact is bought with.
     const haste = g.hasteUntil > this.tick ? CHARGE_HASTE : 1;
-    return slowest * FORMATION_PACE * haste * moraleSpeedScale(morale / n);
+    // Mired ground is the one working that touches movement rather than
+    // damage or nerve: it does no harm at all, it simply refuses to be crossed.
+    return slowest * FORMATION_PACE * haste * this.mireScale(g) * moraleSpeedScale(morale / n);
   }
 
   private groupTurnRate(g: Group): number {
@@ -1501,12 +1506,24 @@ export class World {
       const known = UNIT_TYPES[this.typeOf(caster)].spell;
       let choose: SpellId;
       if (known === "succour") {
+        // Surgeons know one thing and do it. Choosing by stance would have them
+        // throwing fire.
         if (!this.woundedNear(g) && this.tick - g.lastContact > TICK_RATE * 6) continue;
         choose = "succour";
-      } else if (g.stance === "attack") choose = "hex";
-      else if (g.stance === "hold" || g.stance === "recover") choose = "ward";
-      else if (this.woundedNear(g)) choose = "mend";
-      else continue;
+      } else {
+        // Adepts reach for whatever suits the moment, and WHICH of those they
+        // reach for is a roll -- so two adept companies in a battle do not read
+        // as one copied twice, and no single counter answers all of them.
+        // Drawn from its own stream, so adding a spell to the list never shifts
+        // a combat or morale roll.
+        const foe = this.nearestVisibleFoe(g);
+        const list = foe && g.stance !== "hold" && g.stance !== "recover"
+          ? OFFENSIVE_SPELLS
+          : SUPPORTIVE_SPELLS;
+        choose = list[this.rng.magic.int(list.length)];
+        // Healing nobody is a wasted working; fall back to steadying them.
+        if (choose === "mend" && !this.woundedNear(g)) choose = "ward";
+      }
 
       const spell = SPELLS[choose];
       let tx = g.anchorX;
@@ -1517,6 +1534,22 @@ export class World {
         tx = foe.anchorX;
         ty = foe.anchorY;
       }
+      if (SPELLS[choose].kind === "burst") {
+        // A fireball is an event: its damage lands the instant it is worked,
+        // and what remains on the ground is only the mark it leaves.
+        const spec2 = SPELLS[choose];
+        const rr = spec2.radius * spec2.radius;
+        for (let i = 0; i < s.count; i++) {
+          if (s.alive[i] !== 1) continue;
+          if ((s.player[i] === g.player) === spec2.onAllies) {
+            if (d2(tx, ty, s.x[i], s.y[i]) > rr) continue;
+            s.incoming[i] += spec2.damage ?? 0;
+            s.struckBy[i] = caster;
+            s.struckHow[i] = HOW_RANGED;
+          }
+        }
+      }
+
       this.workings.push({
         spell: choose,
         player: g.player,
@@ -2042,6 +2075,17 @@ export class World {
         s.struckHow[i] = HOW_RANGED;
       }
     }
+  }
+
+  /** How much of its pace a company keeps on mired ground. 1 when clear. */
+  private mireScale(g: Group): number {
+    let worst = 1;
+    for (const w of this.workings) {
+      if (w.spell !== "mire" || w.player === g.player) continue;
+      if (d2(w.x, w.y, g.anchorX, g.anchorY) > w.radius * w.radius) continue;
+      worst = min(worst, SPELLS.mire.slow ?? 1);
+    }
+    return worst;
   }
 
   /** Is this spot lit by one of `player`'s flares? */
