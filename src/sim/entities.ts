@@ -81,6 +81,15 @@ export function statsFor(type: UnitTypeId, doctrine: DoctrineId): Stats {
  * Struct-of-arrays because the hot loops walk one field at a time across
  * hundreds of soldiers; an array of objects would scatter every read.
  */
+/** How a blow landed. Low bits are the kind; FLANK_BIT rides on top. */
+export const HOW_MELEE = 0;
+export const HOW_RANGED = 1;
+export const HOW_FLANK_BIT = 4;
+
+/** Casualty causes, in report order. Indices into World.casualtiesByCause. */
+export const CAUSES = ["melee", "shot", "flanked"] as const;
+export type Cause = (typeof CAUSES)[number];
+
 export class Soldiers {
   readonly x: Float64Array;
   readonly y: Float64Array;
@@ -94,6 +103,15 @@ export class Soldiers {
   readonly incoming: Float64Array;
   /** Group index of whoever last struck, for kill credit. -1 for none. */
   readonly struckBy: Int32Array;
+  /**
+   * HOW that last blow landed, so a casualty can be explained afterwards.
+   *
+   * The kind in the low bits, FLANK_BIT set when it came from outside the
+   * victim's frontal arc. Written wherever struckBy is, and read only when the
+   * man actually dies -- the whole point is to be able to say "shot to pieces"
+   * or "broken by a flank charge" rather than showing a bare casualty count.
+   */
+  readonly struckHow: Uint8Array;
   readonly player: Uint8Array;
   /** Index into UNIT_TYPE_IDS. */
   readonly type: Uint8Array;
@@ -123,6 +141,7 @@ export class Soldiers {
     this.cooldown = new Float64Array(capacity);
     this.incoming = new Float64Array(capacity);
     this.struckBy = new Int32Array(capacity).fill(-1);
+    this.struckHow = new Uint8Array(capacity);
     this.player = new Uint8Array(capacity);
     this.type = new Uint8Array(capacity);
     this.alive = new Uint8Array(capacity);
@@ -152,6 +171,14 @@ export const STANCES: readonly Stance[] = [
 export type Group = {
   readonly id: number;
   readonly player: number;
+  /**
+   * What this company is called, e.g. "2nd Foot", "Ashcroft's Horse".
+   *
+   * Derived deterministically from the id and the men in it, so it needs no
+   * hashing of its own. It exists so the after-action report can tell you which
+   * company held and which broke, rather than reciting anonymous numbers.
+   */
+  readonly name: string;
   /** Soldier ids, kept sorted so iteration order never depends on click order. */
   members: number[];
   /** Formation centre, recomputed from the members that are left. */
@@ -181,6 +208,15 @@ export type Group = {
   engaged: number;
   kills: number;
   losses: number;
+  /** Of those losses, how many were cut down from outside the frontal arc. */
+  flankLosses: number;
+  /** Tick at which this company's nerve broke, or -1. Reported afterwards. */
+  brokeAt: number;
+  /** Tick at which the last man fell, or -1. Kept so the report can still
+   *  account for companies that no longer exist. */
+  destroyedAt: number;
+  /** Men in it when it was raised, since members only ever shrinks. */
+  raisedWith: number;
   casualtiesThisTick: number;
   killsThisTick: number;
   lastContact: number;

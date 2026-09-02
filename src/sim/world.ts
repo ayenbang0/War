@@ -28,10 +28,14 @@ import { advanceToward } from "./movement.ts";
 import { SpatialHash } from "./spatial.ts";
 import { clearLine, findPath, smoothRoute } from "./pathfind.ts";
 import { UNIT_TYPES } from "../content/unit-types.ts";
+import { companyName } from "../content/companies.ts";
 import { type DoctrineId } from "../content/doctrines.ts";
-import { Soldiers, statsFor, typeAt, typeIndex, type Group, type Stats } from "./entities.ts";
+import {
+  HOW_FLANK_BIT, HOW_MELEE, HOW_RANGED, Soldiers, statsFor, typeAt, typeIndex,
+  type Group, type Stats,
+} from "./entities.ts";
 import { MELEE_RANGE, d2, hitDamage, isFlanking } from "./combat.ts";
-import { globalMorale, nextMorale } from "./morale.ts";
+import { COMPANY_BREAK, globalMorale, nextMorale } from "./morale.ts";
 import { DEFAULT_VICTORY, evaluate, type ArmyState, type ControlPoint, type Outcome, type VictoryConfig } from "./victory.ts";
 import { FogField, concealment, effectiveSight, hasLineOfSight, rangeFromHeight } from "./vision.ts";
 import { ArmyAI } from "./ai.ts";
@@ -156,6 +160,15 @@ export class World {
   readonly soldiers: Soldiers;
   /** Groups the players have drawn. Never created by spawning. */
   readonly groups: Group[] = [];
+  /**
+   * EVERY company ever raised, including those since wiped out.
+   *
+   * `groups` is the live board and a company that loses its last man is spliced
+   * straight out of it -- which are precisely the companies an after-action
+   * report most needs to name. This list never shrinks so the account of the
+   * battle can still mention them.
+   */
+  readonly raised: Group[] = [];
   readonly duration: number;
   outcome: Outcome | null = null;
   /** While true the board is being set out and the match has not begun. */
@@ -165,6 +178,17 @@ export class World {
   readonly workings: Working[] = [];
   readonly ai: ArmyAI[] = [];
   readonly fog: [FogField, FogField];
+  /**
+   * Casualties by cause, per player: [melee, shot, flanked].
+   *
+   * DELIBERATELY NOT HASHED, unlike almost everything else here. It is a report
+   * derived from state that is already hashed, and it never feeds a decision --
+   * nothing reads it back into the simulation. Hashing it would add golden
+   * churn for a number that cannot cause a desync on its own.
+   */
+  readonly casualtiesByCause: [number[], number[]] = [[0, 0, 0], [0, 0, 0]];
+  /** Companies that broke, in the order they broke, for the after-action. */
+  readonly breakages: { name: string; player: number; tick: number; cause: string }[] = [];
 
   readonly rng: {
     readonly combat: Rng;
@@ -289,9 +313,11 @@ export class World {
 
     for (const id of members) this.leaveGroup(id);
 
+    const id = this.nextId++;
     const g: Group = {
-      id: this.nextId++,
+      id,
       player,
+      name: companyName(id, this.dominantType(members)),
       members,
       anchorX: 0,
       anchorY: 0,
@@ -319,6 +345,10 @@ export class World {
       engaged: 0,
       kills: 0,
       losses: 0,
+      flankLosses: 0,
+      brokeAt: -1,
+      destroyedAt: -1,
+      raisedWith: members.length,
       casualtiesThisTick: 0,
       killsThisTick: 0,
       lastContact: -9999,
@@ -327,9 +357,32 @@ export class World {
     };
     for (const id of members) s.group[id] = g.id;
     this.groups.push(g);
+    this.raised.push(g);
     this.recentre(g);
     this.reflow(g);
     return g;
+  }
+
+  /**
+   * What a company is mostly made of, for naming it.
+   *
+   * Ties break toward the earlier type in UNIT_TYPE_IDS rather than by count
+   * alone, so the same men always produce the same answer.
+   */
+  private dominantType(members: readonly number[]): UnitTypeId {
+    const tally = new Map<UnitTypeId, number>();
+    let best: UnitTypeId = "line";
+    let bestN = -1;
+    for (const m of members) {
+      const t = this.typeOf(m);
+      const n = (tally.get(t) ?? 0) + 1;
+      tally.set(t, n);
+      if (n > bestN) {
+        bestN = n;
+        best = t;
+      }
+    }
+    return best;
   }
 
   groupById(id: number): Group | undefined {
@@ -354,6 +407,15 @@ export class World {
   disband(id: number): void {
     const at = this.groups.findIndex((g) => g.id === id);
     if (at < 0) return;
+    const dying = this.groups[at];
+    // Only a company that ran out of men was destroyed. Disbanding also happens
+    // when the player reorganises, and that is not a casualty report.
+    if (dying.destroyedAt < 0 && dying.losses >= dying.raisedWith) {
+      dying.destroyedAt = this.tick;
+      this.breakages.push({
+        name: dying.name, player: dying.player, tick: this.tick, cause: "wiped out",
+      });
+    }
     for (const m of this.groups[at].members) {
       this.soldiers.group[m] = -1;
       this.soldiers.slot[m] = -1;
@@ -1375,14 +1437,21 @@ export class World {
     s.struckBy[victim] = attacker;
     s.cooldown[attacker] = st.attackInterval;
 
+    const flanking = isFlanking(
+      s.facing[victim], s.x[attacker], s.y[attacker], s.x[victim], s.y[victim],
+    );
+    // Remembered so that IF this blow turns out to be the fatal one, the death
+    // can be explained. Computed here because the flank test needs both men's
+    // positions, which are gone by the time damage is applied.
+    s.struckHow[victim] =
+      (st.range > MELEE_RANGE ? HOW_RANGED : HOW_MELEE) | (flanking ? HOW_FLANK_BIT : 0);
+
     const ag = this.groupOf(attacker);
     const vg = this.groupOf(victim);
     if (ag) ag.lastContact = this.tick;
     if (vg) {
       vg.lastContact = this.tick;
-      if (isFlanking(s.facing[victim], s.x[attacker], s.y[attacker], s.x[victim], s.y[victim])) {
-        vg.flanked = true;
-      }
+      if (flanking) vg.flanked = true;
     }
     this.events.push({
       kind: st.range > MELEE_RANGE ? "shot" : "melee",
@@ -1429,10 +1498,18 @@ export class World {
         const side = s.player[killer] === 0 ? 0 : 1;
         this.points[side] += this.victory.perKill;
       }
+      // Explain the casualty. A blow from outside the frontal arc is reported
+      // as a flanking kill whether it was a spear or an arrow -- that is the
+      // thing the player needs to learn from, not the weapon.
+      const how = s.struckHow[id];
+      const cause = (how & HOW_FLANK_BIT) !== 0 ? 2 : (how & 3) === HOW_RANGED ? 1 : 0;
+      this.casualtiesByCause[s.player[id]][cause]++;
+
       const vg = this.groupOf(id);
       if (vg) {
         vg.losses++;
         vg.casualtiesThisTick++;
+        if ((how & HOW_FLANK_BIT) !== 0) vg.flankLosses++;
         reflowed.add(vg.id);
         const at = vg.members.indexOf(id);
         if (at >= 0) vg.members.splice(at, 1);
@@ -1549,6 +1626,39 @@ export class World {
         cover: TERRAIN_INFO[this.terrain.typeAtWorld(s.x[id], s.y[id])].cover,
         dt: TICK_DT,
       });
+    }
+
+    this.recordBreakages();
+  }
+
+  /**
+   * Note the moment a company's nerve gives, and what did it.
+   *
+   * Recorded once per company -- brokeAt guards it -- so the report reads as a
+   * short history of the battle rather than a stream of the same line. The
+   * cause is attributed from how that company had been losing men up to this
+   * point, which is the thing the player can actually learn from: a company
+   * that broke having taken most of its losses from the flank was outmanoeuvred,
+   * not merely unlucky.
+   */
+  private recordBreakages(): void {
+    const s = this.soldiers;
+    for (const g of this.groups) {
+      if (g.brokeAt >= 0) continue;
+      let living = 0;
+      let nerve = 0;
+      for (const m of g.members) {
+        if (s.alive[m] !== 1) continue;
+        nerve += s.morale[m];
+        living++;
+      }
+      if (living === 0 || nerve / living >= COMPANY_BREAK) continue;
+      g.brokeAt = this.tick;
+      const cause =
+        g.flankLosses * 2 >= g.losses && g.losses > 0 ? "flanked"
+          : g.losses >= max(1, (g.losses + living) / 2) ? "cut to pieces"
+            : "worn down";
+      this.breakages.push({ name: g.name, player: g.player, tick: this.tick, cause });
     }
   }
 }

@@ -40,6 +40,15 @@ export const REST_CEILING = 0.72;
 export const GROUND_BONUS = 0.02;
 /** Below this, the army routs and the match ends. */
 export const ROUT_THRESHOLD = 0.1;
+/**
+ * Below this, a single COMPANY is considered broken.
+ *
+ * Deliberately far above the army threshold. A company whose nerve is at a
+ * quarter has stopped being a fighting body long before the army as a whole is
+ * routing, and the after-action report is about the moment it stopped holding,
+ * not the moment the match ended.
+ */
+export const COMPANY_BREAK = 0.28;
 
 export type MoraleInputs = {
   /** Soldiers lost this tick. */

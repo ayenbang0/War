@@ -2060,6 +2060,71 @@ section("glyph vs split");
 
 // -- 9a5. split, recover, and curved routes ------------------------------------
 
+// -- 9c. the account of the battle ---------------------------------------------
+
+section("after-action");
+{
+  // Every company gets a name, and the same men always produce the same one --
+  // a name that changed between a match and its replay would be a desync you
+  // could see.
+  {
+    const w = new World({ seed: 61, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    const foot: number[] = [];
+    for (let i = 0; i < 12; i++) foot.push(w.spawnSoldier(0, "line", 900 + (i % 4) * 15, 900 + ((i / 4) | 0) * 15, 0));
+    const horse: number[] = [];
+    for (let i = 0; i < 8; i++) horse.push(w.spawnSoldier(0, "horse", 1400 + (i % 4) * 15, 900 + ((i / 4) | 0) * 15, 0));
+    const a = w.createGroup(0, foot) as Group;
+    const b = w.createGroup(0, horse) as Group;
+    check("a company of foot is numbered", /Foot$/.test(a.name), a.name);
+    check("a company of horse is named for a person", /'s Horse$/.test(b.name), b.name);
+    check("two companies never share a name", a.name !== b.name, a.name + " / " + b.name);
+
+    const w2 = new World({ seed: 61, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    const foot2: number[] = [];
+    for (let i = 0; i < 12; i++) foot2.push(w2.spawnSoldier(0, "line", 900 + (i % 4) * 15, 900 + ((i / 4) | 0) * 15, 0));
+    check("the same company is named the same way twice",
+      (w2.createGroup(0, foot2) as Group).name === a.name);
+  }
+
+  // A blow from behind is reported as a flanking kill, whatever the weapon.
+  {
+    const w = new World({ seed: 62, tilesWide: 70, tilesHigh: 70, soldierCapacity: 256 });
+    const victims: number[] = [];
+    // Facing EAST, with the enemy set on them from the WEST: every blow lands
+    // outside the frontal arc.
+    for (let i = 0; i < 14; i++) victims.push(w.spawnSoldier(0, "line", 1400 + (i % 4) * 15, 1200 + ((i / 4) | 0) * 15, 0));
+    const killers: number[] = [];
+    for (let i = 0; i < 26; i++) killers.push(w.spawnSoldier(1, "guard", 1330 + (i % 6) * 14, 1200 + ((i / 6) | 0) * 14, 0));
+    w.createGroup(0, victims);
+    w.createGroup(1, killers);
+    for (let t = 0; t < TICK_RATE * 45 && w.casualtiesByCause[0].reduce((x, y) => x + y, 0) < 6; t++) w.step();
+
+    const bill = w.casualtiesByCause[0];
+    const total = bill[0] + bill[1] + bill[2];
+    check("casualties are attributed to a cause", total > 0, JSON.stringify(bill));
+    check("men cut down from behind are recorded as flanked", bill[2] > 0, JSON.stringify(bill));
+  }
+
+  // A company that loses its nerve is recorded once, with a cause.
+  {
+    const w = new World({ seed: 63, tilesWide: 70, tilesHigh: 70, soldierCapacity: 256 });
+    const ids: number[] = [];
+    for (let i = 0; i < 12; i++) ids.push(w.spawnSoldier(0, "skirmisher", 1400 + (i % 4) * 15, 1200 + ((i / 4) | 0) * 15, 0));
+    for (let i = 0; i < 30; i++) w.spawnSoldier(1, "guard", 1330 + (i % 6) * 14, 1200 + ((i / 6) | 0) * 14, 0);
+    const g = w.createGroup(0, ids) as Group;
+    w.createGroup(1, [...Array(30).keys()].map((k) => k + 12));
+    for (let t = 0; t < TICK_RATE * 90 && g.brokeAt < 0; t++) w.step();
+
+    check("a company that breaks is recorded", g.brokeAt >= 0, "brokeAt " + g.brokeAt);
+    const mine = w.breakages.filter((b) => b.player === 0);
+    check("recorded once, not once per tick", mine.length <= 2, mine.length + " entries");
+    check("and with a cause the player can learn from",
+      mine.length > 0 && mine[0].cause.length > 0, mine.length > 0 ? mine[0].cause : "-");
+    check("the report names the company", mine.length > 0 && mine[0].name === g.name,
+      mine.length > 0 ? mine[0].name : "-");
+  }
+}
+
 section("orders in practice");
 {
   function army(w: World, player: number, x: number, y: number, n = 10): Group {

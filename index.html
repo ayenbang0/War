@@ -18,6 +18,49 @@
     white-space: pre;
   }
   #hud { left: 12px; top: 12px; font-size: 13px; line-height: 1.5; letter-spacing: 0.02em; }
+  /* -- after-action report ------------------------------------------------- */
+  .after-action {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(38, 32, 22, 0.86); z-index: 12; overflow: auto; padding: 24px;
+    font: 13px/1.5 ui-monospace, "Cascadia Mono", Menlo, monospace; color: #3a3124;
+  }
+  .aa-panel {
+    background: #e7dfcb; border: 1px solid #a3906c; border-radius: 4px;
+    padding: 22px 26px; max-width: 640px; width: 100%; max-height: 100%; overflow: auto;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+  }
+  .aa-verdict { margin: 0 0 2px; font-size: 22px; letter-spacing: 1px; }
+  .aa-won { color: #3b5f8a; }
+  .aa-lost { color: #8c3a34; }
+  .aa-drew { color: #6b5c40; }
+  .aa-detail { margin: 0 0 16px; color: #7a6848; }
+  .aa-panel h2 {
+    font-size: 11px; letter-spacing: 1.6px; text-transform: uppercase;
+    color: #8a7856; margin: 18px 0 6px; font-weight: 600;
+  }
+  .aa-panel h3 { font-size: 13px; margin: 0 0 6px; font-weight: 600; }
+  .aa-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .aa-col {
+    border: 1px solid #cbbc9c; border-radius: 3px; padding: 8px 10px; background: #efe8d6;
+  }
+  .aa-stat { display: flex; justify-content: space-between; gap: 10px; }
+  .aa-label { color: #5f5138; }
+  .aa-value { font-weight: 600; }
+  .aa-lesson {
+    margin: 12px 0 0; padding: 8px 10px; background: #efe8d6;
+    border-left: 3px solid #8c3a34; color: #5f5138;
+  }
+  .aa-companies { display: grid; gap: 3px; }
+  .aa-company {
+    display: grid; grid-template-columns: 1.2fr 1.4fr auto; gap: 10px;
+    padding: 4px 8px; background: #efe8d6; border: 1px solid #ded2b6; border-radius: 2px;
+  }
+  .aa-name { font-weight: 600; }
+  .aa-record { color: #7a6848; }
+  .aa-fate { color: #8a7856; text-align: right; }
+  .aa-log { display: grid; gap: 2px; }
+  .aa-log-line { color: #5f5138; }
+  .aa-again { margin-top: 20px; padding: 8px 18px; font: inherit; cursor: pointer; }
   #menu {
     position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
     background: rgba(38, 32, 22, 0.82); z-index: 10; overflow: auto; padding: 24px;
@@ -69,5 +112,6 @@
 </style>
 <canvas id="stage"></canvas>
 <div id="menu"></div>
+<div id="report"></div>
 <div id="hud" class="panel"></div>
 <script type="module" src="/src/main.ts"></script>

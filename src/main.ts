@@ -16,6 +16,7 @@ import { validate, type ArmyList } from "./content/army.ts";
 import { DIFFICULTIES } from "./content/difficulty.ts";
 import { type UnitTypeId } from "./content/unit-types.ts";
 import { openMenu } from "./ui/menu.ts";
+import { showAfterAction } from "./ui/after-action.ts";
 import { UNIT_TYPES } from "./content/unit-types.ts";
 import { Camera } from "./render/camera.ts";
 import { Renderer, type Snapshot } from "./render/renderer.ts";
@@ -179,8 +180,15 @@ let fps = 0;
 let hudTimer = 0;
 let cachedHash = hashWorld(world);
 const MAX_STEPS_PER_FRAME = 5;
+/** How long a "company broke" line stays on screen. */
+const BREAK_NOTICE_MS = 4200;
 
 let deployFogTick = 0;
+let reported = false;
+/** The last company to break, shown briefly and then allowed to fade. */
+let lastBreak = "";
+let lastBreakAt = 0;
+let breaksSeen = 0;
 
 function frame(now: number): void {
   const dtReal = Math.min((now - last) / 1000, 0.25);
@@ -203,6 +211,27 @@ function frame(now: number): void {
       steps++;
     }
     if (steps === MAX_STEPS_PER_FRAME) accumulator = 0;
+  }
+
+  // Pick up any company that broke since the last frame. Only the player's own
+  // are announced -- being told the enemy is breaking would hand over
+  // information the fog is meant to be keeping.
+  while (breaksSeen < world.breakages.length) {
+    const b = world.breakages[breaksSeen++];
+    if (b.player !== PLAYER) continue;
+    lastBreak = b.name + " broke - " + b.cause;
+    lastBreakAt = now;
+  }
+
+  // The match has just ended: show the report once. Guarded by a flag rather
+  // than by clearing world.outcome, because the outcome is real state that the
+  // HUD and the sim both still read.
+  if (world.outcome && !reported) {
+    reported = true;
+    showAfterAction(
+      document.getElementById("report") as HTMLElement,
+      world, PLAYER, () => window.location.reload(),
+    );
   }
 
   // Deployment freezes the match, so the sim's vision sweep never runs and the
@@ -295,6 +324,12 @@ function drawHud(): void {
   }
   else if (world.outcome) {
     lines.push("", world.outcome.winner === PLAYER ? "VICTORY" : world.outcome.winner < 0 ? "DRAW" : "DEFEAT");
+  } else if (lastBreak && performance.now() - lastBreakAt < BREAK_NOTICE_MS) {
+    // A company breaking outranks the pen's own chatter: it is the one thing
+    // happening on the field that the player most needs to know about. Kept to
+    // a single line that fades, because the battlefield stays uncluttered and
+    // the full account belongs in the after-action report.
+    lines.push("", lastBreak);
   } else if (pen.lastAction) lines.push("", pen.lastAction);
 
   if (showDebug) {
