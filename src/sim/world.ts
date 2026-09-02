@@ -117,6 +117,60 @@ const MAX_SIGHT = 1200;
 const SIGHT_INTERVAL = 4;
 /** Blocked line-of-sight checks to try per soldier before giving up on it. */
 const MAX_RAYCASTS = 6;
+/**
+ * How much a fully dressed formation adds to its men's defence.
+ *
+ * The single most important number in the game's balance. Cohesion was already
+ * computed and purely decorative, which meant formations -- the entire point of
+ * the pen -- conferred nothing measurable, and an army given no orders at all
+ * fought nearly as well as one that was commanded. A rank standing in its slot,
+ * shoulder to shoulder, is very much harder to kill than the same men strung
+ * out across a field, and now the simulation says so.
+ *
+ * Men in no group at all get NONE of this. That is what makes grouping pay.
+ */
+const COHESION_ARMOUR = 1.05;
+/**
+ * How much harder a dressed company hits than the same men in a crowd.
+ *
+ * Defence alone was not enough. An organised army took meaningfully less damage
+ * and still only traded evenly with a mob, because a mob standing in its own
+ * deployment zone is accidentally playing defence and the win condition rewards
+ * an even trade. Drill makes a body of troops better at DEALING with an enemy,
+ * not merely at surviving one -- ranks that hold their dressing bring their
+ * weapons to bear together instead of as a scatter of individual brawls.
+ */
+const COHESION_STRIKE = 0.55;
+/**
+ * Ticks out of contact after which arriving counts as a fresh charge.
+ *
+ * Without a lull requirement a grinding melee would re-trigger the charge bonus
+ * every few ticks and turn a standing fight into a permanent one.
+ */
+/**
+ * How far from his slot a fighting man still counts as holding the line.
+ *
+ * Generous enough to cover leaning out at someone directly in front, tight
+ * enough that a man who has run down the field after somebody has plainly left
+ * the formation and should not be propping up its cohesion.
+ */
+const FORMED_WHILE_FIGHTING = 30;
+/** How far the shock of a man falling reaches men who have no company. */
+const LOOSE_SHOCK_RADIUS = 95;
+/**
+ * What a lone man measures losses against.
+ *
+ * He has no roster, so casualties are weighed against the handful of men within
+ * sight of him. Small on purpose: a crowd with nobody commanding it comes apart
+ * far faster than a company of the same size, which is the entire argument for
+ * bothering to draw a company at all.
+ */
+const LOOSE_ROSTER = 7;
+const CHARGE_LULL = 40;
+/** Seconds the charge bonus lasts once contact is made. */
+const CHARGE_SECONDS = 2;
+/** Extra damage while charging. Rewards committing at speed rather than drifting in. */
+const CHARGE_BONUS = 0.45;
 const RECOVER_MORALE_PER_SEC = 0.06;
 const RECOVER_HP_FRACTION_PER_SEC = 0.04;
 export const RECOVER_LOCK_SECONDS = 30;
@@ -179,6 +233,16 @@ export class World {
   readonly ai: ArmyAI[] = [];
   readonly fog: [FogField, FogField];
   /**
+   * Each living soldier's formation steadiness this tick: his group's cohesion,
+   * or zero if he stands alone.
+   *
+   * A scratch array rather than a lookup, because the damage path is the
+   * hottest loop in the tick and groupById is a linear scan over every group.
+   * Filled once per tick in updateSoldiers, which already computes cohesion and
+   * already runs before combat resolves.
+   */
+  private readonly steadiness: Float64Array;
+  /**
    * Casualties by cause, per player: [melee, shot, flanked].
    *
    * DELIBERATELY NOT HASHED, unlike almost everything else here. It is a report
@@ -240,6 +304,7 @@ export class World {
     this.neighbours = new Int32Array(256);
     this.watchers = new Int32Array(capacity);
     this.fog = [new FogField(this.terrain), new FogField(this.terrain)];
+    this.steadiness = new Float64Array(this.soldiers.capacity);
     this.rng = {
       combat: Rng.create(this.seed, Stream.Combat),
       morale: Rng.create(this.seed, Stream.Morale),
@@ -340,6 +405,7 @@ export class World {
       patrolLeg: 0,
       patrolForward: true,
       recoverUntil: 0,
+      chargeUntil: 0,
       spellReady: 0,
       cohesion: 1,
       engaged: 0,
@@ -350,6 +416,7 @@ export class World {
       destroyedAt: -1,
       raisedWith: members.length,
       casualtiesThisTick: 0,
+      flankCasualtiesThisTick: 0,
       killsThisTick: 0,
       lastContact: -9999,
       flanked: false,
@@ -925,6 +992,10 @@ export class World {
 
   private updateSoldiers(): void {
     const s = this.soldiers;
+    // A man is only as steady as the formation he is standing in, and a man in
+    // no formation is not steady at all. Cleared first so that leaving a group
+    // takes the benefit with it.
+    this.steadiness.fill(0);
     for (const g of this.groups) {
       const living = g.members.filter((m) => s.alive[m] === 1);
       if (living.length === 0) continue;
@@ -988,15 +1059,31 @@ export class World {
         // by design and does not get to start fights either.
         const mayEngage = g.stance !== "retreat" && g.stance !== "recover";
         const foe = mayEngage ? this.engagementFor(id) : -1;
+        // Keep where he was SUPPOSED to stand: a man fighting from his place in
+        // the line is still a formed company, and cohesion has to be able to
+        // say so.
+        const slotX = tx;
+        const slotY = ty;
         if (foe >= 0) {
           tx = s.x[foe];
           ty = s.y[foe];
         }
 
         if (foe >= 0) fighting++;
-        if (this.steer(id, tx, ty, speed, g.facing) && foe < 0) inSlot++;
+        const arrived = this.steer(id, tx, ty, speed, g.facing);
+        if (foe < 0) {
+          if (arrived) inSlot++;
+        } else if (dist(s.x[id], s.y[id], slotX, slotY) < FORMED_WHILE_FIGHTING) {
+          // Stepping out to strike someone in front of you is fighting IN the
+          // line. Counting it as a broken formation drove cohesion to zero the
+          // instant any company engaged -- which meant the formation bonus
+          // vanished in precisely the situation it exists for, and a formed
+          // company fought no better than a mob.
+          inSlot++;
+        }
       }
       g.cohesion = inSlot / living.length;
+      for (const id of living) this.steadiness[id] = g.cohesion;
       g.engaged = fighting;
     }
 
@@ -1335,7 +1422,10 @@ export class World {
   private resolveCombat(): void {
     const s = this.soldiers;
     this.events.length = 0;
-    for (let i = 0; i < s.count; i++) s.incoming[i] = 0;
+    for (let i = 0; i < s.count; i++) {
+      s.incoming[i] = 0;
+      s.localShock[i] = 0;
+    }
     for (const g of this.groups) g.flanked = false;
 
     for (let id = 0; id < s.count; id++) {
@@ -1424,15 +1514,31 @@ export class World {
   /** Buffer one blow. Nothing dies until the whole tick has been resolved. */
   private strike(attacker: number, victim: number, st: Stats): void {
     const s = this.soldiers;
-    const dmg = hitDamage(
+    const ag = this.groupOf(attacker);
+
+    // Arriving at a body of troops that was not already fighting is a charge.
+    // Read BEFORE lastContact is stamped below, and gated on a lull so that a
+    // grinding melee does not re-trigger it every few ticks.
+    if (ag && this.tick - ag.lastContact > CHARGE_LULL &&
+        (ag.stance === "move" || ag.stance === "attack")) {
+      ag.chargeUntil = this.tick + CHARGE_SECONDS * TICK_RATE;
+    }
+    const charging = ag !== undefined && ag.chargeUntil > this.tick;
+
+    // A rank standing in its slot is far harder to kill than the same man
+    // caught out of formation, and a man in no group at all gets nothing.
+    const defence = this.stats(victim).defence * (1 + COHESION_ARMOUR * this.steadiness[victim]);
+
+    let dmg = hitDamage(
       this.rng.combat,
-      st.attack,
-      this.stats(victim).defence,
+      st.attack * (1 + COHESION_STRIKE * this.steadiness[attacker]),
+      defence,
       this.shelterAt(s.player[victim], s.x[victim], s.y[victim]),
       this.terrain,
       s.x[victim],
       s.y[victim],
     );
+    if (charging) dmg *= 1 + CHARGE_BONUS;
     s.incoming[victim] += dmg;
     s.struckBy[victim] = attacker;
     s.cooldown[attacker] = st.attackInterval;
@@ -1446,7 +1552,6 @@ export class World {
     s.struckHow[victim] =
       (st.range > MELEE_RANGE ? HOW_RANGED : HOW_MELEE) | (flanking ? HOW_FLANK_BIT : 0);
 
-    const ag = this.groupOf(attacker);
     const vg = this.groupOf(victim);
     if (ag) ag.lastContact = this.tick;
     if (vg) {
@@ -1475,6 +1580,7 @@ export class World {
     const s = this.soldiers;
     for (const g of this.groups) {
       g.casualtiesThisTick = 0;
+      g.flankCasualtiesThisTick = 0;
       g.killsThisTick = 0;
     }
     const reflowed = new Set<number>();
@@ -1509,11 +1615,25 @@ export class World {
       if (vg) {
         vg.losses++;
         vg.casualtiesThisTick++;
-        if ((how & HOW_FLANK_BIT) !== 0) vg.flankLosses++;
+        if ((how & HOW_FLANK_BIT) !== 0) {
+          vg.flankLosses++;
+          vg.flankCasualtiesThisTick++;
+        }
         reflowed.add(vg.id);
         const at = vg.members.indexOf(id);
         if (at >= 0) vg.members.splice(at, 1);
       }
+      // Men standing loose near him feel it. Done from the DEATH outward -- one
+      // spatial query per casualty -- rather than each soldier asking who died
+      // near him, which would be a query per soldier per tick.
+      const near = this.hash.query(s.x[id], s.y[id], LOOSE_SHOCK_RADIUS, this.neighbours);
+      for (let k = 0; k < near; k++) {
+        const other = this.neighbours[k];
+        if (s.alive[other] !== 1 || s.group[other] >= 0) continue;
+        if (s.player[other] !== s.player[id]) continue;
+        s.localShock[other]++;
+      }
+
       for (const e of this.events) if (e.victim === id) e.lethal = true;
       s.group[id] = -1;
       s.slot[id] = -1;
@@ -1616,10 +1736,15 @@ export class World {
 
       s.morale[id] = nextMorale(s.morale[id], {
         resolve: this.stats(id).resolve,
-        casualties: g ? g.casualtiesThisTick : 0,
+        // A company feels its own losses; a man alone feels the ones he can see.
+        casualties: g ? g.casualtiesThisTick : s.localShock[id],
+        flankCasualties: g ? g.flankCasualtiesThisTick : 0,
         kills: g ? g.killsThisTick : 0,
         strength: 1,
-        roster: g ? max(1, g.members.length) : 1,
+        // A lone man has no roster to measure losses against, so they are
+        // measured against the handful of men around him -- which is why
+        // standing in a leaderless crowd is so much worse for the nerve.
+        roster: g ? max(1, g.members.length) : LOOSE_ROSTER,
         flanked: g ? g.flanked : false,
         outnumbered: foes > friends * 1.5 && foes > 0,
         inContact,

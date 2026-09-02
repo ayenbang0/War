@@ -112,6 +112,15 @@ export class Soldiers {
    * or "broken by a flank charge" rather than showing a bare casualty count.
    */
   readonly struckHow: Uint8Array;
+  /**
+   * Friends who fell within sight of this soldier THIS TICK.
+   *
+   * Only meaningful for men in no company. A soldier in a company feels its
+   * casualties through the company; a man standing alone felt nothing at all,
+   * which made an ungrouped army effectively immune to morale shock and so made
+   * NOT commanding a viable strategy. He feels the men dying beside him now.
+   */
+  readonly localShock: Float64Array;
   readonly player: Uint8Array;
   /** Index into UNIT_TYPE_IDS. */
   readonly type: Uint8Array;
@@ -142,6 +151,7 @@ export class Soldiers {
     this.incoming = new Float64Array(capacity);
     this.struckBy = new Int32Array(capacity).fill(-1);
     this.struckHow = new Uint8Array(capacity);
+    this.localShock = new Float64Array(capacity);
     this.player = new Uint8Array(capacity);
     this.type = new Uint8Array(capacity);
     this.alive = new Uint8Array(capacity);
@@ -201,6 +211,8 @@ export type Group = {
   patrolLeg: number;
   patrolForward: boolean;
   recoverUntil: number;
+  /** Tick until which this company counts as charging, for the impact bonus. */
+  chargeUntil: number;
   spellReady: number;
   /** Fraction of members standing in their slots. */
   cohesion: number;
@@ -218,6 +230,8 @@ export type Group = {
   /** Men in it when it was raised, since members only ever shrinks. */
   raisedWith: number;
   casualtiesThisTick: number;
+  /** Of those, the ones cut down from outside the front. Drives flank shock. */
+  flankCasualtiesThisTick: number;
   killsThisTick: number;
   lastContact: number;
   flanked: boolean;

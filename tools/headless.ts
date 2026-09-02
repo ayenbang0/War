@@ -2060,6 +2060,122 @@ section("glyph vs split");
 
 // -- 9a5. split, recover, and curved routes ------------------------------------
 
+// -- 9b2. does commanding well actually beat not commanding at all? ------------
+
+section("decisions matter");
+{
+  // THE CONTROLLED DUEL, mirrored.
+  //
+  // Identical men, identical ground, identical numbers; the only difference is
+  // that one side is a formed company and the other is the same men standing
+  // loose. The first attempt at this was confounded -- running the two sides
+  // formed against each other produced a LARGER margin than formed-against-
+  // loose, which proved the scenario itself favoured one side. So the
+  // experiment is mirrored: the formed side has to win from either end of the
+  // field, and over several seeds, or the result is geometry rather than
+  // organisation.
+  function duel(seed: number, formedPlayer: number): number {
+    const w = new World({ seed, tilesWide: 80, tilesHigh: 80, soldierCapacity: 512 });
+    const west: number[] = [];
+    const east: number[] = [];
+    for (let i = 0; i < 24; i++) west.push(w.spawnSoldier(0, "line", 1210 + (i % 6) * 15, 1200 + ((i / 6) | 0) * 15, 0));
+    for (let i = 0; i < 24; i++) east.push(w.spawnSoldier(1, "line", 1325 + (i % 6) * 15, 1200 + ((i / 6) | 0) * 15, M.PI));
+    w.createGroup(formedPlayer, formedPlayer === 0 ? west : east);
+    for (let t = 0; t < TICK_RATE * 120; t++) w.step();
+    // Positive means the FORMED side came out ahead, whichever side it was.
+    const loosePlayer = 1 - formedPlayer;
+    return score(w.armyState(formedPlayer), w.armyState(loosePlayer)) -
+      score(w.armyState(loosePlayer), w.armyState(formedPlayer));
+  }
+
+  {
+    const seeds = [71, 72, 74, 75];
+    const asWest = seeds.map((sd) => duel(sd, 0));
+    const asEast = seeds.map((sd) => duel(sd, 1));
+    const mean = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / xs.length;
+    const all = asWest.concat(asEast);
+
+    check("a formed company beats the same men standing loose",
+      mean(all) > 0, "mean margin " + mean(all).toFixed(2));
+    check("and does so from either end of the field, so it is not the ground",
+      mean(asWest) > 0 && mean(asEast) > 0,
+      "west " + mean(asWest).toFixed(2) + ", east " + mean(asEast).toFixed(2));
+    check("and beats them decisively, not by a hair",
+      mean(all) > 0.3, "mean margin " + mean(all).toFixed(2));
+    check("and wins the great majority of individual duels",
+      all.filter((m) => m > 0).length >= all.length - 1,
+      all.filter((m) => m > 0).length + " of " + all.length);
+  }
+
+  // THE HEADLINE. A full match in which the player issues NO orders at all --
+  // never groups a man, never moves anyone -- against an AI playing properly.
+  //
+  // This is the measurement that started the whole rebalance: a passive player
+  // used to lose by 1.1 to 0.9, which is to say that commanding well barely
+  // beat not commanding at all. A do-nothing army has to lose CLEARLY, or none
+  // of the pen's vocabulary is worth learning.
+  {
+    const w = new World({
+      seed: provingGround.seed,
+      tilesWide: provingGround.tilesWide,
+      tilesHigh: provingGround.tilesHigh,
+      duration: 8 * 60,
+      soldierCapacity: 1024,
+      // Only the enemy is commanded. Player 0's men are left exactly as they
+      // were set down, which is what "giving no orders" actually looks like.
+      aiPlayers: [1],
+    });
+    for (const zone of provingGround.deployment) {
+      for (let i = 0; i < ARMY.length; i++) {
+        unit(
+          w, zone.player, ARMY[i],
+          (zone.x + 4 + (i % 3) * 7) * TILE_SIZE,
+          (zone.y + 5 + ((i / 3) | 0) * 10) * TILE_SIZE,
+          zone.player === 0 ? 0 : M.PI,
+        );
+      }
+    }
+    // The player's men are dissolved into individuals: unit() forms companies,
+    // and a player who gives no orders has drawn none.
+    for (const g of w.groups.filter((q) => q.player === 0)) w.disband(g.id);
+
+    for (let t = 0; t < TICK_RATE * 8 * 60 && !w.outcome; t++) w.step();
+
+    const passive = score(w.armyState(0), w.armyState(1));
+    const commanded = score(w.armyState(1), w.armyState(0));
+    check("an army nobody commands loses to one that is commanded",
+      commanded > passive,
+      "passive " + passive.toFixed(2) + " vs commanded " + commanded.toFixed(2));
+    check("and loses clearly, not by a hair",
+      commanded - passive > 0.35,
+      "margin " + (commanded - passive).toFixed(2));
+  }
+
+  // Being got around must be worse than being beaten from the front.
+  {
+    function fight(fromBehind: boolean): number {
+      const w = new World({ seed: 73, tilesWide: 80, tilesHigh: 80, soldierCapacity: 512 });
+      const men: number[] = [];
+      // Facing east either way; the attacker comes from the east (front) or
+      // the west (rear), so only the ANGLE of the assault differs.
+      for (let i = 0; i < 20; i++) men.push(w.spawnSoldier(0, "line", 1400 + (i % 5) * 15, 1200 + ((i / 5) | 0) * 15, 0));
+      const ax = fromBehind ? 1320 : 1520;
+      for (let i = 0; i < 20; i++) w.spawnSoldier(1, "line", ax + (i % 5) * 14, 1200 + ((i / 5) | 0) * 14, fromBehind ? 0 : M.PI);
+      const g = w.createGroup(0, men) as Group;
+      w.createGroup(1, [...Array(20).keys()].map((k) => k + 20));
+      for (let t = 0; t < TICK_RATE * 50; t++) w.step();
+      let nerve = 0;
+      let n = 0;
+      for (const m of g.members) if (w.soldiers.alive[m] === 1) { nerve += w.soldiers.morale[m]; n++; }
+      return n > 0 ? nerve / n : 0;
+    }
+    const front = fight(false);
+    const rear = fight(true);
+    check("being taken from behind breaks nerve harder than a frontal fight",
+      rear < front, "rear " + rear.toFixed(2) + " vs frontal " + front.toFixed(2));
+  }
+}
+
 // -- 9c. the account of the battle ---------------------------------------------
 
 section("after-action");

@@ -30,6 +30,16 @@ export const SHOCK_PER_CASUALTY = 1.2;
 export const HEART_PER_KILL = 0.3;
 /** Morale drained per second while being flanked. */
 export const FLANK_DRAIN = 0.09;
+/**
+ * Extra shock, per roster fraction, for men cut down from outside the front.
+ *
+ * A burst rather than a drain, and on top of the ordinary casualty shock. Being
+ * got around is qualitatively worse than being beaten from the front: it is the
+ * thing that actually breaks a formation, and a slow per-second trickle never
+ * conveyed that. This is what makes a well-executed flank decisive rather than
+ * merely efficient, and so what makes manoeuvring worth the trouble.
+ */
+export const FLANK_SHOCK_PER_CASUALTY = 1.1;
 /** Morale drained per second while locally outnumbered. */
 export const OUTNUMBER_DRAIN = 0.07;
 /** Morale recovered per second while out of contact. */
@@ -55,6 +65,8 @@ export type MoraleInputs = {
   readonly casualties: number;
   /** Enemies killed this tick. */
   readonly kills: number;
+  /** Of the casualties, how many fell to blows from outside the front. */
+  readonly flankCasualties: number;
   /** Living soldiers, before this tick's casualties. */
   readonly strength: number;
   /** Full-strength roster size. */
@@ -77,6 +89,9 @@ export function nextMorale(current: number, i: MoraleInputs): number {
   // the making, losing three out of twenty is a bad morning.
   if (i.roster > 0) {
     if (i.casualties > 0) m -= SHOCK_PER_CASUALTY * i.resolve * (i.casualties / i.roster);
+    if (i.flankCasualties > 0) {
+      m -= FLANK_SHOCK_PER_CASUALTY * i.resolve * (i.flankCasualties / i.roster);
+    }
     if (i.kills > 0) m += HEART_PER_KILL * (i.kills / i.roster);
   }
 
