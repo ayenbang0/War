@@ -62,7 +62,7 @@ export const provingGround: LevelDef = {
   ],
   victory: { mode: "rout" },
   controlPoints: [],
-  budget: 94,
+  budget: 141,
   enemyDoctrine: "aggressive",
   suggestedDifficulty: "captain",
   magic: 1,

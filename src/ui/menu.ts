@@ -21,7 +21,8 @@ const ABILITY_MARK: Record<AbilityId, string> = {
   charge: "➤",
   shield: "◧",
   smoke: "░",
-  rally: "⚑",
+  flare: "☀",
+  levy: "⚇",
 };
 import { MAX_SQUADS, cost, validate, type ArmyList } from "../content/army.ts";
 import { LEVELS, type LevelDef } from "../content/levels/index.ts";

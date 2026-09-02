@@ -13,11 +13,11 @@ import { ABILITIES, abilityCost, type AbilityId } from "./abilities.ts";
 /**
  * Points available to each side.
  *
- * Raised by about 1.7x over the original 55 so an army is a genuinely bigger
- * force -- more companies on the field, and room to afford the specialists
- * without giving up your line.
+ * Raised repeatedly from the original 55 so an army is a genuinely big force:
+ * more companies on the field, and room to afford the specialists and a few
+ * orders in reserve without giving up your line.
  */
-export const DEFAULT_BUDGET = 94;
+export const DEFAULT_BUDGET = 198;
 /**
  * Cap on how many companies one player commands.
  *
@@ -27,7 +27,7 @@ export const DEFAULT_BUDGET = 94;
  * this is a deliberate departure in favour of the larger battles the budget is
  * meant to pay for.
  */
-export const MAX_SQUADS = 25;
+export const MAX_SQUADS = 45;
 /** How many times one ability may be bought. Twice is a deep magazine, not a
  *  different strategy. */
 export const MAX_OF_ONE_ABILITY = 2;
@@ -103,6 +103,9 @@ export function defaultArmy(doctrine: DoctrineId = "maneuver", budget = DEFAULT_
     "line", "skirmisher", "archer", "horse", "guard",
     "line", "scout", "line", "healer", "builder",
     "skirmisher", "mage", "siege",
+    "line", "archer", "line", "skirmisher", "horse", "line", "scout",
+    "archer", "line", "skirmisher", "guard", "line", "horse", "archer",
+    "line", "skirmisher", "line", "scout", "mage", "siege", "line",
   ];
   const squads: UnitTypeId[] = [];
   let spent = 0;

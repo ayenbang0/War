@@ -12,13 +12,14 @@ import { World, TICK_DT, TICK_RATE } from "./sim/world.ts";
 import { hashWorld } from "./sim/hash.ts";
 import { PI } from "./sim/math.ts";
 import { TILE_SIZE } from "./sim/terrain.ts";
-import { validate, type ArmyList } from "./content/army.ts";
+import { cost, validate, type ArmyList } from "./content/army.ts";
 import { DIFFICULTIES } from "./content/difficulty.ts";
 import { type UnitTypeId } from "./content/unit-types.ts";
-import { ABILITIES, type AbilityId } from "./content/abilities.ts";
+import { type AbilityId } from "./content/abilities.ts";
 import { openMenu, type Setup } from "./ui/menu.ts";
 import { openHome } from "./ui/home.ts";
 import { Tutorial } from "./ui/tutorial.ts";
+import { AbilityBar } from "./ui/ability-bar.ts";
 import { COMMANDERS } from "./content/commanders.ts";
 import { LEVELS } from "./content/levels/index.ts";
 
@@ -94,9 +95,13 @@ function enemyArmy(budget: number): ArmyList {
   return { doctrine, squads };
 }
 
+// The enemy is built to what the PLAYER actually spent, never more. A harder
+// opponent is one that is better commanded, not one with a bigger army --
+// difficulty used to scale its purse, which meant the top setting simply
+// fielded more men.
 const ARMIES: readonly ArmyList[] = [
   setup.army,
-  enemyArmy(Math.round(level.budget * diff.budget)),
+  enemyArmy(cost(setup.army)),
 ];
 
 const world = new World({
@@ -218,6 +223,12 @@ function snapshotInto(t: Snapshot): void {
 }
 snapshotInto(prev);
 
+const abilityBar = new AbilityBar(
+  document.getElementById("abilities") as HTMLElement,
+  teaching ? [] : abilityKeys,
+  commander,
+);
+
 const tutorial = teaching ? new Tutorial(world, commander) : null;
 if (teaching) {
   // The lesson is about the pen, not about setting an army out.
@@ -326,6 +337,8 @@ function frame(now: number): void {
   if (world.deploying && deployFogTick++ % 6 === 0) world.lightGround();
 
   tutorial?.update();
+  abilityBar.update(world, PLAYER, commander, TICK_RATE);
+  if (world.outcome) abilityBar.hide();
 
   // During deployment the pen drags men into position instead of ordering them.
   if (world.deploying && pen.drawing && pen.points.length > 1 && commander.selected.length > 0) {
@@ -427,24 +440,6 @@ function drawHud(): void {
     // the full account belongs in the after-action report.
     lines.push("", lastBreak);
   } else if (pen.lastAction) lines.push("", pen.lastAction);
-
-  // What is in reserve, and whether it can be spent right now. Two lines at
-  // most, and only when the player actually bought something.
-  if (abilityKeys.length > 0 && !world.deploying && !world.outcome) {
-    lines.push("");
-    for (let i = 0; i < abilityKeys.length; i++) {
-      const id = abilityKeys[i];
-      const c = world.abilityState[PLAYER].get(id);
-      const left = c ? c.left : 0;
-      const cooling = c && world.tick < c.readyAt
-        ? "  " + Math.ceil((c.readyAt - world.tick) / TICK_RATE) + "s"
-        : "";
-      lines.push(
-        (commander.armed === id ? "> " : "  ") + (i + 1) + " " +
-        ABILITIES[id].name + "  x" + left + cooling,
-      );
-    }
-  }
 
   // The lesson owns the panel while it is running.
   if (tutorial) lines.push(...tutorial.lines());

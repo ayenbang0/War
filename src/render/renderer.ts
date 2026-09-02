@@ -488,6 +488,39 @@ export class Renderer {
       if (sx < -r || sy < -r || sx > cam.viewW + r || sy > cam.viewH + r) continue;
       const fade = Math.max(0, Math.min(1, (w.until - world.tick) / (TICK_RATE * 3)));
       const pulse = 0.6 + 0.4 * Math.sin(now * 1.6 + w.x * 0.01);
+
+      // Healing is drawn as healing: a green field with crosses rising out of
+      // it. Every working used to be the same translucent disc, so surgeons at
+      // work looked exactly like a hex being laid on you.
+      const mending = w.spell === "mend" || w.spell === "succour";
+      if (mending) {
+        ctx.globalAlpha = 0.22 * fade * pulse;
+        ctx.fillStyle = "#5f8a5f";
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 0.85 * fade;
+        ctx.strokeStyle = "#3f7a4a";
+        ctx.lineWidth = Math.max(1.2, 2 * cam.zoom);
+        for (let k = 0; k < 6; k++) {
+          // Each cross drifts upward on its own clock and restarts, so the
+          // field reads as continuous work rather than a static badge.
+          const phase = (now * 0.5 + k * 0.37) % 1;
+          const a2 = (k / 6) * Math.PI * 2 + w.x * 0.01;
+          const cx2 = sx + Math.cos(a2) * r * 0.55;
+          const cy2 = sy + Math.sin(a2) * r * 0.55 - phase * r * 0.5;
+          const arm = Math.max(2, 5 * cam.zoom) * (1 - phase * 0.4);
+          ctx.globalAlpha = 0.9 * fade * (1 - phase);
+          ctx.beginPath();
+          ctx.moveTo(cx2 - arm, cy2);
+          ctx.lineTo(cx2 + arm, cy2);
+          ctx.moveTo(cx2, cy2 - arm);
+          ctx.lineTo(cx2, cy2 + arm);
+          ctx.stroke();
+        }
+        continue;
+      }
+
       ctx.globalAlpha = 0.28 * fade * pulse;
       ctx.fillStyle = friendly ? "#5b7a5b" : "#7a4a68";
       ctx.beginPath();
@@ -526,7 +559,6 @@ export class Renderer {
       const sx = cam.worldToScreenX(f.x);
       const sy = cam.worldToScreenY(f.y);
       const r = f.radius * cam.zoom;
-      const left = (f.until - world.tick) / 20;
 
       if (f.ability === "barrage") {
         // Shells landing: a scatter of bursts that moves every frame, so the
@@ -581,15 +613,49 @@ export class Renderer {
           ctx.arc(sx + Math.cos(a2) * r, sy + Math.sin(a2) * r, Math.max(2, 5 * cam.zoom), 0, Math.PI * 2);
           ctx.fill();
         }
-      } else if (f.ability === "rally") {
-        // A pulse going out, timed off how long is left.
-        const pulse = 1 - (left / 6) % 1;
-        ctx.globalAlpha = 0.5 * (1 - pulse);
-        ctx.strokeStyle = "#3b5f8a";
-        ctx.lineWidth = Math.max(1.5, 3 * cam.zoom);
+      } else if (f.ability === "bulwark") {
+        // A ring of stakes. Drawn from the field's own position so it is stable
+        // frame to frame -- works do not shimmer.
+        ctx.globalAlpha = 0.5;
+        ctx.strokeStyle = "#6b5636";
+        ctx.lineWidth = Math.max(1.2, 2.2 * cam.zoom);
+        for (let k = 0; k < 14; k++) {
+          const a2 = (k / 14) * Math.PI * 2;
+          const px = sx + Math.cos(a2) * r * 0.85;
+          const py = sy + Math.sin(a2) * r * 0.85;
+          const h = Math.max(3, 7 * cam.zoom);
+          ctx.beginPath();
+          ctx.moveTo(px, py + h * 0.4);
+          ctx.lineTo(px + h * 0.35, py - h * 0.6);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 0.16;
+        ctx.fillStyle = "#8f8375";
         ctx.beginPath();
-        ctx.arc(sx, sy, r * (0.3 + pulse * 0.7), 0, Math.PI * 2);
+        ctx.arc(sx, sy, r * 0.85, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (f.ability === "flare") {
+        // A hanging light with rays going out, and a ring where the light
+        // stops -- the edge matters, because it is the edge of what you can see.
+        const flicker = 0.82 + 0.18 * Math.sin(now * 9);
+        ctx.globalAlpha = 0.14 * flicker;
+        ctx.fillStyle = "#e8d38a";
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 0.7 * flicker;
+        ctx.strokeStyle = "#c9a441";
+        ctx.lineWidth = Math.max(1, 2 * cam.zoom);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.stroke();
+        for (let k = 0; k < 12; k++) {
+          const a2 = (k / 12) * Math.PI * 2 + now * 0.4;
+          ctx.beginPath();
+          ctx.moveTo(sx + Math.cos(a2) * r * 0.14, sy + Math.sin(a2) * r * 0.14);
+          ctx.lineTo(sx + Math.cos(a2) * r * 0.3, sy + Math.sin(a2) * r * 0.3);
+          ctx.stroke();
+        }
       }
     }
     ctx.restore();

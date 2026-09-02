@@ -1493,8 +1493,10 @@ section("army");
   check("too many squads is rejected",
     validate({ doctrine: "maneuver", squads: new Array(MAX_SQUADS + 5).fill("line") }, 999)
       .problems.some((p2) => p2.includes("too many squads")));
+  // Sized off the cap rather than hard-coded, so retuning the cap retunes the
+  // test instead of silently disarming it.
   check("a single type cannot dominate",
-    validate({ doctrine: "maneuver", squads: new Array(9).fill("line") }, 999)
+    validate({ doctrine: "maneuver", squads: new Array(UNIT_TYPES.line.maxPerArmy + 1).fill("line") }, 999)
       .problems.some((p2) => p2.includes("Line Infantry")));
   check("an empty army is rejected", !validate({ doctrine: "maneuver", squads: [] }).ok);
   check("cost adds up", cost({ doctrine: "maneuver", squads: ["line", "horse"] }) ===
@@ -1589,8 +1591,16 @@ section("magic");
     SPELL_IDS.every((id) => SPELLS[id].cooldown > SPELLS[id].duration),
     SPELL_IDS.map((id) => id + " " + SPELLS[id].duration + "s/" + SPELLS[id].cooldown + "s").join(", "));
 
-  check("special units are scarce",
-    UNIT_TYPES.mage.maxPerArmy <= 2 && UNIT_TYPES.siege.maxPerArmy <= 2 && UNIT_TYPES.scout.maxPerArmy <= 3);
+  // Scarcity is RELATIVE to the common troops, not an absolute number: caps
+  // rise with the budget, and pinning them to 2 meant this test would have to
+  // be edited every time the purse grew, which is how a test stops meaning
+  // anything.
+  check("special units are scarcer than the line they support",
+    UNIT_TYPES.mage.maxPerArmy < UNIT_TYPES.line.maxPerArmy / 2 &&
+    UNIT_TYPES.siege.maxPerArmy < UNIT_TYPES.line.maxPerArmy / 2 &&
+    UNIT_TYPES.guard.maxPerArmy < UNIT_TYPES.line.maxPerArmy / 2,
+    "line " + UNIT_TYPES.line.maxPerArmy + ", mage " + UNIT_TYPES.mage.maxPerArmy +
+    ", siege " + UNIT_TYPES.siege.maxPerArmy + ", guard " + UNIT_TYPES.guard.maxPerArmy);
   check("scouts see furthest of anything on the field",
     UNIT_TYPE_IDS.every((id) => UNIT_TYPES[id].sight <= UNIT_TYPES.scout.sight));
   check("siege outranges every other unit",
@@ -2237,6 +2247,31 @@ section("surgeons and sappers");
       "terrain " + w.terrain.typeAt(tx, ty));
   }
 
+  // The works sappers dig belong to them: their own men fight from behind them,
+  // and anyone assaulting them fights worse for it.
+  {
+    const w = new World({ seed: 84, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    let dig = { x: 0, y: 0 };
+    outer3: for (let ty0 = 20; ty0 < 40; ty0++) {
+      for (let tx0 = 20; tx0 < 40; tx0++) {
+        if (w.terrain.fortifiableAt(tx0, ty0)) {
+          dig = { x: (tx0 + 0.5) * TILE_SIZE, y: (ty0 + 0.5) * TILE_SIZE };
+          break outer3;
+        }
+      }
+    }
+    const men: number[] = [];
+    for (let i = 0; i < 8; i++) men.push(w.spawnSoldier(0, "builder", dig.x + (i % 4) * 6, dig.y, 0));
+    for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 1700, 1700, M.PI);
+    const g = w.createGroup(0, men) as Group;
+    g.stance = "hold";
+    for (let t = 0; t < TICK_RATE * 30; t++) w.step();
+    const work = w.fields.find((f) => f.ability === "bulwark");
+    check("finishing a fieldwork raises works that belong to the diggers",
+      work !== undefined && work.player === 0,
+      work ? "owner " + work.player : "no works raised");
+  }
+
   check("both new classes are scarce and cost real points",
     UNIT_TYPES.healer.maxPerArmy <= 3 && UNIT_TYPES.builder.maxPerArmy <= 3 &&
     UNIT_TYPES.healer.cost >= 4 && UNIT_TYPES.builder.cost >= 4);
@@ -2685,19 +2720,77 @@ section("abilities");
       "shielded " + bloodshed(true).toFixed(0) + " hp vs bare " + bloodshed(false).toFixed(0));
   }
 
-  // Rally puts nerve back into everyone within earshot.
+  // A flare shows up men that cover and distance would otherwise hide.
   {
-    const w = new World({ seed: 134, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
-    const mine: number[] = [];
-    for (let i = 0; i < 10; i++) mine.push(w.spawnSoldier(0, "line", 900 + (i % 5) * 14, 900, 0));
+    function seenUnder(withFlare: boolean): number {
+      const w = new World({ seed: 135, tilesWide: 90, tilesHigh: 90, soldierCapacity: 512 });
+      // One lookout, and an enemy company far off -- beyond what he could pick
+      // out on his own.
+      w.spawnSoldier(0, "scout", 1200, 1200, 0);
+      const foes: number[] = [];
+      for (let i = 0; i < 12; i++) foes.push(w.spawnSoldier(1, "line", 2400 + (i % 4) * 14, 1200 + ((i / 4) | 0) * 14, M.PI));
+      w.createGroup(1, foes);
+      if (withFlare) {
+        w.armAbilities(0, ["flare"]);
+        w.orders.issue({ kind: "ability", squad: -1, ability: "flare", x: 2420, y: 1215 }, 0, w.tick + 1);
+      }
+      for (let t = 0; t < TICK_RATE * 3; t++) w.step();
+      let seen = 0;
+      for (const f of foes) if (w.soldiers.alive[f] === 1 && (w.soldiers.seen[f] & 1) !== 0) seen++;
+      return seen;
+    }
+    const dark = seenUnder(false);
+    const lit = seenUnder(true);
+    check("a flare shows you ground you could not otherwise see",
+      lit > dark, lit + " seen under the flare vs " + dark + " without");
+  }
+
+  // Smoke blinds. Checked where the men ARE being seen to begin with, or the
+  // count falls from nought to nought and proves nothing -- which is exactly
+  // what happened when this was first tried in a live match.
+  {
+    function seenThrough(withSmoke: boolean): number {
+      const w = new World({ seed: 137, tilesWide: 90, tilesHigh: 90, soldierCapacity: 512 });
+      const hidden: number[] = [];
+      for (let i = 0; i < 12; i++) hidden.push(w.spawnSoldier(0, "line", 1400 + (i % 4) * 14, 1400 + ((i / 4) | 0) * 14, 0));
+      // Watchers close enough to see them plainly.
+      for (let i = 0; i < 8; i++) w.spawnSoldier(1, "scout", 1560 + (i % 4) * 14, 1400 + ((i / 4) | 0) * 14, M.PI);
+      const g = w.createGroup(0, hidden) as Group;
+      if (withSmoke) {
+        w.armAbilities(0, ["smoke"]);
+        w.orders.issue(
+          { kind: "ability", squad: -1, ability: "smoke", x: g.anchorX, y: g.anchorY }, 0, w.tick + 1,
+        );
+      }
+      for (let t = 0; t < TICK_RATE * 3; t++) w.step();
+      let seen = 0;
+      for (const m of hidden) if (w.soldiers.alive[m] === 1 && (w.soldiers.seen[m] & 2) !== 0) seen++;
+      return seen;
+    }
+    const bare = seenThrough(false);
+    const smoked = seenThrough(true);
+    check("men are plainly visible without smoke", bare > 0, bare + " seen");
+    check("and a screen hides them", smoked < bare, smoked + " seen through smoke vs " + bare + " without");
+  }
+
+  // The levy turns out where it is called, as a company.
+  {
+    const w = new World({ seed: 136, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    for (let i = 0; i < 4; i++) w.spawnSoldier(0, "line", 900, 900, 0);
     for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 1600, 1600, M.PI);
-    const g = w.createGroup(0, mine) as Group;
-    for (const m of mine) w.soldiers.morale[m] = 0.25;
-    w.armAbilities(0, ["rally"]);
-    w.orders.issue({ kind: "ability", squad: g.id, ability: "rally", x: g.anchorX, y: g.anchorY }, 0, w.tick + 1);
-    for (let t = 0; t < TICK_RATE * 6; t++) w.step();
-    check("a rally steadies the men who hear it", w.soldiers.morale[mine[0]] > 0.3,
-      w.soldiers.morale[mine[0]].toFixed(2));
+    const before = w.soldiers.count;
+    const groupsBefore = w.groups.length;
+    w.armAbilities(0, ["levy"]);
+    w.orders.issue({ kind: "ability", squad: -1, ability: "levy", x: 1100, y: 1100 }, 0, w.tick + 1);
+    for (let t = 0; t < TICK_RATE * 2; t++) w.step();
+    check("the levy turns out where it was called", w.soldiers.count > before,
+      (w.soldiers.count - before) + " men arrived");
+    check("and turns out as a company, not a crowd",
+      w.groups.length === groupsBefore + 1 &&
+      w.groups.some((g) => g.player === 0 && g.members.length > 8),
+      w.groups.filter((g) => g.player === 0).map((g) => g.members.length).join(","));
+    check("it leaves nothing standing on the field afterwards",
+      !w.fields.some((f) => f.ability === "levy"));
   }
 }
 

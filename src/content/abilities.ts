@@ -17,7 +17,7 @@
 
 import type { DoctrineId } from "./doctrines.ts";
 
-export type AbilityId = "barrage" | "charge" | "shield" | "smoke" | "rally";
+export type AbilityId = "barrage" | "charge" | "shield" | "smoke" | "flare" | "levy";
 
 export type Ability = {
   readonly id: AbilityId;
@@ -82,20 +82,32 @@ export const ABILITIES: Record<AbilityId, Ability> = {
     duration: 14,
     target: "ground",
   },
-  rally: {
-    id: "rally",
-    name: "Rally the line",
-    blurb: "Steadies every company within earshot. Will not heal a wound, but it will stop a rout.",
-    cost: 4,
-    charges: 3,
-    cooldown: 40,
-    radius: 260,
-    duration: 6,
-    target: "own",
+  flare: {
+    id: "flare",
+    name: "Send up a flare",
+    blurb: "Lights a patch of the map and everything standing in it. You cannot shell what you cannot see.",
+    cost: 2,
+    charges: 4,
+    cooldown: 25,
+    radius: 340,
+    duration: 10,
+    target: "ground",
+  },
+  levy: {
+    id: "levy",
+    name: "Call up the levy",
+    blurb: "A company of militia turns out where you point. Not good men, but they are there now and they are yours.",
+    cost: 6,
+    charges: 2,
+    cooldown: 60,
+    radius: 0,
+    duration: 0,
+    target: "ground",
   },
 };
 
-export const ABILITY_IDS: readonly AbilityId[] = ["barrage", "charge", "shield", "smoke", "rally"];
+export const ABILITY_IDS: readonly AbilityId[] =
+  ["barrage", "charge", "shield", "smoke", "flare", "levy"];
 
 /**
  * Doctrine price list, as a multiplier on the base cost.
@@ -105,10 +117,10 @@ export const ABILITY_IDS: readonly AbilityId[] = ["barrage", "charge", "shield",
  * simply the ability doctrine.
  */
 const PRICING: Record<DoctrineId, Partial<Record<AbilityId, number>>> = {
-  aggressive: { barrage: 0.6, charge: 0.7, shield: 1.6, smoke: 1.3, rally: 1.0 },
-  defensive: { shield: 0.6, rally: 0.7, barrage: 1.4, charge: 1.6, smoke: 1.0 },
-  maneuver: { smoke: 0.6, charge: 0.8, rally: 1.0, barrage: 1.3, shield: 1.4 },
-  magic: { rally: 0.6, smoke: 0.8, shield: 0.9, barrage: 1.2, charge: 1.5 },
+  aggressive: { barrage: 0.6, charge: 0.7, shield: 1.6, smoke: 1.3, flare: 1.0, levy: 1.2 },
+  defensive: { shield: 0.6, levy: 0.7, barrage: 1.4, charge: 1.6, smoke: 1.0, flare: 1.1 },
+  maneuver: { smoke: 0.6, flare: 0.6, charge: 0.8, barrage: 1.3, shield: 1.4, levy: 1.3 },
+  magic: { levy: 0.6, flare: 0.8, smoke: 0.9, shield: 1.0, barrage: 1.2, charge: 1.5 },
 };
 
 /** What this ability costs an army of this doctrine. Never below one point. */

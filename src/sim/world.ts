@@ -45,7 +45,12 @@ import { ABILITIES, type AbilityId } from "../content/abilities.ts";
 
 /** A commander's ability standing on the field. */
 export type AbilityField = {
-  readonly ability: AbilityId;
+  /**
+   * A commander's ability, or "bulwark" -- the works sappers throw up, which
+   * behave the same way (a circle of ground that does something to whoever
+   * stands in it) and so live in the same list.
+   */
+  readonly ability: AbilityId | "bulwark";
   readonly player: number;
   readonly x: number;
   readonly y: number;
@@ -211,12 +216,22 @@ const AMBUSH_TRIGGER = 150;
 const AMBUSH_BITE_SECONDS = 3;
 /** Damage a barrage does per second to everyone standing under it. */
 const BARRAGE_DAMAGE_PER_SEC = 46;
-/** Nerve a rally restores per second to friends within earshot. */
-const RALLY_NERVE_PER_SEC = 0.12;
+/** Men in a company of militia called up mid-battle. */
+const LEVY_STRENGTH = 16;
+/** How far a fieldwork's benefit reaches from the tile it was dug on. */
+const BULWARK_RADIUS = 120;
+/** Seconds a fieldwork keeps helping the men who dug it. */
+const BULWARK_SECONDS = 150;
+/** Damage a fieldwork turns aside for the side that built it. */
+const BULWARK_SOAK = 0.3;
+/** How much weaker a blow is when struck from inside an enemy's works. */
+const BULWARK_ASSAULT_PENALTY = 0.25;
 /** Damage a shield wall turns aside. Capped well short of immunity. */
 const SHIELD_SOAK = 0.45;
-/** How well smoke hides whoever is standing in it. */
+/** How well smoke hides whoever is standing in it, for the sight-range term. */
 const SMOKE_CONCEALMENT = 0.75;
+/** Inside this range men in smoke can still be made out. */
+const SMOKE_SEE_THROUGH = 70;
 /** How much faster a company ordered to charge actually moves. */
 const CHARGE_HASTE = 1.45;
 const CHARGE_LULL = 40;
@@ -1344,6 +1359,11 @@ export class World {
   lightGround(): void {
     const s = this.soldiers;
     for (const f of this.fog) f.beginUpdate();
+    // A flare lights ground nobody is standing near, which is the whole point
+    // of firing one: you cannot shell what you cannot see.
+    for (const f of this.fields) {
+      if (f.ability === "flare") this.fog[f.player].stamp(f.x, f.y, f.radius);
+    }
     for (let i = 0; i < s.count; i++) {
       if (s.alive[i] !== 1) continue;
       // Every soldier lights its own surroundings, grouped or not. No unit
@@ -1400,6 +1420,31 @@ export class World {
    */
   private spotted(id: number, watcher: number): boolean {
     const s = this.soldiers;
+
+    // A screen is OPAQUE, not merely dimming. Treating it as a reduction in
+    // sight range did nothing at close quarters -- scouts a hundred and sixty
+    // units away still saw straight through a screen that had cut their range
+    // by three quarters, because three quarters of nine hundred is still more
+    // than a hundred and sixty. Smoke you cannot see through is the whole
+    // reason to buy it. Men right on top of it still make each other out.
+    if (this.smokeAt(s.x[id], s.y[id]) > 0) {
+      let close = false;
+      const n0 = this.sightHash.query(s.x[id], s.y[id], SMOKE_SEE_THROUGH, this.watchers);
+      for (let k = 0; k < n0; k++) {
+        const eye = this.watchers[k];
+        if (s.alive[eye] !== 1 || s.player[eye] !== watcher) continue;
+        if (d2(s.x[eye], s.y[eye], s.x[id], s.y[id]) <= SMOKE_SEE_THROUGH * SMOKE_SEE_THROUGH) {
+          close = true;
+          break;
+        }
+      }
+      // Checked BEFORE the flare, so a screen beats a light: you cannot
+      // illuminate your way through smoke.
+      if (!close) return false;
+    }
+
+    // Lit up by a flare: no amount of cover hides a man standing in the light.
+    if (this.flaredFor(watcher, s.x[id], s.y[id])) return true;
     let hidden = concealment(this.terrain, s.x[id], s.y[id]);
     // Lying in wait, keeping still: far harder to pick out, and more so in
     // ground that was worth hiding in. An ambush in the open is still an
@@ -1724,6 +1769,9 @@ export class World {
     );
     if (charging) dmg *= 1 + CHARGE_BONUS;
     if (shield > 0) dmg *= 1 - shield;
+    // Coming at somebody else's stakes is hard work.
+    const hampered = this.assaultPenalty(s.player[attacker], s.x[attacker], s.y[attacker]);
+    if (hampered > 0) dmg *= 1 - hampered;
     s.incoming[victim] += dmg;
     s.struckBy[victim] = attacker;
     s.cooldown[attacker] = st.attackInterval;
@@ -1941,6 +1989,21 @@ export class World {
       return;
     }
 
+    if (id === "levy") {
+      // Militia turn out where you point, as a formed company. Nothing lingers
+      // on the field afterwards -- what was spent is spent and what arrived is
+      // simply men.
+      const ids: number[] = [];
+      for (let i = 0; i < LEVY_STRENGTH; i++) {
+        ids.push(this.spawnSoldier(
+          player, "line", x + (i % 4) * 14, y + ((i / 4) | 0) * 14,
+          player === 0 ? 0 : PI,
+        ));
+      }
+      if (ids.length > 0) this.createGroup(player, ids);
+      return;
+    }
+
     this.fields.push({
       ability: id,
       player,
@@ -1966,28 +2029,50 @@ export class World {
       if (this.tick >= this.fields[i].until) this.fields.splice(i, 1);
     }
     for (const f of this.fields) {
-      if (f.ability === "smoke") continue; // sight only; handled in spotted()
+      // Smoke and flare are about SIGHT and are read where sight is decided;
+      // a shield is read where damage is. Only a barrage does anything to a man
+      // just for standing there.
+      if (f.ability !== "barrage") continue;
       const rr = f.radius * f.radius;
       for (let i = 0; i < s.count; i++) {
         if (s.alive[i] !== 1) continue;
         if (d2(f.x, f.y, s.x[i], s.y[i]) > rr) continue;
-        const friendly = s.player[i] === f.player;
-        if (f.ability === "barrage") {
-          s.incoming[i] += BARRAGE_DAMAGE_PER_SEC * TICK_DT;
-          s.struckBy[i] = -1;
-          s.struckHow[i] = HOW_RANGED;
-        } else if (f.ability === "rally" && friendly) {
-          s.morale[i] = clamp(s.morale[i] + RALLY_NERVE_PER_SEC * TICK_DT, 0, 1);
-        }
+        s.incoming[i] += BARRAGE_DAMAGE_PER_SEC * TICK_DT;
+        s.struckBy[i] = -1;
+        s.struckHow[i] = HOW_RANGED;
       }
     }
   }
 
-  /** Damage reduction from a shield wall standing over this man. */
-  private shieldSoak(player: number, x: number, y: number): number {
+  /** Is this spot lit by one of `player`'s flares? */
+  private flaredFor(player: number, x: number, y: number): boolean {
     for (const f of this.fields) {
-      if (f.ability !== "shield" || f.player !== player) continue;
-      if (d2(f.x, f.y, x, y) <= f.radius * f.radius) return SHIELD_SOAK;
+      if (f.ability !== "flare" || f.player !== player) continue;
+      if (d2(f.x, f.y, x, y) <= f.radius * f.radius) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Damage turned aside by anything standing over this man: a shield wall, or
+   * his own side's works.
+   */
+  private shieldSoak(player: number, x: number, y: number): number {
+    let best = 0;
+    for (const f of this.fields) {
+      if (f.player !== player) continue;
+      if (f.ability !== "shield" && f.ability !== "bulwark") continue;
+      if (d2(f.x, f.y, x, y) > f.radius * f.radius) continue;
+      best = max(best, f.ability === "shield" ? SHIELD_SOAK : BULWARK_SOAK);
+    }
+    return best;
+  }
+
+  /** How much an attacker is hampered by assaulting somebody else's works. */
+  private assaultPenalty(player: number, x: number, y: number): number {
+    for (const f of this.fields) {
+      if (f.ability !== "bulwark" || f.player === player) continue;
+      if (d2(f.x, f.y, x, y) <= f.radius * f.radius) return BULWARK_ASSAULT_PENALTY;
     }
     return 0;
   }
@@ -2041,7 +2126,21 @@ export class World {
           g.buildTicks += diggers;
           if (g.buildTicks >= FORTIFY_WORK) {
             g.buildTicks = 0;
-            this.terrain.fortify(tx, ty);
+            if (this.terrain.fortify(tx, ty)) {
+              // The works are more than cover in the terrain: they belong to
+              // whoever dug them. Men fighting from behind their own stakes are
+              // steadier and harder to shift, and men assaulting them fight at
+              // a disadvantage -- which is the whole reason to spend a company
+              // on digging instead of on fighting.
+              this.fields.push({
+                ability: "bulwark",
+                player: g.player,
+                x: (tx + 0.5) * TILE_SIZE,
+                y: (ty + 0.5) * TILE_SIZE,
+                radius: BULWARK_RADIUS,
+                until: this.tick + BULWARK_SECONDS * TICK_RATE,
+              });
+            }
           }
         } else {
           g.buildTicks = 0;

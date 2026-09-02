@@ -47,7 +47,13 @@ export type UnitType = {
    * more meaning and would be harder to add up in your head while composing.
    */
   readonly cost: number;
-  /** Maximum of this type in one army. Special units are deliberately scarce. */
+  /**
+   * Maximum of this type in one army. Special units are deliberately scarce.
+   *
+   * Raised alongside the budget: with the old caps the most a player could
+   * spend on MEN was 145 points, so a larger purse could only go on abilities
+   * and the extra credits never reached the troops they were meant to buy.
+   */
   readonly maxPerArmy: number;
   /** Volleys carried into the battle. 0 for men who do not shoot. */
   readonly volleys?: number;
@@ -78,7 +84,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     attackInterval: 0.9,
     sight: 320,
     cost: 3,
-    maxPerArmy: 8,
+    maxPerArmy: 12,
   },
   skirmisher: {
     id: "skirmisher",
@@ -96,7 +102,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     sight: 480,
     cost: 2,
     volleys: 26,
-    maxPerArmy: 5,
+    maxPerArmy: 8,
   },
   archer: {
     id: "archer",
@@ -114,7 +120,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     sight: 420,
     cost: 4,
     volleys: 34,
-    maxPerArmy: 4,
+    maxPerArmy: 6,
   },
   horse: {
     id: "horse",
@@ -131,7 +137,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     attackInterval: 1.2,
     sight: 520,
     cost: 6,
-    maxPerArmy: 3,
+    maxPerArmy: 5,
   },
   guard: {
     id: "guard",
@@ -148,7 +154,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     attackInterval: 1.1,
     sight: 300,
     cost: 7,
-    maxPerArmy: 2,
+    maxPerArmy: 3,
   },
   mage: {
     id: "mage",
@@ -165,7 +171,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     sight: 460,
     defaultShape: "tight",
     cost: 8,
-    maxPerArmy: 2,
+    maxPerArmy: 3,
     spell: "ward",
   },
   scout: {
@@ -184,7 +190,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     defaultShape: "loose",
     cost: 3,
     volleys: 18,
-    maxPerArmy: 3,
+    maxPerArmy: 5,
   },
   siege: {
     id: "siege",
@@ -202,7 +208,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     defaultShape: "line",
     cost: 9,
     volleys: 14,
-    maxPerArmy: 2,
+    maxPerArmy: 3,
     siege: true,
   },
   healer: {
@@ -222,7 +228,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     attackInterval: 2.4,
     sight: 400,
     cost: 5,
-    maxPerArmy: 2,
+    maxPerArmy: 3,
     spell: "succour",
   },
   builder: {
@@ -240,7 +246,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     attackInterval: 1.6,
     sight: 340,
     cost: 5,
-    maxPerArmy: 2,
+    maxPerArmy: 3,
     siege: true,
     builds: true,
   },

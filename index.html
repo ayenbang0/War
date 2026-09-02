@@ -100,6 +100,31 @@
   .home-figure-value { font-size: 21px; font-weight: 600; color: #3b5f8a; }
   .home-figure-label { font-size: 11px; color: #8a7856; }
   .home-foot { margin: 20px 0 0; color: #9a8a68; font-size: 11px; text-align: left; }
+  /* -- ability bar --------------------------------------------------------- */
+  .ability-bar {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px;
+    display: none; gap: 8px; z-index: 6;
+    font: 12px/1.3 ui-monospace, "Cascadia Mono", Menlo, monospace;
+  }
+  .ability {
+    display: grid; grid-template-columns: auto auto; grid-auto-rows: auto;
+    align-items: center; gap: 0 8px; cursor: pointer;
+    background: rgba(231, 223, 203, 0.94); color: #3a3124;
+    border: 1px solid #a3906c; border-radius: 3px; padding: 7px 11px;
+    box-shadow: 0 3px 12px rgba(0,0,0,0.28); font: inherit; text-align: left;
+  }
+  .ability:hover { background: #f2ecdb; }
+  .ability.armed { border-color: #3b5f8a; background: #dce6f1; box-shadow: 0 0 0 2px #3b5f8a; }
+  .ability.spent { opacity: 0.42; }
+  .ability-key {
+    grid-row: 1 / span 2; font-size: 15px; font-weight: 600; color: #8a7856;
+    border-right: 1px solid #cbbc9c; padding-right: 8px; align-self: stretch;
+    display: flex; align-items: center;
+  }
+  .ability-mark { font-size: 15px; }
+  .ability-name { font-weight: 600; }
+  .ability-count { grid-column: 2; color: #7a6848; }
+  .ability-cool { grid-column: 2; color: #8c3a34; }
   #menu {
     position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
     background: rgba(38, 32, 22, 0.82); z-index: 10; overflow: auto; padding: 24px;
@@ -154,4 +179,5 @@
 <div id="menu"></div>
 <div id="report"></div>
 <div id="hud" class="panel"></div>
+<div id="abilities"></div>
 <script type="module" src="/src/main.ts"></script>
