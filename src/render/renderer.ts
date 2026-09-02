@@ -24,6 +24,8 @@ const GRID_TILES = 8;
 const SOLDIER_LOD_ZOOM = 0.4;
 /** Below this zoom, groups get a halo so bodies of troops stay findable. */
 const GROUP_HALO_ZOOM = 0.75;
+/** Seconds an enemy halo lingers at its last seen position before going cold. */
+const HALO_MEMORY_SECONDS = 14;
 /** Amplitude of the idle fidget, in world units, per sine term. */
 const WANDER = 1.15;
 const RECOVER_COLOR = "#9c3f63";
@@ -33,6 +35,9 @@ export type Snapshot = { x: Float64Array; y: Float64Array; facing: Float64Array 
 export class Renderer {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly terrainLayer: TerrainLayer;
+  /** Where each enemy group was last seen, so a lost group leaves a report
+   *  behind rather than either vanishing or being tracked through the fog. */
+  private readonly lastSeen = new Map<number, { x: number; y: number; at: number; n: number }>();
 
   constructor(ctx: CanvasRenderingContext2D, terrain: TerrainGrid) {
     this.ctx = ctx;
@@ -67,7 +72,7 @@ export class Renderer {
     // Zoomed out far enough that individual men are a smear, groups get a
     // halo. Both armies: knowing roughly where an enemy body of troops is, once
     // you have seen it, is the whole reason to pull the camera back.
-    if (cam.zoom < GROUP_HALO_ZOOM) this.drawGroupHalos(world, cam, viewer);
+    if (cam.zoom < GROUP_HALO_ZOOM) this.drawGroupHalos(world, cam, viewer, now / 1000);
     this.drawSoldiers(world, cam, prev, alpha, now);
     this.drawWorkings(world, cam, viewer, now);
     this.drawFog(world, cam, viewer);
@@ -347,22 +352,65 @@ export class Renderer {
    * to pick out against terrain; the halo restores the thing a wargame table
    * gives you for free, which is seeing where the mass is.
    */
-  private drawGroupHalos(world: World, cam: Camera, viewer: number): void {
+  /**
+   * Bodies of troops, as halos, once individual men stop being legible.
+   *
+   * Enemy halos are drawn from MEMORY, not from the live board. Drawing every
+   * group unconditionally meant that pulling the camera back revealed the whole
+   * enemy disposition straight through the fog -- scouting was pointless, since
+   * one scroll wheel showed you everything. Gating on current visibility
+   * instead would make halos blink in and out as groups cross a sight edge,
+   * which is worse to look at and reads as a glitch.
+   *
+   * So: a group you can see now updates its remembered position, and a group
+   * you have lost keeps its halo at the place you last saw it, fading as the
+   * report goes stale. That is what a map table actually shows you, and it
+   * makes a scout worth buying.
+   */
+  private drawGroupHalos(world: World, cam: Camera, viewer: number, now: number): void {
     const ctx = this.ctx;
     ctx.save();
     // Strongest right at the point where soldiers stop being legible.
     const strength = Math.min(1, (GROUP_HALO_ZOOM - cam.zoom) / (GROUP_HALO_ZOOM - 0.25));
+
     for (const g of world.groups) {
       const n = world.liveCount(g);
-      if (n === 0) continue;
-      const sx = cam.worldToScreenX(g.anchorX);
-      const sy = cam.worldToScreenY(g.anchorY);
+      if (n === 0) {
+        this.lastSeen.delete(g.id);
+        continue;
+      }
+      const own = g.player === viewer;
+      let x = g.anchorX;
+      let y = g.anchorY;
+      let fade = 1;
+
+      if (!own) {
+        if (g.seenBy[viewer]) {
+          this.lastSeen.set(g.id, { x: g.anchorX, y: g.anchorY, at: now, n });
+        }
+        const seen = this.lastSeen.get(g.id);
+        if (!seen) continue;
+        const age = now - seen.at;
+        if (age > HALO_MEMORY_SECONDS) {
+          this.lastSeen.delete(g.id);
+          continue;
+        }
+        x = seen.x;
+        y = seen.y;
+        // Hold full strength briefly, then fade, so a group crossing a sight
+        // edge does not flicker every time the sweep loses it for a moment.
+        fade = age < 1 ? 1 : 1 - (age - 1) / (HALO_MEMORY_SECONDS - 1);
+      }
+
+      const sx = cam.worldToScreenX(x);
+      const sy = cam.worldToScreenY(y);
       const r = Math.max(11, (g.radius + 22) * cam.zoom);
       if (sx < -r || sy < -r || sx > cam.viewW + r || sy > cam.viewH + r) continue;
 
+      const shown = strength * fade;
       const grad = ctx.createRadialGradient(sx, sy, r * 0.2, sx, sy, r);
-      const tint = g.player === viewer ? "59, 95, 138" : "140, 58, 52";
-      grad.addColorStop(0, "rgba(" + tint + "," + (0.5 * strength).toFixed(3) + ")");
+      const tint = own ? "59, 95, 138" : "140, 58, 52";
+      grad.addColorStop(0, "rgba(" + tint + "," + (0.5 * shown).toFixed(3) + ")");
       grad.addColorStop(1, "rgba(" + tint + ", 0)");
       ctx.fillStyle = grad;
       ctx.beginPath();
@@ -370,8 +418,8 @@ export class Renderer {
       ctx.fill();
 
       // A ring scaled by headcount, so a big body reads as bigger.
-      ctx.globalAlpha = 0.55 * strength;
-      ctx.strokeStyle = g.player === viewer ? "#3b5f8a" : "#8c3a34";
+      ctx.globalAlpha = 0.55 * shown;
+      ctx.strokeStyle = own ? "#3b5f8a" : "#8c3a34";
       ctx.lineWidth = Math.max(1, Math.min(3, 0.8 + n * 0.09));
       ctx.beginPath();
       ctx.arc(sx, sy, r * 0.72, 0, Math.PI * 2);
