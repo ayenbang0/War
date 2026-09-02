@@ -49,6 +49,8 @@ export type UnitType = {
   readonly cost: number;
   /** Maximum of this type in one army. Special units are deliberately scarce. */
   readonly maxPerArmy: number;
+  /** Volleys carried into the battle. 0 for men who do not shoot. */
+  readonly volleys?: number;
   /** Spell this unit works, if any (spec section 6.2). */
   readonly spell?: SpellId;
   /** Can batter fortifications and bridges when there is nothing to shoot. */
@@ -93,6 +95,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     attackInterval: 1.4,
     sight: 480,
     cost: 2,
+    volleys: 26,
     maxPerArmy: 5,
   },
   archer: {
@@ -110,6 +113,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     attackInterval: 1.9,
     sight: 420,
     cost: 4,
+    volleys: 34,
     maxPerArmy: 4,
   },
   horse: {
@@ -179,6 +183,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     sight: 900,
     defaultShape: "loose",
     cost: 3,
+    volleys: 18,
     maxPerArmy: 3,
   },
   siege: {
@@ -196,6 +201,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     sight: 380,
     defaultShape: "line",
     cost: 9,
+    volleys: 14,
     maxPerArmy: 2,
     siege: true,
   },

@@ -2523,6 +2523,81 @@ section("ambush and feint");
   }
 }
 
+// -- 9b3c. arrows run out ------------------------------------------------------
+
+section("volleys");
+{
+  check("men who shoot carry volleys and men who do not, do not",
+    (UNIT_TYPES.archer.volleys ?? 0) > 0 && (UNIT_TYPES.skirmisher.volleys ?? 0) > 0 &&
+    (UNIT_TYPES.line.volleys ?? 0) === 0 && (UNIT_TYPES.guard.volleys ?? 0) === 0);
+
+  // A company of archers left shooting will empty its quivers and stop.
+  {
+    const w = new World({ seed: 121, tilesWide: 80, tilesHigh: 80, soldierCapacity: 512 });
+    // Find a clear run of open ground. Placed at a fixed spot the two companies
+    // landed either side of a wood, which blocks line of sight -- they never saw
+    // each other, never shot, and the test proved nothing.
+    let ox = 0;
+    let oy = 0;
+    outer2: for (let ty = 10; ty < 70; ty++) {
+      for (let tx = 10; tx < 60; tx++) {
+        let clear = true;
+        for (let k = 0; k < 16 && clear; k++) {
+          if (TERRAIN_INFO[w.terrain.typeAt(tx + k, ty)].blocksSight ||
+              TERRAIN_INFO[w.terrain.typeAt(tx + k, ty)].moveScale <= 0) clear = false;
+        }
+        if (clear) {
+          ox = (tx + 1) * TILE_SIZE;
+          oy = (ty + 0.5) * TILE_SIZE;
+          break outer2;
+        }
+      }
+    }
+    const shooters: number[] = [];
+    for (let i = 0; i < 16; i++) shooters.push(w.spawnSoldier(0, "archer", ox + (i % 4) * 14, oy + ((i / 4) | 0) * 14, 0));
+    const targets: number[] = [];
+    for (let i = 0; i < 40; i++) targets.push(w.spawnSoldier(1, "line", ox + 180 + (i % 8) * 14, oy + ((i / 8) | 0) * 14, M.PI));
+    const g = w.createGroup(0, shooters) as Group;
+    w.createGroup(1, targets);
+    const load = UNIT_TYPES.archer.volleys ?? 0;
+    check("they start with a full load", w.soldiers.ammo[shooters[0]] === load, String(w.soldiers.ammo[shooters[0]]));
+
+    for (let t = 0; t < TICK_RATE * 90; t++) w.step();
+    let spent = 0;
+    for (const m of shooters) if (w.soldiers.alive[m] === 1 && w.soldiers.ammo[m] < load) spent++;
+    check("shooting spends arrows", spent > 0, spent + " men have shot");
+
+    // An empty company stops shooting, with the enemy still there in front of
+    // it. Tested by emptying the quivers directly rather than by waiting for a
+    // long fight to do it -- left to run, one side is wiped out and the match
+    // ends, which freezes the world with arrows still in hand and proves
+    // nothing either way.
+    for (const m of g.members) w.soldiers.ammo[m] = 0;
+    for (const m of g.members) w.soldiers.cooldown[m] = 0;
+    let shotsWhileDry = 0;
+    for (let t = 0; t < TICK_RATE * 10 && !w.outcome; t++) {
+      w.step();
+      for (const e of w.events) if (e.player === 0 && e.kind === "shot") shotsWhileDry++;
+    }
+    check("a company out of arrows stops shooting", shotsWhileDry === 0,
+      shotsWhileDry + " shots loosed with empty quivers");
+  }
+
+  // Standing down refills them, which is the second reason to ever do it.
+  {
+    const w = new World({ seed: 122, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    const ids: number[] = [];
+    for (let i = 0; i < 8; i++) ids.push(w.spawnSoldier(0, "archer", 900 + (i % 4) * 14, 900, 0));
+    for (let i = 0; i < 4; i++) w.spawnSoldier(1, "line", 1600, 1600, M.PI);
+    const g = w.createGroup(0, ids) as Group;
+    for (const m of ids) w.soldiers.ammo[m] = 2;
+    w.orders.issue({ kind: "recover", squad: g.id }, 0, w.tick + 1);
+    for (let t = 0; t < TICK_RATE * 25; t++) w.step();
+    check("standing down replenishes the quivers", w.soldiers.ammo[ids[0]] > 2,
+      "ammo " + w.soldiers.ammo[ids[0]].toFixed(1));
+  }
+}
+
 // -- 9b4. edge cases and pathologies -------------------------------------------
 
 section("edge cases");

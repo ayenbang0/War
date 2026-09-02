@@ -92,6 +92,7 @@ export function hashWorld(world: World): string {
     h = mixF64(h, s.hp[i]);
     h = mixF64(h, s.morale[i]);
     h = mixF64(h, s.cooldown[i]);
+    h = mixF64(h, s.ammo[i]);
   }
 
   // Workings alter damage and morale, so they are state, not decoration.

@@ -187,6 +187,8 @@ const CHARGE_BONUS = 0.45;
 const FORTIFY_WORK = 1600;
 /** Damage one siege-capable soldier does to works per tick. */
 const BATTER_PER_ENGINE = 0.9;
+/** Share of a full load a standing-down company recovers each second. */
+const RESUPPLY_FRACTION_PER_SEC = 0.05;
 const RECOVER_MORALE_PER_SEC = 0.06;
 const RECOVER_HP_FRACTION_PER_SEC = 0.04;
 export const RECOVER_LOCK_SECONDS = 30;
@@ -362,6 +364,7 @@ export class World {
     s.cooldown[id] = 0;
     s.incoming[id] = 0;
     s.struckBy[id] = -1;
+    s.ammo[id] = UNIT_TYPES[type].volleys ?? 0;
     s.player[id] = player;
     s.type[id] = typeIndex(type);
     s.alive[id] = 1;
@@ -984,6 +987,13 @@ export class World {
       s.morale[m] = min(1, s.morale[m] + RECOVER_MORALE_PER_SEC * TICK_DT);
       const heal = s.maxHp[m] * RECOVER_HP_FRACTION_PER_SEC * TICK_DT;
       if (s.hp[m] < s.maxHp[m]) s.hp[m] = min(s.maxHp[m], s.hp[m] + heal);
+      // Standing down is also how a company replenishes its quivers, which
+      // gives the order a second reason to exist and gives an emptied line of
+      // archers something to do other than die.
+      const full = UNIT_TYPES[this.typeOf(m)].volleys ?? 0;
+      if (s.ammo[m] < full) {
+        s.ammo[m] = min(full, s.ammo[m] + full * RESUPPLY_FRACTION_PER_SEC * TICK_DT);
+      }
     }
   }
 
@@ -1536,6 +1546,9 @@ export class World {
    */
   private shoot(id: number, st: Stats): void {
     const s = this.soldiers;
+    // Out of arrows. He stands with the rest of his company and is now a poor
+    // hand-to-hand soldier standing in the open, which is the entire point.
+    if (s.ammo[id] <= 0) return;
     const me = s.player[id];
     let best: Group | null = null;
     let bestD = Infinity;
@@ -1612,6 +1625,9 @@ export class World {
     s.incoming[victim] += dmg;
     s.struckBy[victim] = attacker;
     s.cooldown[attacker] = st.attackInterval;
+    // A volley is spent where a shot is actually loosed, so looking for a
+    // target and finding none costs nothing.
+    if (st.range > MELEE_RANGE && s.ammo[attacker] > 0) s.ammo[attacker] -= 1;
 
     const flanking = isFlanking(
       s.facing[victim], s.x[attacker], s.y[attacker], s.x[victim], s.y[victim],

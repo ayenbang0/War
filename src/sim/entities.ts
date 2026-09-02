@@ -121,6 +121,16 @@ export class Soldiers {
    * NOT commanding a viable strategy. He feels the men dying beside him now.
    */
   readonly localShock: Float64Array;
+  /**
+   * Volleys left. Only meaningful for men who shoot.
+   *
+   * Ammunition is what stops a line of archers being an answer to everything:
+   * a company that has shot itself dry is a bad melee unit standing in the open,
+   * and getting it back means standing it down, which costs thirty seconds of
+   * doing nothing at all. It turns "where do I put my shooters" into a question
+   * with a wrong answer.
+   */
+  readonly ammo: Float64Array;
   readonly player: Uint8Array;
   /** Index into UNIT_TYPE_IDS. */
   readonly type: Uint8Array;
@@ -152,6 +162,7 @@ export class Soldiers {
     this.struckBy = new Int32Array(capacity).fill(-1);
     this.struckHow = new Uint8Array(capacity);
     this.localShock = new Float64Array(capacity);
+    this.ammo = new Float64Array(capacity);
     this.player = new Uint8Array(capacity);
     this.type = new Uint8Array(capacity);
     this.alive = new Uint8Array(capacity);
