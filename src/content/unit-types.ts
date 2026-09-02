@@ -7,6 +7,7 @@
 
 import type { FormationShape } from "../sim/formations.ts";
 import type { SpellId } from "../sim/magic.ts";
+import type { SpecialId } from "./specials.ts";
 
 export type UnitTypeId =
   | "line" | "skirmisher" | "archer" | "horse" | "guard"
@@ -57,6 +58,8 @@ export type UnitType = {
   readonly maxPerArmy: number;
   /** Volleys carried into the battle. 0 for men who do not shoot. */
   readonly volleys?: number;
+  /** What this kind of soldier does for itself, unbidden. */
+  readonly special?: SpecialId;
   /** Spell this unit works, if any (spec section 6.2). */
   readonly spell?: SpellId;
   /** Can batter fortifications and bridges when there is nothing to shoot. */
@@ -83,6 +86,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     range: 9,
     attackInterval: 0.9,
     sight: 320,
+    special: "brace",
     cost: 3,
     maxPerArmy: 12,
   },
@@ -100,6 +104,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     range: 95,
     attackInterval: 1.4,
     sight: 480,
+    special: "dodge",
     cost: 2,
     volleys: 26,
     maxPerArmy: 8,
@@ -118,6 +123,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     range: 250,
     attackInterval: 1.9,
     sight: 420,
+    special: "breakBow",
     cost: 4,
     volleys: 34,
     maxPerArmy: 6,
@@ -136,6 +142,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     range: 10,
     attackInterval: 1.2,
     sight: 520,
+    special: "dash",
     cost: 6,
     maxPerArmy: 5,
   },
@@ -153,6 +160,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     range: 9,
     attackInterval: 1.1,
     sight: 300,
+    special: "fortify",
     cost: 7,
     maxPerArmy: 3,
   },
@@ -170,17 +178,18 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     attackInterval: 2.4,
     sight: 460,
     defaultShape: "tight",
+    special: "blink",
     cost: 8,
     maxPerArmy: 3,
     spell: "ward",
   },
   scout: {
     id: "scout",
-    name: "Outriders",
+    name: "Scouts",
     role: "Sees furthest of anything on the field. Buy these or fight in the dark.",
     soldiers: 6,
     hp: 60,
-    speed: 78,
+    speed: 74,
     turnRate: 2.4,
     attack: 9,
     defence: 35,
@@ -188,6 +197,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitType> = {
     attackInterval: 1.5,
     sight: 900,
     defaultShape: "loose",
+    special: "dash",
     cost: 3,
     volleys: 18,
     maxPerArmy: 5,

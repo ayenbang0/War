@@ -57,6 +57,7 @@ import { effectiveSight, hasLineOfSight, rangeFromHeight, FogField } from "../sr
 import { PLAYSTYLES } from "../src/sim/ai.ts";
 import { COMMANDERS, COMMANDER_IDS, type CommanderId } from "../src/content/commanders.ts";
 import { ABILITIES, ABILITY_IDS, abilityCost } from "../src/content/abilities.ts";
+import { BRACE_SLOWDOWN, BRACE_SOAK, FORTIFY_SOAK, SPECIALS } from "../src/content/specials.ts";
 import { DOCTRINES, DOCTRINE_IDS } from "../src/content/doctrines.ts";
 import { DEFAULT_BUDGET, MAX_SQUADS, cost, defaultArmy, validate } from "../src/content/army.ts";
 import { LEVELS } from "../src/content/levels/index.ts";
@@ -2191,6 +2192,74 @@ section("adept spells");
   }
 }
 
+// -- 8i4. what troops do for themselves ----------------------------------------
+
+section("unit specials");
+{
+  check("every fighting kind of soldier knows something",
+    (["line", "skirmisher", "archer", "horse", "guard", "mage", "scout"] as const)
+      .every((id) => UNIT_TYPES[id].special !== undefined),
+    (["line", "skirmisher", "archer", "horse", "guard", "mage", "scout"] as const)
+      .map((id) => id + ":" + (UNIT_TYPES[id].special ?? "-")).join(" "));
+  check("each one is a trade rather than a free gift",
+    BRACE_SOAK > 0 && BRACE_SLOWDOWN > 1 && FORTIFY_SOAK > 0.9);
+  check("the two one-shots are limited and the rest are not",
+    SPECIALS.blink.uses === 1 && SPECIALS.breakBow.uses === 1 &&
+    SPECIALS.brace.uses === 0 && SPECIALS.dodge.uses === 0 && SPECIALS.dash.uses === 0);
+  check("scouts are the fastest thing on the field",
+    UNIT_TYPE_IDS.every((id) => UNIT_TYPES[id].speed <= UNIT_TYPES.scout.speed),
+    "scout " + UNIT_TYPES.scout.speed + ", horse " + UNIT_TYPES.horse.speed);
+  check("and they are called scouts", UNIT_TYPES.scout.name === "Scouts", UNIT_TYPES.scout.name);
+
+  // A line company under real pressure locks shields.
+  {
+    const w = new World({ seed: 151, tilesWide: 70, tilesHigh: 70, soldierCapacity: 512 });
+    const mine: number[] = [];
+    for (let i = 0; i < 16; i++) mine.push(w.spawnSoldier(0, "line", 1300 + (i % 4) * 14, 1300 + ((i / 4) | 0) * 14, 0));
+    for (let i = 0; i < 30; i++) w.spawnSoldier(1, "guard", 1370 + (i % 6) * 14, 1300 + ((i / 6) | 0) * 14, M.PI);
+    const g = w.createGroup(0, mine) as Group;
+    w.createGroup(1, [...Array(30).keys()].map((k) => k + 16));
+    let braced = false;
+    for (let t = 0; t < TICK_RATE * 40 && !braced; t++) {
+      w.step();
+      if (w.hasSpecial(g, "brace")) braced = true;
+    }
+    check("a line company braces when the fighting turns against it", braced);
+  }
+
+  // Archers with the enemy on top of them throw the bows down.
+  {
+    const w = new World({ seed: 152, tilesWide: 70, tilesHigh: 70, soldierCapacity: 512 });
+    const bows: number[] = [];
+    for (let i = 0; i < 16; i++) bows.push(w.spawnSoldier(0, "archer", 1300 + (i % 4) * 14, 1300 + ((i / 4) | 0) * 14, 0));
+    for (let i = 0; i < 30; i++) w.spawnSoldier(1, "guard", 1350 + (i % 6) * 14, 1300 + ((i / 6) | 0) * 14, M.PI);
+    const g = w.createGroup(0, bows) as Group;
+    w.createGroup(1, [...Array(30).keys()].map((k) => k + 16));
+    let turned = false;
+    for (let t = 0; t < TICK_RATE * 60 && !turned; t++) {
+      w.step();
+      turned = g.members.some((m) => w.soldiers.alive[m] === 1 && w.typeOf(m) === "skirmisher");
+    }
+    check("archers overrun in melee throw down their bows", turned);
+  }
+
+  // Adepts about to be destroyed step out of the world, once.
+  {
+    const w = new World({ seed: 153, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
+    const adepts: number[] = [];
+    for (let i = 0; i < 8; i++) adepts.push(w.spawnSoldier(0, "mage", 1800 + (i % 4) * 14, 1300 + ((i / 4) | 0) * 14, 0));
+    for (let i = 0; i < 30; i++) w.spawnSoldier(1, "guard", 1850 + (i % 6) * 14, 1300 + ((i / 6) | 0) * 14, M.PI);
+    const g = w.createGroup(0, adepts) as Group;
+    w.createGroup(1, [...Array(30).keys()].map((k) => k + 8));
+    const startX = g.anchorX;
+    for (let t = 0; t < TICK_RATE * 60; t++) w.step();
+    check("adepts about to be destroyed withdraw by the Art",
+      w.liveCount(g) === 0 || g.anchorX < startX - 500,
+      "from " + startX.toFixed(0) + " to " + g.anchorX.toFixed(0));
+    check("and can only do it once", g.specialUses <= 1, "uses " + g.specialUses);
+  }
+}
+
 // -- 8j. surgeons and sappers --------------------------------------------------
 
 section("surgeons and sappers");
@@ -2763,8 +2832,13 @@ section("abilities");
   {
     function bloodshed(withShield: boolean): number {
       const w = new World({ seed: 133, tilesWide: 80, tilesHigh: 80, soldierCapacity: 512 });
+      // Scouts, not line infantry. Line companies BRACE when they start taking
+      // casualties, which halves the damage they take -- and the unshielded
+      // company bled sooner, braced sooner, and came out ahead. The shield was
+      // being measured against a better defensive trick. Scouts only know how
+      // to gallop, which does nothing in a melee, so nothing confounds this.
       const mine: number[] = [];
-      for (let i = 0; i < 16; i++) mine.push(w.spawnSoldier(0, "line", 1200 + (i % 4) * 14, 1200 + ((i / 4) | 0) * 14, 0));
+      for (let i = 0; i < 16; i++) mine.push(w.spawnSoldier(0, "scout", 1200 + (i % 4) * 14, 1200 + ((i / 4) | 0) * 14, 0));
       for (let i = 0; i < 24; i++) w.spawnSoldier(1, "guard", 1270 + (i % 6) * 14, 1200 + ((i / 6) | 0) * 14, M.PI);
       const g = w.createGroup(0, mine) as Group;
       w.createGroup(1, [...Array(24).keys()].map((k) => k + 16));

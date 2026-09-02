@@ -302,6 +302,7 @@ function frame(now: number): void {
       // Events are cleared at the top of every tick, so a frame running several
       // ticks would otherwise see only the last one's blows.
       effects.ingest(world.events, now / 1000);
+      effects.ingestSpecials(world.specialEvents, now / 1000);
       accumulator -= TICK_DT;
       steps++;
     }

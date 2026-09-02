@@ -77,6 +77,7 @@ export class Renderer {
     this.drawWorkings(world, cam, viewer, now);
     this.drawFields(world, cam, now);
     this.drawRecovering(world, cam, viewer);
+    this.drawSpecials(world, cam, now);
     this.drawFog(world, cam, viewer);
   }
 
@@ -688,6 +689,83 @@ export class Renderer {
       ctx.beginPath();
       ctx.arc(sx, sy, r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
       ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /**
+   * What a company is doing for itself, while it is doing it.
+   *
+   * Each is drawn as the thing it is: shields up across the front, a company
+   * planted behind a solid ring, light troops smeared with after-images, a
+   * gallop trailing streaks behind it. A company that has just halved the
+   * damage it takes should look different from one that has not, or the player
+   * has no way to read the fight.
+   */
+  private drawSpecials(world: World, cam: Camera, now: number): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.lineCap = "round";
+    for (const g of world.groups) {
+      if (g.specialUntil <= world.tick || world.liveCount(g) === 0) continue;
+      const sx = cam.worldToScreenX(g.anchorX);
+      const sy = cam.worldToScreenY(g.anchorY);
+      const r = Math.max(12, (g.radius + 10) * cam.zoom);
+      if (sx < -r * 3 || sy < -r * 3 || sx > cam.viewW + r * 3 || sy > cam.viewH + r * 3) continue;
+      const tint = playerColor[g.player] ?? ink;
+      const kind = world.specialKind(g);
+
+      if (kind === "brace") {
+        // Shields across the front, facing the way the company faces.
+        ctx.globalAlpha = 0.75;
+        ctx.strokeStyle = tint;
+        ctx.lineWidth = Math.max(2, 4 * cam.zoom);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, g.facing - 1.1, g.facing + 1.1);
+        ctx.stroke();
+      } else if (kind === "fortify") {
+        // Planted: a closed, heavy ring with nothing open about it.
+        ctx.globalAlpha = 0.85;
+        ctx.strokeStyle = tint;
+        ctx.lineWidth = Math.max(3, 6 * cam.zoom);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 0.18;
+        ctx.fillStyle = tint;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (kind === "dodge") {
+        // After-images: the company reads as never quite where you aimed.
+        ctx.globalAlpha = 0.3;
+        ctx.strokeStyle = tint;
+        ctx.lineWidth = Math.max(1, 2 * cam.zoom);
+        for (let k = 0; k < 3; k++) {
+          const off = (k + 1) * 5 * cam.zoom;
+          const a2 = now * 3 + k * 2.1;
+          ctx.beginPath();
+          ctx.arc(sx + Math.cos(a2) * off, sy + Math.sin(a2) * off, r * 0.8, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      } else if (kind === "dash") {
+        // Speed lines, laid out behind the direction of travel.
+        ctx.globalAlpha = 0.8;
+        ctx.strokeStyle = tint;
+        ctx.lineWidth = Math.max(1.5, 3 * cam.zoom);
+        const back = g.facing + Math.PI;
+        for (let k = -2; k <= 2; k++) {
+          const off = k * 7 * cam.zoom;
+          const px = -Math.sin(g.facing) * off;
+          const py = Math.cos(g.facing) * off;
+          const len = (26 + Math.abs(k) * -4) * cam.zoom;
+          ctx.globalAlpha = 0.7 - Math.abs(k) * 0.15;
+          ctx.beginPath();
+          ctx.moveTo(sx + px + Math.cos(back) * r * 0.6, sy + py + Math.sin(back) * r * 0.6);
+          ctx.lineTo(sx + px + Math.cos(back) * (r * 0.6 + len), sy + py + Math.sin(back) * (r * 0.6 + len));
+          ctx.stroke();
+        }
+      }
     }
     ctx.restore();
   }

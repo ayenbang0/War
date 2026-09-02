@@ -20,6 +20,8 @@ const IMPACT_LIFE = 0.42;
 const SPARK_LIFE = 0.5;
 /** Seconds a scuff of dust lingers. */
 const DUST_LIFE = 1.1;
+/** Seconds the flash of a special lasts. Short and sharp on purpose. */
+const FLASH_LIFE = 0.55;
 /** Hard cap so a long battle cannot grow the list without bound. */
 const MAX_EFFECTS = 900;
 
@@ -36,11 +38,15 @@ type Spark = { x: number; y: number; vx: number; vy: number; born: number; life:
 /** Dust kicked up by men on the move. */
 type Dust = { x: number; y: number; born: number; r: number };
 
+/** The moment a company does something for itself, drawn once and sharply. */
+type Flash = { x: number; y: number; born: number; kind: string; player: number };
+
 export class Effects {
   private shots: Shot[] = [];
   private impacts: Impact[] = [];
   private sparks: Spark[] = [];
   private dust: Dust[] = [];
+  private flashes: Flash[] = [];
   /** Deterministic-enough jitter for the sprays. Presentation only. */
   private seed = 0x9e3779b9;
 
@@ -48,6 +54,28 @@ export class Effects {
   private rand(): number {
     this.seed = (this.seed * 1664525 + 1013904223) >>> 0;
     return this.seed / 4294967296;
+  }
+
+  /** Take the one-shot moments: a bow thrown down, adepts stepping out. */
+  ingestSpecials(
+    moments: readonly { kind: string; x: number; y: number; player: number }[], now: number,
+  ): void {
+    for (const m of moments) {
+      if (this.flashes.length > MAX_EFFECTS) return;
+      this.flashes.push({ x: m.x, y: m.y, born: now, kind: m.kind, player: m.player });
+      // A sharp burst of shards outward, so the moment reads even at a glance.
+      const n = m.kind === "blink" ? 18 : 10;
+      for (let k = 0; k < n; k++) {
+        if (this.sparks.length > MAX_EFFECTS) break;
+        const a2 = (k / n) * Math.PI * 2;
+        const sp = m.kind === "blink" ? 150 : 90;
+        this.sparks.push({
+          x: m.x, y: m.y,
+          vx: Math.cos(a2) * sp, vy: Math.sin(a2) * sp,
+          born: now, life: FLASH_LIFE, hot: m.kind !== "blink",
+        });
+      }
+    }
   }
 
   /** Men on the move scuff the ground. Called by the renderer, not the sim. */
@@ -170,10 +198,27 @@ export class Effects {
       ctx.lineTo(cam.worldToScreenX(x - sp.vx * 0.06), cam.worldToScreenY(y - sp.vy * 0.06));
       ctx.stroke();
     }
+
+    // The moment itself: an expanding ring, hard-edged and quick.
+    for (const f of this.flashes) {
+      const t = (now - f.born) / FLASH_LIFE;
+      if (t >= 1) continue;
+      const sx = cam.worldToScreenX(f.x);
+      const sy = cam.worldToScreenY(f.y);
+      ctx.globalAlpha = (1 - t) * 0.9;
+      ctx.strokeStyle = f.kind === "blink" ? "#7a4a9a" : "#c9a441";
+      ctx.lineWidth = Math.max(1.5, (1 - t) * 5 * cam.zoom);
+      ctx.beginPath();
+      ctx.arc(sx, sy, Math.max(4, (16 + t * 90) * cam.zoom), 0, Math.PI * 2);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
   private expire(now: number): void {
+    if (this.flashes.length > 0) {
+      this.flashes = this.flashes.filter((f) => now - f.born < FLASH_LIFE);
+    }
     if (this.sparks.length > 0) {
       this.sparks = this.sparks.filter((sp) => now - sp.born < sp.life);
     }
@@ -189,6 +234,7 @@ export class Effects {
   }
 
   get count(): number {
-    return this.shots.length + this.impacts.length + this.sparks.length + this.dust.length;
+    return this.shots.length + this.impacts.length + this.sparks.length +
+      this.dust.length + this.flashes.length;
   }
 }

@@ -231,6 +231,16 @@ export type Group = {
   chargeUntil: number;
   /** Tick until which it moves at the run, having been ordered to charge. */
   hasteUntil: number;
+  /** Tick until which this company's own special is in effect. */
+  specialUntil: number;
+  /** Tick from which it may do it again. */
+  specialReadyAt: number;
+  /** How many times it has done it. Bookkeeping; the one-shots use the flags. */
+  specialUses: number;
+  /** Whether the adepts have already stepped out of the world. Once only. */
+  blinked: boolean;
+  /** Whether the bows have already been thrown down. There is no going back. */
+  bowsBroken: boolean;
   /** Accumulated digging effort toward a fieldwork on the ground it holds. */
   buildTicks: number;
   /**

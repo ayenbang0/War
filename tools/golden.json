@@ -1,11 +1,11 @@
 {
   "world": {
     "ticks": 1800,
-    "final": "ec5b012e"
+    "final": "773d1d8c"
   },
   "clash": {
     "ticks": 2400,
-    "final": "e00358db"
+    "final": "65fdd3fc"
   },
   "stable": {
     "terrain": "2168bb52",

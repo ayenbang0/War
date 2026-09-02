@@ -45,6 +45,10 @@ import {
   succourRate, wardSoak, type SpellId, type Working,
 } from "./magic.ts";
 import { ABILITIES, type AbilityId } from "../content/abilities.ts";
+import {
+  BRACE_SLOWDOWN, BRACE_SOAK, DASH_HASTE, DODGE_CHANCE, FORTIFY_SOAK, SPECIALS,
+  type SpecialId,
+} from "../content/specials.ts";
 
 /** A commander's ability standing on the field. */
 export type AbilityField = {
@@ -310,6 +314,12 @@ export class World {
   deploying = false;
   readonly doctrine: [DoctrineId, DoctrineId] = ["maneuver", "maneuver"];
   readonly events: CombatEvent[] = [];
+  /**
+   * Moments worth a flash on screen: a bow thrown down, adepts stepping out of
+   * the world. Presentation only -- written here and never read back, like
+   * CombatEvent.
+   */
+  readonly specialEvents: { kind: SpecialId; x: number; y: number; player: number }[] = [];
   readonly workings: Working[] = [];
   /**
    * Commander's abilities currently standing on the field.
@@ -506,6 +516,11 @@ export class World {
       recoverUntil: 0,
       chargeUntil: 0,
       hasteUntil: 0,
+      specialUntil: 0,
+      specialReadyAt: 0,
+      specialUses: 0,
+      blinked: false,
+      bowsBroken: false,
       buildTicks: 0,
       feintTurn: 0,
       feintHomeX: 0,
@@ -765,8 +780,13 @@ export class World {
     // buffered by castSpells, and clearing after that wiped it -- the same
     // mistake the barrage made, one step further up the tick.
     this.clearDamageBuffer();
+    // Cleared here, at the top of the tick, rather than inside resolveCombat --
+    // which runs AFTER updateSpecials and so wiped every flash before a frame
+    // could ever draw it.
+    this.specialEvents.length = 0;
     this.castSpells();
     this.updateAmbushes();
+    this.updateSpecials();
     this.applyFields();
     this.resolveCombat();
     this.applyWorkings();
@@ -1069,7 +1089,9 @@ export class World {
     if (n === 0) return 0;
     // At the charge: faster, and with the ranks allowed to open up, which is
     // what the extra impact is bought with.
-    const haste = g.hasteUntil > this.tick ? CHARGE_HASTE : 1;
+    if (this.hasSpecial(g, "fortify")) return 0;
+    const haste = (g.hasteUntil > this.tick ? CHARGE_HASTE : 1) *
+      (this.hasSpecial(g, "dash") ? DASH_HASTE : 1);
     // Mired ground is the one working that touches movement rather than
     // damage or nerve: it does no harm at all, it simply refuses to be crossed.
     return slowest * FORMATION_PACE * haste * this.mireScale(g) * moraleSpeedScale(morale / n);
@@ -1790,6 +1812,13 @@ export class World {
     // caught out of formation, and a man in no group at all gets nothing.
     const defence = this.stats(victim).defence * (1 + COHESION_ARMOUR * this.steadiness[victim]);
     const shield = this.shieldSoak(s.player[victim], s.x[victim], s.y[victim]);
+    const vg0 = this.groupOf(victim);
+    const ag0 = this.groupOf(attacker);
+    // A company that has planted itself deals nothing at all -- that is what
+    // the near-immunity is bought with.
+    if (ag0 && this.hasSpecial(ag0, "fortify")) return;
+    // Light troops on the move are simply missed, half the time.
+    if (vg0 && this.hasSpecial(vg0, "dodge") && this.rng.combat.chance(DODGE_CHANCE)) return;
 
     let dmg = hitDamage(
       this.rng.combat,
@@ -1802,12 +1831,15 @@ export class World {
     );
     if (charging) dmg *= 1 + CHARGE_BONUS;
     if (shield > 0) dmg *= 1 - shield;
+    if (vg0 && this.hasSpecial(vg0, "brace")) dmg *= 1 - BRACE_SOAK;
+    if (vg0 && this.hasSpecial(vg0, "fortify")) dmg *= 1 - FORTIFY_SOAK;
     // Coming at somebody else's stakes is hard work.
     const hampered = this.assaultPenalty(s.player[attacker], s.x[attacker], s.y[attacker]);
     if (hampered > 0) dmg *= 1 - hampered;
     s.incoming[victim] += dmg;
     s.struckBy[victim] = attacker;
-    s.cooldown[attacker] = st.attackInterval;
+    s.cooldown[attacker] =
+      st.attackInterval * (ag0 && this.hasSpecial(ag0, "brace") ? BRACE_SLOWDOWN : 1);
     // A volley is spent where a shot is actually loosed, so looking for a
     // target and finding none costs nothing.
     if (st.range > MELEE_RANGE && s.ammo[attacker] > 0) s.ammo[attacker] -= 1;
@@ -1973,6 +2005,171 @@ export class World {
     let n = 0;
     for (const owner of this.heldBy) if (owner === player) n++;
     return n;
+  }
+
+  // -- what troops do for themselves --------------------------------------------
+
+  /** The special this company's men know, or undefined for a mixed rabble. */
+  private specialOf(g: Group): SpecialId | undefined {
+    const s = this.soldiers;
+    const tally = new Map<SpecialId, number>();
+    let best: SpecialId | undefined;
+    let bestN = 0;
+    for (const m of g.members) {
+      if (s.alive[m] !== 1) continue;
+      const sp = UNIT_TYPES[this.typeOf(m)].special;
+      if (!sp) continue;
+      const n = (tally.get(sp) ?? 0) + 1;
+      tally.set(sp, n);
+      if (n > bestN) {
+        bestN = n;
+        best = sp;
+      }
+    }
+    return best;
+  }
+
+  /** Is this company's own trick in effect right now? */
+  hasSpecial(g: Group, id: SpecialId): boolean {
+    return g.specialUntil > this.tick && this.specialOf(g) === id;
+  }
+
+  /** Which trick a company knows, for the renderer. Undefined for a rabble. */
+  specialKind(g: Group): SpecialId | undefined {
+    return this.specialOf(g);
+  }
+
+  /**
+   * Decide, for each company, whether now is the moment.
+   *
+   * Judged from the company's own circumstances only -- what it can see
+   * happening to it -- never from anything the other side is about to do. A
+   * company that braced because it knew a charge was coming would be cheating.
+   */
+  private updateSpecials(): void {
+    const s = this.soldiers;
+    for (const g of this.groups) {
+      if (g.specialUntil > this.tick) continue;
+      if (this.tick < g.specialReadyAt) continue;
+      const id = this.specialOf(g);
+      if (id === undefined) continue;
+      const spec = SPECIALS[id];
+      // The two that happen once are tracked by their own flags. A shared
+      // counter meant a mixed company spent its one withdrawal on bracing.
+      if (id === "blink" && g.blinked) continue;
+      if (id === "breakBow" && g.bowsBroken) continue;
+
+      const living = this.liveCount(g);
+      if (living === 0) continue;
+      const inContact = this.tick - g.lastContact < TICK_RATE * 2;
+      const bleeding = g.casualtiesThisTick > 0;
+      let nerve = 0;
+      for (const m of g.members) if (s.alive[m] === 1) nerve += s.morale[m];
+      nerve /= living;
+
+      let now = false;
+      switch (id) {
+        case "brace":
+          // Shields go up when the fighting turns against them, not the moment
+          // anyone comes into view.
+          now = inContact && (bleeding || nerve < 0.7);
+          break;
+        case "dodge":
+          // Light troops start moving the instant anything is aimed their way.
+          now = inContact || this.underFire(g);
+          break;
+        case "breakBow":
+          // Bows are thrown down only with the enemy actually on top of them.
+          now = this.enemyWithin(g, MELEE_RANGE * 2.2) && (bleeding || nerve < 0.6);
+          break;
+        case "dash":
+          // A gallop is for closing ground, not for standing in a melee.
+          now = !inContact && g.path.length >= 2 &&
+            (g.stance === "attack" || g.stance === "move");
+          break;
+        case "fortify":
+          // Planting themselves is what a guard does when it is being
+          // overwhelmed, and it is close to a last resort.
+          now = inContact && (nerve < 0.45 || this.outnumberedAt(g, 1.6));
+          break;
+        case "blink":
+          // Once, and only when they are about to be destroyed.
+          now = inContact && (nerve < 0.4 || g.losses > g.raisedWith * 0.35);
+          break;
+      }
+      if (!now) continue;
+
+      g.specialUses++;
+      g.specialReadyAt = this.tick + spec.cooldown * TICK_RATE;
+      g.specialUntil = this.tick + spec.duration * TICK_RATE;
+      this.specialEvents.push({ kind: id, x: g.anchorX, y: g.anchorY, player: g.player });
+
+      if (id === "blink") g.blinked = true;
+      if (id === "breakBow") g.bowsBroken = true;
+
+      if (id === "breakBow") {
+        // They are skirmishers now, and skirmishers dodge. There is no picking
+        // the bow back up.
+        for (const m of g.members) {
+          if (s.alive[m] !== 1) continue;
+          s.type[m] = typeIndex("skirmisher");
+          this.statsOf[m] = statsFor("skirmisher", this.doctrine[g.player]);
+          s.ammo[m] = 0;
+        }
+        g.specialReadyAt = this.tick;
+        g.specialUntil = 0;
+      } else if (id === "blink") {
+        // Out of the world and back at the western edge, keeping formation.
+        const toX = TILE_SIZE * 2;
+        const dx = toX - g.anchorX;
+        for (const m of g.members) {
+          if (s.alive[m] !== 1) continue;
+          s.x[m] = clamp(s.x[m] + dx, TILE_SIZE, this.terrain.worldWidth - TILE_SIZE);
+        }
+        g.path.length = 0;
+        g.stance = "idle";
+        this.recentre(g);
+        this.reflow(g);
+      }
+    }
+  }
+
+  /** Is anything shooting at this company? */
+  private underFire(g: Group): boolean {
+    for (const e of this.events) {
+      if (e.kind !== "shot" || e.player === g.player) continue;
+      if (this.soldiers.group[e.victim] === g.id) return true;
+    }
+    return false;
+  }
+
+  /** Any enemy this close to any of its men? */
+  private enemyWithin(g: Group, reach: number): boolean {
+    const s = this.soldiers;
+    for (const m of g.members) {
+      if (s.alive[m] !== 1) continue;
+      const n = this.hash.query(s.x[m], s.y[m], reach, this.neighbours);
+      for (let k = 0; k < n; k++) {
+        const other = this.neighbours[k];
+        if (s.alive[other] === 1 && s.player[other] !== g.player) return true;
+      }
+    }
+    return false;
+  }
+
+  /** Is it locally outnumbered by at least this ratio? */
+  private outnumberedAt(g: Group, ratio: number): boolean {
+    const s = this.soldiers;
+    let friends = 0;
+    let foes = 0;
+    const n = this.hash.query(g.anchorX, g.anchorY, 160, this.neighbours);
+    for (let k = 0; k < n; k++) {
+      const other = this.neighbours[k];
+      if (s.alive[other] !== 1) continue;
+      if (s.player[other] === g.player) friends++;
+      else foes++;
+    }
+    return foes > friends * ratio && foes > 0;
   }
 
   // -- commander's abilities ----------------------------------------------------
