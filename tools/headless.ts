@@ -2234,6 +2234,31 @@ section("orders in practice");
     check("and refuses orders while it lasts",
       g.stance === "recover" && Math.abs(g.anchorX - parked) < 3,
       g.stance + ", moved " + (g.anchorX - parked).toFixed(1));
+
+    // And it must SAY so. The sim drops an order aimed at a recovering group,
+    // so a pen that answered "move" left the player watching nothing happen for
+    // thirty seconds with no explanation on screen. The group verbs always
+    // reported this; the ordinary orders quietly claimed to have worked.
+    {
+      const cmdR = new Commander(w, 0);
+      cmdR.selected = [g.id];
+      const march: { x: number; y: number }[] = [];
+      for (let i = 0; i < 30; i++) march.push({ x: g.anchorX + 200 + i * 20, y: g.anchorY - 120 });
+      const saidMarch = cmdR.commit(march);
+      check("and says so rather than claiming the order worked",
+        saidMarch === "locked (recovering)", saidMarch);
+
+      const heart2: { x: number; y: number }[] = [];
+      for (let i = 0; i <= 46; i++) {
+        const t = (i / 46) * M.PI * 2;
+        const hx = 16 * M.sin(t) * M.sin(t) * M.sin(t);
+        const hy = -(13 * M.cos(t) - 5 * M.cos(2 * t) - 2 * M.cos(3 * t) - M.cos(4 * t));
+        heart2.push({ x: g.anchorX + 500 + (hx / 16) * 240, y: g.anchorY + (hy / 16) * 240 });
+      }
+      cmdR.selected = [g.id];
+      check("a second recover on a recovering group says it is already standing down",
+        cmdR.commit(heart2) === "already recovering");
+    }
   }
 
   // -- CURVED ROUTES --------------------------------------------------------

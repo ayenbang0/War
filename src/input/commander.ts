@@ -326,7 +326,17 @@ export class Commander {
     const tick = this.world.tick + ORDER_DELAY;
     const n = handles.length;
 
+    // A group that has stood down takes no orders, and the player has to be
+    // TOLD that. The sim drops an order aimed at a recovering group, so without
+    // this the pen answered "move" and then nothing happened for thirty
+    // seconds, with nothing on screen to explain it. Every group verb already
+    // reported this; the ordinary single-group orders -- the ones actually used
+    // most -- silently claimed to have worked.
+    let issued = 0;
+
     handles.forEach((id, i) => {
+      if (this.locked(id)) return;
+      issued++;
       // Several squads told to go to one point would pile onto the same spot
       // and grind against each other. Fan them out perpendicular to the route.
       const q = this.world.groupById(id);
@@ -388,6 +398,7 @@ export class Commander {
       }
     });
 
+    if (issued === 0) return "locked (recovering)";
     return gestureLabel(r);
   }
 }
