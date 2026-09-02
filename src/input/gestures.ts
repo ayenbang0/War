@@ -88,13 +88,16 @@ export type Recognized =
   | { kind: "patrolArea"; squads: number[]; x: number; y: number; radius: number }
   /** Stand down and recover. Costs 30 seconds of total vulnerability. */
   | { kind: "recover"; squads: number[] }
-  /**
-   * Cut ONE group's men in two along the line. Distinct from "split", which
-   * narrows a selection of several groups without changing any of them.
-   */
-  | { kind: "divide"; squads: number[]; line: number[] }
   /** A loop drawn around loose men, with nothing selected: gather them up. */
-  | { kind: "lasso"; squads: number[] };
+  /**
+   * Gather everything the loop encloses into one company.
+   *
+   * Carries the POLYGON, not just the handles it caught, because a loop drawn
+   * around part of an existing company has to be able to cut those particular
+   * men out of it -- and that is a question about where each man is standing,
+   * which only the Commander can answer.
+   */
+  | { kind: "lasso"; squads: number[]; poly: number[] };
 
 // -- tuning, all in world units ------------------------------------------------
 
@@ -384,12 +387,18 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
   // group ever comes into existence. Everything the loop encloses is gathered.
   if (subjects.length === 0) {
     if (!closed) return null;
+    // Handles whose anchor falls inside, kept for the whole-company case. The
+    // decisive test is per MAN and happens in the Commander: a loop around half
+    // a company encloses none of its anchors, so gating on them here made
+    // carving a company in two impossible.
     const inside: number[] = [];
     for (const u of ctx.squads) {
       if (u.player !== ctx.player) continue;
       if (pointInPolygon(u.x, u.y, raw)) inside.push(u.id);
     }
-    return inside.length > 0 ? { kind: "lasso", squads: inside } : null;
+    const poly: number[] = [];
+    for (const p of raw) poly.push(p.x, p.y);
+    return { kind: "lasso", squads: inside, poly };
   }
 
   const subject = squadById(ctx, subjects[0]);
@@ -443,32 +452,6 @@ export function recognize(raw: readonly Point[], ctx: GestureContext): Recognize
   if (isGroup(ctx) && anchored === null) {
     const group = groupVerb(raw, ctx, simple, closed, span, subjects);
     if (group) return group;
-  }
-
-  // 4b. Divide ONE group in two. "split" above narrows a selection of several
-  //     groups; this cuts a single group's men, which is what a player who has
-  //     just drawn one group and wants half of it elsewhere actually means.
-  //
-  //     The discriminator is that A CUT MUST ACTUALLY SPAN THE GROUP: both ends
-  //     out beyond the footprint and the stroke passing through the middle of
-  //     it. Without that test every straight line drawn in open ground -- by
-  //     far the commonest stroke in the game -- would carve up the selected
-  //     group instead of marching it, because a selected group is the subject
-  //     of any stroke that does not begin on something else.
-  if (!closed && anchored === null && subjects.length === 1 && subject && subject.size >= 2) {
-    const straight = total > 1e-6 && gap / total >= STRAIGHT_RATIO && simple.length === 2;
-    const from = { x: subject.x, y: subject.y };
-    const spans =
-      Math.hypot(start.x - from.x, start.y - from.y) > subject.radius &&
-      Math.hypot(end.x - from.x, end.y - from.y) > subject.radius &&
-      pointToSegment(from, start, end) < subject.radius;
-    if (straight && spans) {
-      return {
-        kind: "divide",
-        squads: subjects.slice(),
-        line: [start.x, start.y, end.x, end.y],
-      };
-    }
   }
 
   // 5. Closed strokes: hold versus patrol, split by how much ground is enclosed.
@@ -538,26 +521,11 @@ export function gestureLabel(r: Recognized | null): string {
       return "patrol area";
     case "recover":
       return "recover";
-    case "divide":
-      return "divide";
     case "lasso":
       return "group " + r.squads.length;
     default:
       return r.kind;
   }
-}
-
-/** Shortest distance from p to the segment ab. Clamped, so it is the segment
- *  the player actually drew rather than the infinite line through it -- a line
- *  that stops short of the group has not cut it. */
-function pointToSegment(p: Point, a: Point, b: Point): number {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const len2 = dx * dx + dy * dy;
-  if (len2 < 1e-12) return Math.hypot(p.x - a.x, p.y - a.y);
-  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
-  t = t < 0 ? 0 : t > 1 ? 1 : t;
-  return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
 }
 
 // -- group-verb geometry -------------------------------------------------------

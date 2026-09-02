@@ -29,20 +29,12 @@ export type OrderBody =
   /** Walk the circuit forever, reversing at the ends of an open route. */
   | { kind: "patrol"; squad: number; path: readonly number[] }
   /** Stand down, close ranks, regain morale and hit points. */
-  | { kind: "recover"; squad: number }
-  /**
-   * Cut one group in two along a drawn line: [x0, y0, x1, y1].
-   *
-   * Unlike every other order this one changes which groups EXIST, so it is a
-   * simulation order rather than a UI action -- a peer replaying the log has to
-   * end up with the same two groups holding the same men.
-   */
-  | { kind: "divide"; squad: number; line: readonly number[] };
+  | { kind: "recover"; squad: number };
 
 export type OrderKind = OrderBody["kind"];
 
 export const ORDER_KINDS: readonly OrderKind[] = [
-  "move", "attack", "hold", "formation", "retreat", "patrol", "recover", "divide",
+  "move", "attack", "hold", "formation", "retreat", "patrol", "recover",
 ];
 
 export type Order = OrderBody & {

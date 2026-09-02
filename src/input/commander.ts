@@ -8,7 +8,7 @@
  */
 
 import type { World } from "../sim/world.ts";
-import { anchorSquad, recognize, gestureLabel, type GestureContext, type PendingLine, type Point, type Recognized, type SquadView } from "./gestures.ts";
+import { anchorSquad, pointInPolygon, recognize, gestureLabel, type GestureContext, type PendingLine, type Point, type Recognized, type SquadView } from "./gestures.ts";
 
 /**
  * Ticks between issuing an order and it taking effect. One tick keeps orders
@@ -152,6 +152,24 @@ export class Commander {
     return q !== undefined && q.recoverUntil > this.world.tick;
   }
 
+  /**
+   * Every living soldier of this player standing inside a drawn loop.
+   *
+   * Per MAN rather than per company: this is what lets a loop around half a
+   * company take exactly that half.
+   */
+  private menInside(poly: readonly number[]): number[] {
+    const s = this.world.soldiers;
+    const pts: Point[] = [];
+    for (let i = 0; i + 1 < poly.length; i += 2) pts.push({ x: poly[i], y: poly[i + 1] });
+    const out: number[] = [];
+    for (let i = 0; i < s.count; i++) {
+      if (s.alive[i] !== 1 || s.player[i] !== this.player) continue;
+      if (pointInPolygon(s.x[i], s.y[i], pts)) out.push(i);
+    }
+    return out;
+  }
+
   /** Soldier ids behind a set of handles, groups expanded to their members. */
   private soldiersBehind(handles: readonly number[]): number[] {
     const out: number[] = [];
@@ -226,14 +244,34 @@ export class Commander {
       return r.squads.length > 0 ? "selected" : "cleared";
     }
 
-    // A lasso is the ONLY way a group is ever born. Everything enclosed is
-    // gathered into one, replacing whatever groups those men were in before.
+    // A lasso is the ONLY way a company is ever born, and it works on MEN, not
+    // on companies. Drawing a loop around part of an existing company therefore
+    // cuts exactly those men out of it into a new one -- createGroup already
+    // takes each man out of whatever he was in and re-dresses what is left
+    // behind. That is why there is no separate "divide" gesture: cutting a
+    // company in two is just drawing a loop around the half you want.
     if (r.kind === "lasso") {
       this.clearPending();
-      const men = this.soldiersBehind(r.squads);
-      const g = this.world.createGroup(this.player, men);
+      const men = this.menInside(r.poly);
+      // Nothing enclosed by position: fall back to the handles the recogniser
+      // caught, which is the case where a loop is thrown round a company from
+      // well outside it.
+      const gathered = men.length > 0 ? men : this.soldiersBehind(r.squads);
+      if (gathered.length === 0) return "";
+      // Is this taking men OUT of a company, or gathering men who were in none?
+      // Decided across every company the loop touched, not from the first man
+      // it happened to catch -- a single loose soldier caught alongside half a
+      // company would otherwise make a carve look like an ordinary gather.
+      const taken = new Set(gathered);
+      const carving = this.world.groups.some(
+        (q) => q.player === this.player &&
+          q.members.some((m) => taken.has(m)) &&
+          q.members.some((m) => !taken.has(m)),
+      );
+      const g = this.world.createGroup(this.player, gathered);
       this.selected = g ? [g.id] : [];
-      return g ? "grouped " + g.members.length : "";
+      if (!g) return "";
+      return (carving ? "split off " : "grouped ") + g.members.length;
     }
 
     // -- group verbs ---------------------------------------------------------
@@ -249,22 +287,6 @@ export class Commander {
       return r.keep.length === 0 || r.drop.length === 0
         ? "rail set  (draw a parallel line for rows)"
         : "split " + r.keep.length + "/" + r.squads.length + "  (parallel line = rows)";
-    }
-
-    if (r.kind === "divide") {
-      this.clearPending();
-      const id = r.squads[0];
-      if (this.locked(id)) return "locked (recovering)";
-      const g = this.world.groupById(id);
-      if (!g) return "";
-      this.world.orders.issue(
-        { kind: "divide", squad: id, line: r.line.slice() },
-        this.player,
-        this.world.tick + ORDER_DELAY,
-      );
-      // The new half keeps no selection of its own: cutting a body of troops in
-      // two is a decision about the board, not about what you are holding.
-      return "cut in two";
     }
 
     if (r.kind === "grid") {

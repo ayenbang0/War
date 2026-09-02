@@ -627,16 +627,21 @@ export function splitAndRecoverCases(): Case[] {
     });
   }
 
-  // -- divide: ONE group selected, a straight cut drawn clean THROUGH it.
-  //    This is the case a player hits after lassoing a single group and wanting
-  //    half of it somewhere else.
+  // -- a straight stroke drawn clean THROUGH your own company is a MARCH.
+  //    There is no cutting gesture any more: carving a company in two is done
+  //    by looping round the half you want, which works on men rather than on
+  //    shapes. These cases exist to pin that a line across your own men does
+  //    the ordinary, expected thing rather than something surprising.
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI;
-    const dx = Math.cos(a) * 300;
+    // Always run the stroke AWAY from home. Half these angles pointed back
+    // toward the friendly edge, which with an enemy in sight is a withdrawal --
+    // correctly read as one, and nothing to do with what this case is pinning.
+    const dx = Math.abs(Math.cos(a)) * 300;
     const dy = Math.sin(a) * 300;
     cases.push({
-      expected: "divide",
-      note: "cut through a single selected group at " + a.toFixed(2) + " rad",
+      expected: "move",
+      note: "line through a single selected group at " + a.toFixed(2) + " rad",
       ctx: context(0),
       points: stroke(
         [{ x: FRIEND_X - dx, y: FRIEND_Y - dy }, { x: FRIEND_X + dx, y: FRIEND_Y + dy }],

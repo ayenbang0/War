@@ -2261,101 +2261,64 @@ section("orders in practice");
     return out;
   }
 
-  // -- DIVIDE: cutting ONE group's men in two -------------------------------
+  // -- CARVING A COMPANY WITH THE LASSO -------------------------------------
+  //
+  // There is no separate "divide" gesture. A loop drawn round part of a company
+  // takes exactly those men out of it, because a lasso works on MEN and
+  // createGroup already removes each man from whatever he was in.
   {
     const w = new World({ seed: 47, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
-    // A wide block so a vertical cut has men clearly either side of it.
-    const ids: number[] = [];
-    for (let i = 0; i < 24; i++) ids.push(w.spawnSoldier(0, "line", 800 + (i % 12) * 30, 1000 + ((i / 12) | 0) * 24, 0));
-    army(w, 1, 2600, 1100);
-    const g = w.createGroup(0, ids) as Group;
-    g.shape = "line";
-    const before = w.liveCount(g);
-    const midX = g.anchorX;
-
-    // Straight down through the middle: men to the left keep the group.
-    const other = w.divideGroup(g, [midX, g.anchorY - 400, midX, g.anchorY + 400]) as Group;
-    check("a cut through a group makes a second group", other !== null && w.groups.length === 3,
-      w.groups.length + " groups");
-    check("every man is still in exactly one of the two halves",
-      other !== null && w.liveCount(g) + w.liveCount(other) === before,
-      w.liveCount(g) + " + " + (other ? w.liveCount(other) : 0) + " of " + before);
-    check("neither half is empty", w.liveCount(g) > 0 && other !== null && w.liveCount(other) > 0,
-      w.liveCount(g) + "/" + (other ? w.liveCount(other) : 0));
-    // Drawn top to bottom you are walking south, and on a screen whose y grows
-    // downward your left hand points EAST -- so the eastern half keeps the
-    // group, exactly as the multi-group split keeps the side left of the stroke.
-    check("the halves land on opposite sides of the line",
-      other !== null && g.anchorX > midX && other.anchorX < midX,
-      Math.round(g.anchorX) + " vs " + Math.round(other.anchorX) + " about " + Math.round(midX));
-    check("the new half inherits the shape it was standing in",
-      other !== null && other.shape === "line", other ? other.shape : "-");
-    check("no man belongs to both", (() => {
-      if (!other) return false;
-      const seen = new Set(g.members);
-      return other.members.every((m) => !seen.has(m));
-    })());
-  }
-
-  // Drawing the same cut the other way round keeps the OTHER half -- one
-  // gesture, both outcomes, exactly as the multi-group split reads.
-  {
-    const w = new World({ seed: 48, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
-    const ids: number[] = [];
-    for (let i = 0; i < 24; i++) ids.push(w.spawnSoldier(0, "line", 800 + (i % 12) * 30, 1000 + ((i / 12) | 0) * 24, 0));
-    const g = w.createGroup(0, ids) as Group;
-    const midX = g.anchorX;
-    w.divideGroup(g, [midX, g.anchorY + 400, midX, g.anchorY - 400]);
-    check("reversing the cut keeps the other half", g.anchorX < midX,
-      Math.round(g.anchorX) + " about " + Math.round(midX));
-  }
-
-  // A cut that leaves everyone on one side must do nothing at all. Men move
-  // while an order is in flight, so this really can arrive as a no-op.
-  {
-    const w = new World({ seed: 49, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
-    const g = army(w, 0, 900, 900, 12);
-    const groups = w.groups.length;
-    const members = w.liveCount(g);
-    const missed = w.divideGroup(g, [g.anchorX + 600, g.anchorY - 400, g.anchorX + 600, g.anchorY + 400]);
-    check("a cut that divides nobody does nothing",
-      missed === null && w.groups.length === groups && w.liveCount(g) === members,
-      w.groups.length + " groups, " + w.liveCount(g) + " men");
-  }
-
-  // End to end: a drawn stroke, through the Commander and the order queue.
-  {
-    const w = new World({ seed: 50, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
     const ids: number[] = [];
     for (let i = 0; i < 24; i++) ids.push(w.spawnSoldier(0, "line", 800 + (i % 12) * 30, 1000 + ((i / 12) | 0) * 24, 0));
     army(w, 1, 2600, 1100);
     const g = w.createGroup(0, ids) as Group;
     const cmd = new Commander(w, 0);
-    cmd.selected = [g.id];
+    cmd.selected = [];
 
-    const cut: { x: number; y: number }[] = [];
-    for (let i = 0; i < 30; i++) cut.push({ x: g.anchorX, y: g.anchorY - 400 + i * (800 / 29) });
-    const said = cmd.commit(cut);
-    check("a stroke through a lone selected group is read as a cut", said === "cut in two", said);
-    check("and nothing has happened yet", w.groups.length === 2, w.groups.length + " groups");
-    for (let t = 0; t < 6; t++) w.step();
-    check("the order lands and the group becomes two", w.groups.length === 3,
-      w.groups.length + " groups");
-
-    // The march that must NOT be a cut: a straight line out in open ground.
-    const g2 = w.groups.find((q) => q.player === 0) as Group;
-    cmd.selected = [g2.id];
-    const groupsNow = w.groups.length;
-    const march: { x: number; y: number }[] = [];
-    for (let i = 0; i < 30; i++) march.push({ x: g2.anchorX + 400 + i * 18, y: g2.anchorY - 500 });
-    const saidMarch = cmd.commit(march);
-    for (let t = 0; t < 6; t++) w.step();
-    check("a straight march clear of the group is still a march",
-      saidMarch !== "cut in two" && w.groups.length === groupsNow,
-      saidMarch + ", " + w.groups.length + " groups");
+    // A loop around the LEFT half only. The company's anchor sits outside it,
+    // which is exactly the case that used to make carving impossible.
+    const cx = 860;
+    const loop: { x: number; y: number }[] = [];
+    for (let k = 0; k <= 40; k++) {
+      const a = (k / 40) * M.PI * 2;
+      loop.push({ x: cx + M.cos(a) * 120, y: 1012 + M.sin(a) * 90 });
+    }
+    const said = cmd.commit(loop);
+    const mine = w.groups.filter((q) => q.player === 0);
+    check("a loop round part of a company carves those men out", mine.length === 2,
+      mine.length + " companies, said: " + said);
+    check("and says it split them off rather than merely grouping them",
+      said.startsWith("split off"), said);
+    check("the men are divided, not duplicated",
+      mine.reduce((n, q) => n + q.members.length, 0) === 24,
+      mine.map((q) => q.members.length).join(" + "));
+    check("the carved half is the half that was enclosed",
+      mine.every((q) => q.members.every((m) => w.soldiers.group[m] === q.id)));
+    check("and the new company is the one now selected",
+      cmd.selected.length === 1 && cmd.selected[0] !== g.id, JSON.stringify(cmd.selected));
   }
 
-  // -- SPLIT ----------------------------------------------------------------
+  // A loop thrown round a WHOLE company leaves it whole -- that is gathering,
+  // not carving, and it must not be reported as a split.
+  {
+    const w = new World({ seed: 48, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
+    const ids: number[] = [];
+    for (let i = 0; i < 16; i++) ids.push(w.spawnSoldier(0, "line", 900 + (i % 4) * 20, 1000 + ((i / 4) | 0) * 20, 0));
+    w.createGroup(0, ids);
+    const cmd = new Commander(w, 0);
+    cmd.selected = [];
+    const loop: { x: number; y: number }[] = [];
+    for (let k = 0; k <= 40; k++) {
+      const a = (k / 40) * M.PI * 2;
+      loop.push({ x: 930 + M.cos(a) * 260, y: 1030 + M.sin(a) * 260 });
+    }
+    const said = cmd.commit(loop);
+    check("a loop round a whole company is gathering, not carving",
+      said.startsWith("grouped"), said);
+    check("and leaves exactly one company", w.groups.filter((q) => q.player === 0).length === 1);
+  }
+
+  // -- SPLIT ----------------------------------------------------------------  // -- SPLIT ----------------------------------------------------------------
   {
     const w = new World({ seed: 41, tilesWide: 90, tilesHigh: 70, soldierCapacity: 512 });
     const gs = [army(w, 0, 900, 900), army(w, 0, 1300, 900), army(w, 0, 900, 1300), army(w, 0, 1300, 1300)];

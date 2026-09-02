@@ -722,54 +722,7 @@ export class World {
         g.path.length = 0;
         g.recoverUntil = this.tick + RECOVER_LOCK_SECONDS * TICK_RATE;
         return;
-      case "divide":
-        this.divideGroup(g, order.line);
-        return;
     }
-  }
-
-  /**
-   * Cut a group in two along a line, by which side of it each man stands.
-   *
-   * The half on the left of the line (walking from the first point to the
-   * second) stays in the original group, so drawing the same cut the other way
-   * round decides which half keeps the identity -- one gesture, both outcomes,
-   * no modifier. That mirrors how the multi-group split already reads.
-   *
-   * A cut that leaves everyone on one side does nothing at all. The recogniser
-   * already refuses a line that does not span the group, and this is the second
-   * guard: men move while an order is in flight, so a cut that genuinely
-   * divided the group when it was drawn can arrive a tick later and divide
-   * nothing. Silently producing an empty group would be worse than no-op.
-   */
-  divideGroup(g: Group, line: readonly number[]): Group | null {
-    if (line.length < 4) return null;
-    const s = this.soldiers;
-    const ax = line[0];
-    const ay = line[1];
-    const bx = line[2];
-    const by = line[3];
-    const keep: number[] = [];
-    const cut: number[] = [];
-    // g.members is insertion-ordered and createGroup sorts by id, so both
-    // halves are order-independent and safe to hash.
-    for (const m of g.members) {
-      if (s.alive[m] !== 1) continue;
-      const side = (bx - ax) * (s.y[m] - ay) - (by - ay) * (s.x[m] - ax);
-      (side < 0 ? keep : cut).push(m);
-    }
-    if (keep.length === 0 || cut.length === 0) return null;
-
-    // createGroup calls leaveGroup on each man, which takes them out of g.
-    const other = this.createGroup(g.player, cut);
-    if (!other) return null;
-    // The new half inherits the shape it was standing in. A column cut in two
-    // should be two columns, not a column and a square.
-    other.shape = g.shape;
-    this.reflow(other);
-    this.recentre(g);
-    this.reflow(g);
-    return other;
   }
 
   /**
