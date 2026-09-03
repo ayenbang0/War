@@ -24,7 +24,7 @@ const ABILITY_MARK: Record<AbilityId, string> = {
   flare: "☀",
   levy: "⚇",
 };
-import { MAX_SQUADS, cost, suggestArmy, validate, type ArmyList } from "../content/army.ts";
+import { MAX_SQUADS, adviseFor, cost, suggestArmy, validate, type ArmyList } from "../content/army.ts";
 import { LEVELS, type LevelDef } from "../content/levels/index.ts";
 
 export type Setup = {
@@ -280,7 +280,7 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
       // A whole setup, not just troops: the reserve is part of an army, and a
       // suggestion that leaves the ability row empty and points unspent is a
       // suggestion the player has to finish themselves.
-      const whole = suggestArmy(doctrine, level.budget);
+      const whole = suggestArmy(doctrine, level.budget, adviseFor(level));
       picked.length = 0;
       picked.push(...whole.squads);
       bought.length = 0;

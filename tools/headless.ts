@@ -59,7 +59,7 @@ import { COMMANDERS, COMMANDER_IDS, type CommanderId } from "../src/content/comm
 import { ABILITIES, ABILITY_IDS, abilityCost } from "../src/content/abilities.ts";
 import { BRACE_SLOWDOWN, BRACE_SOAK, FORTIFY_SOAK, SPECIALS } from "../src/content/specials.ts";
 import { DOCTRINES, DOCTRINE_IDS } from "../src/content/doctrines.ts";
-import { DEFAULT_BUDGET, MAX_SQUADS, cost, defaultArmy, suggestArmy, validate } from "../src/content/army.ts";
+import { DEFAULT_BUDGET, MAX_SQUADS, adviseFor, cost, defaultArmy, suggestArmy, validate } from "../src/content/army.ts";
 import { LEVELS } from "../src/content/levels/index.ts";
 import { statsFor } from "../src/sim/world.ts";
 import { OFFENSIVE_SPELLS, SPELLS, SPELL_IDS, SUPPORTIVE_SPELLS, hexPenalty, wardSoak, type SpellId } from "../src/sim/magic.ts";
@@ -1499,6 +1499,32 @@ section("army");
       check("  and spends everything it legally can",
         !spendable, v.spent + "/" + b + " with " + (b - v.spent) + " left over");
     }
+  }
+
+  // The advice must actually read the battlefield, not just the budget.
+  {
+    const countOf = (l: typeof LEVELS[number], id: UnitTypeId): number =>
+      suggestArmy("maneuver", l.budget, adviseFor(l)).squads.filter((q) => q === id).length;
+    const open = LEVELS.find((l) => l.country === "open" && l.victory.mode === "rout");
+    const broken = LEVELS.find((l) => l.country === "broken");
+    const holding = LEVELS.find((l) => l.victory.mode === "objectives");
+    if (open && broken) {
+      // Per company, since the two maps do not have the same purse.
+      const openShare = countOf(open, "horse") / suggestArmy("maneuver", open.budget, adviseFor(open)).squads.length;
+      const brokenShare = countOf(broken, "horse") / suggestArmy("maneuver", broken.budget, adviseFor(broken)).squads.length;
+      check("horse is advised on open ground and not at a river",
+        openShare > brokenShare * 2,
+        "open " + (openShare * 100).toFixed(0) + "% vs broken " + (brokenShare * 100).toFixed(0) + "%");
+    }
+    if (holding && open) {
+      check("ground to hold is advised sappers to hold it with",
+        countOf(holding, "builder") > countOf(open, "builder"),
+        holding.name + " " + countOf(holding, "builder") + " vs " + open.name + " " + countOf(open, "builder"));
+    }
+    const shapes = new Set(LEVELS.map((l) =>
+      suggestArmy("maneuver", l.budget, adviseFor(l)).squads.slice().sort().join(",")));
+    check("no two battlefields get the same advice", shapes.size === LEVELS.length,
+      shapes.size + " distinct suggestions across " + LEVELS.length + " battlefields");
   }
 
   check("the default army spends most of its budget",

@@ -150,7 +150,117 @@ export function defaultArmy(doctrine: DoctrineId = "maneuver", budget = DEFAULT_
  * cannot be spent at the end is genuinely unspendable: every per-type cap is
  * full, or the cheapest company left costs more than the change.
  */
-export function suggestArmy(doctrine: DoctrineId, budget: number): ArmyList {
+/**
+ * What a battlefield asks for.
+ *
+ * A weight per unit type and a short list of abilities worth having, derived
+ * from what the level already declares: how it is won, how long there is, and
+ * what the going is like. The same suggestion on every map was advice that
+ * ignored the one thing the player most needs advice about -- cavalry is worth
+ * buying on the open field and close to worthless at a river crossing, and a
+ * match won by holding ground wants sappers and heavy foot rather than horse.
+ */
+export type Advice = {
+  readonly weights: Partial<Record<UnitTypeId, number>>;
+  readonly prefer: readonly AbilityId[];
+  readonly note: string;
+};
+
+const BASE_WEIGHTS: Record<UnitTypeId, number> = {
+  line: 6, archer: 3, skirmisher: 2, horse: 2, scout: 1,
+  guard: 1, healer: 1, builder: 1, mage: 1, siege: 1,
+};
+
+export function adviseFor(level: {
+  victory: { mode: string };
+  duration: number;
+  country: "open" | "broken" | "high";
+}): Advice {
+  const w: Record<UnitTypeId, number> = { ...BASE_WEIGHTS };
+  const prefer: AbilityId[] = [];
+  const notes: string[] = [];
+  const scale = (id: UnitTypeId, by: number): void => {
+    w[id] = w[id] * by;
+  };
+
+  // -- the going --------------------------------------------------------------
+  if (level.country === "open") {
+    scale("horse", 2); scale("scout", 1.8); scale("siege", 0.5); scale("line", 0.9);
+    prefer.push("charge", "flare");
+    notes.push("open ground, so horse and eyes pay");
+  } else if (level.country === "broken") {
+    // A river with bridges is no place for cavalry: there is nowhere to swing.
+    scale("horse", 0.3); scale("scout", 0.6); scale("siege", 1.6);
+    scale("builder", 1.6); scale("line", 1.2); scale("archer", 1.3);
+    prefer.push("smoke", "barrage");
+    notes.push("broken ground, so foot and shot over horse");
+  } else {
+    scale("archer", 1.6); scale("guard", 1.4); scale("builder", 1.3); scale("horse", 0.6);
+    prefer.push("flare", "shield");
+    notes.push("high ground, so shot from above and men who will not be shifted");
+  }
+
+  // -- how it is won ----------------------------------------------------------
+  if (level.victory.mode === "objectives") {
+    scale("line", 1.2); scale("guard", 1.5); scale("builder", 1.8);
+    scale("healer", 1.4); scale("horse", 0.8);
+    prefer.unshift("shield", "levy");
+    notes.push("ground to hold, so sappers and men who hold it");
+  } else if (level.victory.mode === "points") {
+    scale("healer", 1.5); scale("builder", 1.4); scale("archer", 1.2);
+    prefer.unshift("levy", "shield");
+    notes.push("a long reckoning, so staying power");
+  } else {
+    scale("horse", 1.2); scale("skirmisher", 1.2);
+    prefer.unshift("barrage", "charge");
+    notes.push("their nerve to break, so pressure");
+  }
+
+  // -- the clock --------------------------------------------------------------
+  if (level.duration < 12 * 60) {
+    // No time for an engine to crawl into position.
+    scale("siege", 0.5); scale("horse", 1.3);
+    notes.push("a short clock, so nothing slow");
+  }
+
+  return { weights: w, prefer, note: notes.join("; ") };
+}
+
+/** The order to buy types in, repeated: a balanced slice of an army. */
+function cycleFor(weights: Partial<Record<UnitTypeId, number>>): UnitTypeId[] {
+  // Interleaved rather than blocked, so a short budget still buys a mixed
+  // force instead of nothing but the heaviest-weighted type.
+  const out: UnitTypeId[] = [];
+  const totals = new Map<UnitTypeId, number>();
+  for (const id of UNIT_TYPE_IDS) totals.set(id, 0);
+  const target = UNIT_TYPE_IDS.map((id) => weights[id] ?? 0);
+  const sum = target.reduce((a, b) => a + b, 0);
+  if (sum <= 0) return [...UNIT_TYPE_IDS];
+  const steps = 40;
+  for (let k = 0; k < steps; k++) {
+    // Whichever type is furthest behind its share goes next.
+    let best: UnitTypeId | null = null;
+    let worst = -Infinity;
+    UNIT_TYPE_IDS.forEach((id, i) => {
+      if (target[i] <= 0) return;
+      const want = (target[i] / sum) * (k + 1);
+      const have = totals.get(id) ?? 0;
+      const behind = want - have;
+      if (behind > worst) {
+        worst = behind;
+        best = id;
+      }
+    });
+    if (best === null) break;
+    out.push(best);
+    totals.set(best, (totals.get(best) ?? 0) + 1);
+  }
+  return out;
+}
+
+export function suggestArmy(
+  doctrine: DoctrineId, budget: number, advice?: Advice,
+): ArmyList {
   const squads: UnitTypeId[] = [];
   const abilities: AbilityId[] = [];
   const spent = (): number => cost({ doctrine, squads, abilities });
@@ -160,7 +270,14 @@ export function suggestArmy(doctrine: DoctrineId, budget: number): ArmyList {
   // Cheapest-first for THIS doctrine, which is the same as saying "what this
   // doctrine is good at": the price list is where a doctrine's character lives.
   const reserve = Math.round(budget * ABILITY_SHARE);
+  const prefer = advice?.prefer ?? [];
   const byPrice = [...ABILITY_IDS].sort((a, b) => {
+    // What the battlefield asks for comes first; price decides the rest.
+    const pa = prefer.indexOf(a);
+    const pb = prefer.indexOf(b);
+    const ra = pa < 0 ? prefer.length : pa;
+    const rb = pb < 0 ? prefer.length : pb;
+    if (ra !== rb) return ra - rb;
     const d = abilityCost(a, doctrine) - abilityCost(b, doctrine);
     return d !== 0 ? d : ABILITY_IDS.indexOf(a) - ABILITY_IDS.indexOf(b);
   });
@@ -182,12 +299,7 @@ export function suggestArmy(doctrine: DoctrineId, budget: number): ArmyList {
   // -- the army ---------------------------------------------------------------
   // One turn of this cycle is a balanced slice of an army; repeating it scales
   // that shape up to whatever the budget affords.
-  const shape: UnitTypeId[] = [
-    "line", "line", "archer", "line", "skirmisher", "archer",
-    "horse", "line", "scout", "line", "skirmisher", "guard",
-    "healer", "line", "archer", "horse", "builder", "line",
-    "skirmisher", "mage", "line", "archer", "siege", "scout",
-  ];
+  const shape = cycleFor(advice?.weights ?? BASE_WEIGHTS);
   let blocked = 0;
   for (let i = 0; blocked < shape.length; i++) {
     const id = shape[i % shape.length];

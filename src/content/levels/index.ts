@@ -39,6 +39,7 @@ export const theCrossing: LevelDef = {
   budget: 107,
   enemyDoctrine: "defensive",
   suggestedDifficulty: "captain",
+  country: "broken",
   magic: 1,
 };
 
@@ -63,6 +64,7 @@ export const theOpenField: LevelDef = {
   budget: 179,
   enemyDoctrine: "maneuver",
   suggestedDifficulty: "marshal",
+  country: "open",
   magic: 1,
 };
 
@@ -92,6 +94,7 @@ export const theHighGround: LevelDef = {
   budget: 153,
   enemyDoctrine: "defensive",
   suggestedDifficulty: "captain",
+  country: "high",
   magic: 1,
 };
 
@@ -119,6 +122,7 @@ export const theLongVigil: LevelDef = {
   budget: 167,
   enemyDoctrine: "aggressive",
   suggestedDifficulty: "marshal",
+  country: "broken",
   magic: 1.35,
   // Twenty minutes on a points map is exactly where sitting still starts to
   // look clever, so both sides get fresh companies partway through. It punishes

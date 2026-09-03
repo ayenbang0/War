@@ -46,6 +46,15 @@ export type LevelDef = {
   readonly suggestedDifficulty: DifficultyId;
   /** Multiplier on spell strength, for levels that want more or less magic. */
   readonly magic: number;
+  /**
+   * What the going is like, for advising an army.
+   *
+   * The one thing about a battlefield that cannot be read off the rest of this
+   * record: everything else -- how it is won, how big it is, how long there is
+   * -- is already declared above, but whether the ground is open enough for
+   * horse to be worth buying is a fact about the terrain the generator makes.
+   */
+  readonly country: "open" | "broken" | "high";
 };
 
 export const provingGround: LevelDef = {
@@ -66,4 +75,5 @@ export const provingGround: LevelDef = {
   enemyDoctrine: "aggressive",
   suggestedDifficulty: "captain",
   magic: 1,
+  country: "open",
 };
