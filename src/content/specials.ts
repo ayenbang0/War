@@ -14,7 +14,9 @@
  * Anything that was purely good would just be a stat.
  */
 
-export type SpecialId = "brace" | "dodge" | "breakBow" | "dash" | "fortify" | "blink";
+export type SpecialId =
+  | "brace" | "dodge" | "breakBow" | "dash" | "fortify" | "blink"
+  | "entrench" | "triage";
 
 export type Special = {
   readonly id: SpecialId;
@@ -71,6 +73,22 @@ export const SPECIALS: Record<SpecialId, Special> = {
     cooldown: 30,
     uses: 0,
   },
+  entrench: {
+    id: "entrench",
+    name: "Entrench",
+    blurb: "With the enemy coming on, they dig like men who mean to live: works go up in a third of the time, and they do nothing else at all.",
+    duration: 12,
+    cooldown: 25,
+    uses: 0,
+  },
+  triage: {
+    id: "triage",
+    name: "Triage",
+    blurb: "Pulls the worst-wounded around them back from the edge, all at once, when there is no time for anything gentler.",
+    duration: 4,
+    cooldown: 45,
+    uses: 0,
+  },
   blink: {
     id: "blink",
     name: "Withdraw by the Art",
@@ -90,3 +108,9 @@ export const DODGE_CHANCE = 0.5;
 export const FORTIFY_SOAK = 0.95;
 /** How much faster a company at the gallop travels. */
 export const DASH_HASTE = 2;
+/** How much faster sappers dig once they have dug in properly. */
+export const ENTRENCH_SPEED = 3;
+/** Share of missing health triage puts back, on the men who most need it. */
+export const TRIAGE_HEAL = 0.45;
+/** How far from the surgeons triage reaches. */
+export const TRIAGE_RADIUS = 150;

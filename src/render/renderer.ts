@@ -79,6 +79,7 @@ export class Renderer {
     this.drawFields(world, cam, now);
     this.drawRecovering(world, cam, viewer);
     this.drawSpecials(world, cam, now);
+    this.drawWorks(world, cam, now);
     this.drawFog(world, cam, viewer);
   }
 
@@ -837,6 +838,110 @@ export class Renderer {
       ctx.font = Math.max(9, 11 * cam.zoom) + "px ui-monospace, monospace";
       ctx.textAlign = "center";
       ctx.fillText(String(seen.n), sx, sy + 4);
+    }
+    ctx.restore();
+  }
+
+  /**
+   * The works, as a system rather than as a scatter of holes.
+   *
+   * Neighbouring pieces are joined by a drawn wall, which is what turns a row
+   * of separate diggings into a defensive line you can read at a glance -- and
+   * a battlement, where several meet, is drawn with crenellations because it is
+   * the piece worth holding.
+   *
+   * Work in progress is drawn too: a pale outline filling up, with the earth
+   * piling higher as it goes. Digging used to be completely invisible until the
+   * instant a fortification appeared, so the one thing sappers exist to do gave
+   * the player nothing to watch.
+   */
+  private drawWorks(world: World, cam: Camera, now: number): void {
+    const ctx = this.ctx;
+    const t = TILE_SIZE;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    // Walls first, so the pieces sit on top of the line they form.
+    ctx.strokeStyle = "#6b5636";
+    ctx.lineWidth = Math.max(2, 6 * cam.zoom);
+    ctx.globalAlpha = 0.75;
+    ctx.beginPath();
+    for (let i = 0; i < world.works.length; i++) {
+      const a2 = world.works[i];
+      for (let j = i + 1; j < world.works.length; j++) {
+        const b2 = world.works[j];
+        if (b2.player !== a2.player) continue;
+        const dx = b2.tx - a2.tx;
+        const dy = b2.ty - a2.ty;
+        if (dx < -1 || dx > 1 || dy < -1 || dy > 1) continue;
+        ctx.moveTo(cam.worldToScreenX((a2.tx + 0.5) * t), cam.worldToScreenY((a2.ty + 0.5) * t));
+        ctx.lineTo(cam.worldToScreenX((b2.tx + 0.5) * t), cam.worldToScreenY((b2.ty + 0.5) * t));
+      }
+    }
+    ctx.stroke();
+
+    for (const w of world.works) {
+      const sx = cam.worldToScreenX((w.tx + 0.5) * t);
+      const sy = cam.worldToScreenY((w.ty + 0.5) * t);
+      const r = t * 0.42 * cam.zoom;
+      if (sx < -r * 3 || sy < -r * 3 || sx > cam.viewW + r * 3 || sy > cam.viewH + r * 3) continue;
+      const tint = playerColor[w.player] ?? ink;
+
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = "#a8977a";
+      ctx.strokeStyle = "#5c4a2e";
+      ctx.lineWidth = Math.max(1, 1.8 * cam.zoom);
+      if (w.kind === "battlement") {
+        // Crenellations: the piece worth standing on.
+        ctx.beginPath();
+        ctx.rect(sx - r, sy - r * 0.7, r * 2, r * 1.4);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = tint;
+        ctx.globalAlpha = 0.85;
+        for (let k = 0; k < 4; k++) {
+          const bx = sx - r + (k * 2 + 0.4) * (r / 4);
+          ctx.fillRect(bx, sy - r * 1.05, r * 0.4, r * 0.42);
+        }
+      } else if (w.kind === "wall") {
+        ctx.beginPath();
+        ctx.rect(sx - r * 0.9, sy - r * 0.42, r * 1.8, r * 0.84);
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        // A redoubt: the first thing dug, and squarer than the rest.
+        ctx.beginPath();
+        ctx.rect(sx - r * 0.75, sy - r * 0.75, r * 1.5, r * 1.5);
+        ctx.fill();
+        ctx.stroke();
+        ctx.globalAlpha = 0.7;
+        ctx.fillStyle = tint;
+        ctx.fillRect(sx - r * 0.3, sy - r * 0.3, r * 0.6, r * 0.6);
+      }
+    }
+
+    // Work in progress: earth piling up, and a shovel-stroke of dust.
+    for (const b of world.building) {
+      const sx = cam.worldToScreenX((b.tx + 0.5) * t);
+      const sy = cam.worldToScreenY((b.ty + 0.5) * t);
+      const r = t * 0.42 * cam.zoom;
+      const p = Math.max(0, Math.min(1, b.progress));
+      ctx.globalAlpha = 0.35 + 0.4 * p;
+      ctx.fillStyle = "#a8977a";
+      ctx.fillRect(sx - r * 0.85, sy + r * 0.6 - r * 1.2 * p, r * 1.7, r * 1.2 * p);
+      ctx.globalAlpha = 0.8;
+      ctx.strokeStyle = "#5c4a2e";
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = Math.max(1, 1.6 * cam.zoom);
+      ctx.strokeRect(sx - r * 0.85, sy - r * 0.6, r * 1.7, r * 1.2);
+      ctx.setLineDash([]);
+      // A pick swinging, so it reads as men working rather than a ghost box.
+      const swing = Math.sin(now * 7 + b.tx) * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(sx - r * 0.2, sy + r * 0.2);
+      ctx.lineTo(sx - r * 0.2 + Math.cos(-1 + swing) * r * 0.8, sy + r * 0.2 + Math.sin(-1 + swing) * r * 0.8);
+      ctx.stroke();
     }
     ctx.restore();
   }

@@ -303,6 +303,9 @@ function frame(now: number): void {
       // ticks would otherwise see only the last one's blows.
       effects.ingest(world.events, now / 1000);
       effects.ingestSpecials(world.specialEvents, now / 1000);
+      // A company that has just ceased to exist leaves nothing behind: no dust
+      // from men who are no longer marching, no halo over empty ground.
+      for (const id of world.disbanded) effects.forgetGroup(id);
       accumulator -= TICK_DT;
       steps++;
     }
@@ -376,7 +379,7 @@ function frame(now: number): void {
     for (const g of world.groups) {
       if (g.stance !== "move" && g.stance !== "attack" && g.stance !== "retreat") continue;
       if (world.liveCount(g) === 0) continue;
-      effects.kickDust(g.anchorX, g.anchorY, clock, Math.max(24, g.radius));
+      effects.kickDust(g.anchorX, g.anchorY, clock, Math.max(24, g.radius), g.id);
     }
   }
   effects.draw(ctx, cam, clock);

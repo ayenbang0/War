@@ -46,8 +46,8 @@ import {
 } from "./magic.ts";
 import { ABILITIES, type AbilityId } from "../content/abilities.ts";
 import {
-  BRACE_SLOWDOWN, BRACE_SOAK, DASH_HASTE, DODGE_CHANCE, FORTIFY_SOAK, SPECIALS,
-  type SpecialId,
+  BRACE_SLOWDOWN, BRACE_SOAK, DASH_HASTE, DODGE_CHANCE, ENTRENCH_SPEED, FORTIFY_SOAK,
+  SPECIALS, TRIAGE_HEAL, TRIAGE_RADIUS, type SpecialId,
 } from "../content/specials.ts";
 
 /** A commander's ability standing on the field. */
@@ -320,6 +320,25 @@ export class World {
    * CombatEvent.
    */
   readonly specialEvents: { kind: SpecialId; x: number; y: number; player: number }[] = [];
+  /** Companies that ceased to exist this tick. Presentation only, like events. */
+  readonly disbanded: number[] = [];
+  /**
+   * The works each side has thrown up, as a NETWORK rather than scattered
+   * holes.
+   *
+   * Sappers extend from what is already standing, so a position grows outward
+   * from its first redoubt into a connected system: a wall where the works run
+   * in a line, a battlement where several meet. What a piece becomes is decided
+   * by how many friendly works already touch it, which means the shape of the
+   * base is a consequence of where it was dug rather than a thing chosen from
+   * a menu.
+   */
+  readonly works: {
+    tx: number; ty: number; player: number; kind: "redoubt" | "wall" | "battlement";
+    builtAt: number;
+  }[] = [];
+  /** Works under construction, for the digging animation. Presentation only. */
+  readonly building: { tx: number; ty: number; player: number; progress: number }[] = [];
   readonly workings: Working[] = [];
   /**
    * Commander's abilities currently standing on the field.
@@ -607,6 +626,14 @@ export class World {
       this.soldiers.slot[m] = -1;
     }
     this.groups.splice(at, 1);
+    // Told to the presentation layer so it can drop anything this company left
+    // hanging in the air. Cleared with the other per-tick event lists.
+    this.disbanded.push(dying.id);
+    // Workings this company was sustaining stop the instant it is gone. A
+    // healing circle tended by nobody is a circle tended by nobody.
+    for (let i = this.workings.length - 1; i >= 0; i--) {
+      if (this.workings[i].group === dying.id) this.workings.splice(i, 1);
+    }
   }
 
   /**
@@ -784,6 +811,7 @@ export class World {
     // which runs AFTER updateSpecials and so wiped every flash before a frame
     // could ever draw it.
     this.specialEvents.length = 0;
+    this.disbanded.length = 0;
     this.castSpells();
     this.updateAmbushes();
     this.updateSpecials();
@@ -1574,6 +1602,7 @@ export class World {
 
       this.workings.push({
         spell: choose,
+        group: g.id,
         player: g.player,
         x: tx,
         y: ty,
@@ -2092,6 +2121,16 @@ export class World {
           // overwhelmed, and it is close to a last resort.
           now = inContact && (nerve < 0.45 || this.outnumberedAt(g, 1.6));
           break;
+        case "entrench":
+          // Digging in earnest is for when there is a reason to: something is
+          // coming, and this ground is worth keeping.
+          now = g.stance === "hold" && this.enemyWithin(g, 900);
+          break;
+        case "triage":
+          // Called when there is no time for anything gentler -- several men
+          // near the edge at once.
+          now = this.badlyWoundedNear(g) >= 3;
+          break;
         case "blink":
           // Once, and only when they are about to be destroyed.
           now = inContact && (nerve < 0.4 || g.losses > g.raisedWith * 0.35);
@@ -2104,6 +2143,17 @@ export class World {
       g.specialUntil = this.tick + spec.duration * TICK_RATE;
       this.specialEvents.push({ kind: id, x: g.anchorX, y: g.anchorY, player: g.player });
 
+      if (id === "triage") {
+        // All at once, on the men who most need it, rather than the steady
+        // trickle a surgeon's ordinary working provides.
+        for (let i = 0; i < s.count; i++) {
+          if (s.alive[i] !== 1 || s.player[i] !== g.player) continue;
+          if (d2(g.anchorX, g.anchorY, s.x[i], s.y[i]) > TRIAGE_RADIUS * TRIAGE_RADIUS) continue;
+          const missing = s.maxHp[i] - s.hp[i];
+          if (missing <= 0) continue;
+          s.hp[i] = min(s.maxHp[i], s.hp[i] + missing * TRIAGE_HEAL);
+        }
+      }
       if (id === "blink") g.blinked = true;
       if (id === "breakBow") g.bowsBroken = true;
 
@@ -2141,6 +2191,57 @@ export class World {
       if (this.soldiers.group[e.victim] === g.id) return true;
     }
     return false;
+  }
+
+  /**
+   * The next piece of ground to dig.
+   *
+   * Prefers a tile ADJACENT to works this side already holds, so a position
+   * grows outward into one connected system instead of a scatter of unrelated
+   * holes across the field. Ties break on tile index, never on iteration order.
+   */
+  private digSite(g: Group): { tx: number; ty: number } {
+    const here = { tx: (g.anchorX / TILE_SIZE) | 0, ty: (g.anchorY / TILE_SIZE) | 0 };
+    let best: { tx: number; ty: number } | null = null;
+    let bestKey = Infinity;
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const tx = here.tx + dx;
+        const ty = here.ty + dy;
+        if (!this.terrain.fortifiableAt(tx, ty)) continue;
+        if (this.worksTouching(tx, ty, g.player) === 0) continue;
+        const key = ty * this.terrain.width + tx;
+        if (key < bestKey) {
+          bestKey = key;
+          best = { tx, ty };
+        }
+      }
+    }
+    return best ?? here;
+  }
+
+  /** Works belonging to this side on the eight tiles around this one. */
+  private worksTouching(tx: number, ty: number, player: number): number {
+    let n = 0;
+    for (const w of this.works) {
+      if (w.player !== player) continue;
+      const dx = w.tx - tx;
+      const dy = w.ty - ty;
+      if (dx === 0 && dy === 0) continue;
+      if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1) n++;
+    }
+    return n;
+  }
+
+  /** How many of this company's men are close to going down. */
+  private badlyWoundedNear(g: Group): number {
+    const s = this.soldiers;
+    let n = 0;
+    for (const m of g.members) {
+      if (s.alive[m] !== 1) continue;
+      if (s.hp[m] < s.maxHp[m] * 0.45) n++;
+    }
+    return n;
   }
 
   /** Any enemy this close to any of its men? */
@@ -2342,8 +2443,21 @@ export class World {
    * Companies are walked in order and members are sorted, so the tile a company
    * works on is a pure function of hashed state.
    */
+  /** Record how far along a piece of work is, for the picture. */
+  private noteBuilding(tx: number, ty: number, player: number, progress: number): void {
+    for (const b of this.building) {
+      if (b.tx === tx && b.ty === ty && b.player === player) {
+        b.progress = progress;
+        return;
+      }
+    }
+    this.building.push({ tx, ty, player, progress });
+  }
+
   private updateEngineering(): void {
     const s = this.soldiers;
+    // Rebuilt each tick from whoever is actually digging.
+    this.building.length = 0;
     for (const g of this.groups) {
       let diggers = 0;
       let breakers = 0;
@@ -2361,13 +2475,21 @@ export class World {
         diggers > 0 && g.stance === "hold" &&
         this.tick - g.lastContact > TICK_RATE * 3
       ) {
-        const tx = (g.anchorX / TILE_SIZE) | 0;
-        const ty = (g.anchorY / TILE_SIZE) | 0;
+        const site = this.digSite(g);
+        const tx = site.tx;
+        const ty = site.ty;
         if (this.terrain.fortifiableAt(tx, ty)) {
-          g.buildTicks += diggers;
+          g.buildTicks += diggers * (this.hasSpecial(g, "entrench") ? ENTRENCH_SPEED : 1);
+          this.noteBuilding(tx, ty, g.player, g.buildTicks / FORTIFY_WORK);
           if (g.buildTicks >= FORTIFY_WORK) {
             g.buildTicks = 0;
             if (this.terrain.fortify(tx, ty)) {
+              // What it becomes depends on what it joins onto: a lone hole is a
+              // redoubt, one that continues a line is wall, and one that ties
+              // several together is a battlement worth standing on.
+              const touching = this.worksTouching(tx, ty, g.player);
+              const kind = touching >= 2 ? "battlement" : touching === 1 ? "wall" : "redoubt";
+              this.works.push({ tx, ty, player: g.player, kind, builtAt: this.tick });
               // The works are more than cover in the terrain: they belong to
               // whoever dug them. Men fighting from behind their own stakes are
               // steadier and harder to shift, and men assaulting them fight at

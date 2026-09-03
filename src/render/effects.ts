@@ -38,7 +38,7 @@ type Impact = { x: number; y: number; born: number; player: number; lethal: bool
 type Spark = { x: number; y: number; vx: number; vy: number; born: number; life: number; hot: boolean };
 
 /** Dust kicked up by men on the move. */
-type Dust = { x: number; y: number; born: number; r: number };
+type Dust = { x: number; y: number; born: number; r: number; group: number };
 
 /** The moment a company does something for itself, drawn once and sharply. */
 type Flash = { x: number; y: number; born: number; kind: string; player: number };
@@ -81,9 +81,21 @@ export class Effects {
   }
 
   /** Men on the move scuff the ground. Called by the renderer, not the sim. */
-  kickDust(x: number, y: number, now: number, radius: number): void {
+  /**
+   * Forget everything a company left behind, the moment it ceases to exist.
+   *
+   * Dust hangs for over a second, so a company wiped out went on kicking up a
+   * cloud from ground where there was nobody left to kick anything -- the
+   * marching animation of an army that no longer existed.
+   */
+  forgetGroup(id: number): void {
+    if (this.dust.length > 0) this.dust = this.dust.filter((d) => d.group !== id);
+  }
+
+  kickDust(x: number, y: number, now: number, radius: number, group: number): void {
     if (this.dust.length > MAX_EFFECTS) return;
     this.dust.push({
+      group,
       x: x + (this.rand() - 0.5) * radius,
       y: y + (this.rand() - 0.5) * radius,
       born: now,

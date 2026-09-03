@@ -14,6 +14,8 @@
 
 import { atan2, clamp, cos, min, sin, sqrt } from "./math.ts";
 import type { Group, World } from "./world.ts";
+import { TILE_SIZE } from "./terrain.ts";
+import { UNIT_TYPES } from "../content/unit-types.ts";
 import { COMMANDERS, type Commander } from "../content/commanders.ts";
 
 /** Ticks between decisions. Re-planning every tick makes squads twitch. */
@@ -181,6 +183,21 @@ export class ArmyAI {
 
       case "defensive": {
         if (target && this.near(q, target, 420)) return this.assault(world, q, target, tick);
+        // Sappers dig where digging is worth doing, and the works they raise
+        // then become ground worth holding for everyone else -- which is how a
+        // position grows into a base rather than a scatter of holes.
+        if (this.canDig(world, q)) {
+          world.orders.issue(
+            { kind: "hold", squad: q.id, x: q.anchorX, y: q.anchorY, radius: 180 },
+            this.player,
+            tick,
+          );
+          return true;
+        }
+        // Standing still is a decision, and it needs a reason: an objective
+        // under your feet, or your own works to fight from. Otherwise go and
+        // take something. Holding empty ground is refusing to play.
+        if (!this.worthHolding(world, q)) return this.advance(world, q, tick);
         if (q.shape !== "square" && rng.chance(0.4)) {
           world.orders.issue({ kind: "formation", squad: q.id, shape: "square" }, this.player, tick);
           return true;
@@ -357,14 +374,34 @@ export class ArmyAI {
     return dx * dx + dy * dy <= within * within;
   }
 
-  /** Push toward where the enemy was last seen, or the far side of the map. */
+  /**
+   * Push toward where the enemy was last seen, or go looking.
+   *
+   * NEVER returns false for want of somewhere to go. It used to: once a company
+   * reached the last known position and found nothing there, this returned
+   * false, orderGroup issued nothing at all, and the company simply stood on
+   * empty ground for the rest of the battle. An army that stops having
+   * intentions is not a cautious army, it is a broken one.
+   */
   private advance(world: World, q: Group, tick: number): boolean {
-    const tx = this.hasContact ? this.lastKnownX : world.terrain.worldWidth - this.homeX(world);
-    const ty = this.hasContact ? this.lastKnownY : world.terrain.worldHeight * 0.5;
-    const dx = tx - q.anchorX;
-    const dy = ty - q.anchorY;
+    let tx = this.hasContact ? this.lastKnownX : world.terrain.worldWidth - this.homeX(world);
+    let ty = this.hasContact ? this.lastKnownY : world.terrain.worldHeight * 0.5;
+    let dx = tx - q.anchorX;
+    let dy = ty - q.anchorY;
+    if (dx * dx + dy * dy < 120 * 120) {
+      // Arrived, and nothing here. Go and look somewhere else rather than
+      // standing about: the enemy is somewhere, and the ground worth holding is
+      // a better guess than the ground under your feet.
+      const sweep = this.sweepTarget(world, q);
+      tx = sweep.x;
+      ty = sweep.y;
+      dx = tx - q.anchorX;
+      dy = ty - q.anchorY;
+      // The last known position is stale if we stood on it and found nobody.
+      this.hasContact = false;
+    }
     const d = sqrt(dx * dx + dy * dy);
-    if (d < 120) return false;
+    if (d < 1e-3) return false;
     const step = min(d, 900);
     world.orders.issue(
       { kind: "move", squad: q.id, path: [q.anchorX + (dx / d) * step, q.anchorY + (dy / d) * step] },
@@ -372,6 +409,61 @@ export class ArmyAI {
       tick,
     );
     return true;
+  }
+
+  /**
+   * Somewhere worth going when there is nothing in front of you.
+   *
+   * Ground first -- a control point is by definition ground somebody wants --
+   * then the enemy's own side of the field. Companies are spread across the
+   * candidates by id so an army searching does not walk to one spot in a
+   * column, which is both useless and the easiest thing in the world to ambush.
+   */
+  private sweepTarget(world: World, q: Group): { x: number; y: number } {
+    const points = world.controlPoints;
+    if (points.length > 0) {
+      const p = points[q.id % points.length];
+      return { x: p.x, y: p.y };
+    }
+    const enemyX = world.terrain.worldWidth - this.homeX(world);
+    const lanes = 3;
+    const lane = (q.id % lanes) + 1;
+    return {
+      x: enemyX === 0 ? world.terrain.worldWidth * 0.15 : world.terrain.worldWidth * 0.85,
+      y: (world.terrain.worldHeight * lane) / (lanes + 1),
+    };
+  }
+
+  /**
+   * Is standing here worth doing?
+   *
+   * Holding is a real decision when there is something under your feet to hold
+   * -- an objective, or works your own sappers have raised. Holding empty
+   * ground in the middle of nowhere is just refusing to play, and it was what
+   * the defensive posture did by default.
+   */
+  private worthHolding(world: World, q: Group): boolean {
+    for (const p of world.controlPoints) {
+      const dx = p.x - q.anchorX;
+      const dy = p.y - q.anchorY;
+      if (dx * dx + dy * dy <= (p.radius + 220) * (p.radius + 220)) return true;
+    }
+    for (const w of world.works) {
+      if (w.player !== this.player) continue;
+      const dx = (w.tx + 0.5) * TILE_SIZE - q.anchorX;
+      const dy = (w.ty + 0.5) * TILE_SIZE - q.anchorY;
+      if (dx * dx + dy * dy <= 320 * 320) return true;
+    }
+    return false;
+  }
+
+  /** Does this company carry sappers? They have somewhere to be. */
+  private canDig(world: World, q: Group): boolean {
+    for (const m of q.members) {
+      if (world.soldiers.alive[m] !== 1) continue;
+      if (UNIT_TYPES[world.typeOf(m)].builds) return true;
+    }
+    return false;
   }
 
   private homeX(world: World): number {

@@ -1645,6 +1645,9 @@ section("magic");
       if (spell) {
         w.workings.push({
           spell,
+          // Not sustained by any company: this fixture is testing the working
+          // itself, not who is keeping it up.
+          group: -1,
           player: spell === "ward" ? 0 : 1,
           x: 600, y: 600, radius: 300,
           until: 99999, power: 1,
@@ -2257,6 +2260,71 @@ section("unit specials");
       w.liveCount(g) === 0 || g.anchorX < startX - 500,
       "from " + startX.toFixed(0) + " to " + g.anchorX.toFixed(0));
     check("and can only do it once", g.specialUses <= 1, "uses " + g.specialUses);
+  }
+}
+
+// -- 8i5. the enemy always has something in mind -------------------------------
+
+section("the enemy has intentions");
+{
+  // The complaint this encodes: companies that reached the last known enemy
+  // position, found nothing, and then stood on empty ground for the rest of the
+  // battle. Measured as the share of enemy companies sitting idle and pathless
+  // late in a match with no player to fight.
+  const w = new World({
+    seed: 301, tilesWide: 120, tilesHigh: 90, soldierCapacity: 1024,
+    aiPlayers: [1], duration: 900,
+  });
+  for (let i = 0; i < 60; i++) {
+    w.spawnSoldier(1, i % 3 === 0 ? "line" : i % 3 === 1 ? "archer" : "horse",
+      5000 + (i % 8) * 16, 1200 + ((i / 8) | 0) * 16, M.PI);
+  }
+  // A token enemy far away, so there is something to look for but nothing to
+  // find nearby.
+  for (let i = 0; i < 6; i++) w.spawnSoldier(0, "line", 300, 3000 + i * 14, 0);
+
+  let worstIdle = 0;
+  for (let t = 0; t < TICK_RATE * 240; t++) {
+    w.step();
+    if (t % (TICK_RATE * 20) !== 0 || t < TICK_RATE * 60) continue;
+    const mob = w.groups.filter((g) => g.player === 1 && w.liveCount(g) > 0);
+    if (mob.length === 0) continue;
+    const idle = mob.filter((g) => g.stance === "idle" && g.path.length === 0).length;
+    worstIdle = M.max(worstIdle, idle / mob.length);
+  }
+  check("the enemy never just stops and does nothing",
+    worstIdle < 0.35, (worstIdle * 100).toFixed(0) + "% of its companies idle at the worst moment");
+
+  // Holding must be justified: on an objective, or on its own works.
+  {
+    const w2 = new World({
+      seed: 302, tilesWide: 120, tilesHigh: 90, soldierCapacity: 1024,
+      aiPlayers: [1], duration: 900,
+      controlPoints: [{ id: 1, name: "The Ford", x: 2600, y: 2000, radius: 200 }],
+    });
+    for (let i = 0; i < 40; i++) w2.spawnSoldier(1, "line", 5000 + (i % 6) * 16, 1200 + ((i / 6) | 0) * 16, M.PI);
+    for (let i = 0; i < 6; i++) w2.spawnSoldier(0, "line", 300, 3000 + i * 14, 0);
+    let holdingNowhere = 0;
+    let holds = 0;
+    for (let t = 0; t < TICK_RATE * 200; t++) {
+      w2.step();
+      if (t % (TICK_RATE * 15) !== 0 || t < TICK_RATE * 60) continue;
+      for (const g of w2.groups) {
+        if (g.player !== 1 || g.stance !== "hold" || w2.liveCount(g) === 0) continue;
+        holds++;
+        const onPoint = w2.controlPoints.some((p) => {
+          const dx = p.x - g.anchorX;
+          const dy = p.y - g.anchorY;
+          return dx * dx + dy * dy <= (p.radius + 400) * (p.radius + 400);
+        });
+        const digging = g.members.some((m) =>
+          w2.soldiers.alive[m] === 1 && UNIT_TYPES[w2.typeOf(m)].builds);
+        if (!onPoint && !digging) holdingNowhere++;
+      }
+    }
+    check("and holds ground for a reason when it holds at all",
+      holds === 0 || holdingNowhere / holds < 0.4,
+      holdingNowhere + " of " + holds + " holds were on nothing in particular");
   }
 }
 

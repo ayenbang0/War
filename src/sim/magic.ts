@@ -163,6 +163,8 @@ export const SUPPORTIVE_SPELLS: readonly SpellId[] = ["ward", "valour", "mend"];
 export type Working = {
   readonly spell: SpellId;
   readonly player: number;
+  /** The company sustaining it. A working outlives nothing that made it. */
+  readonly group: number;
   readonly x: number;
   readonly y: number;
   readonly radius: number;
