@@ -772,20 +772,40 @@ export class Renderer {
           ctx.stroke();
         }
       } else if (kind === "dash") {
-        // Speed lines, laid out behind the direction of travel.
-        ctx.globalAlpha = 0.8;
+        // Speed lines, and they must ALWAYS be behind the horses.
+        //
+        // Two things had them running ahead. The heading came from g.facing --
+        // where the company is POINTING, which is not where it is going the
+        // moment it wheels or keeps its front to an enemy while moving off --
+        // so the streaks could swing round in front. And they began inside the
+        // formation radius, so with the men spread out to the full radius the
+        // lines overlapped the leaders and read as outrunning them.
+        //
+        // The heading now comes from the route the company is actually walking,
+        // and the streaks start beyond the rear edge of the formation, so
+        // nothing is ever drawn in front of a horse.
+        let head = g.facing;
+        if (g.path.length >= 2) {
+          const ax = g.path[0] - g.anchorX;
+          const ay = g.path[1] - g.anchorY;
+          if (ax * ax + ay * ay > 1) head = Math.atan2(ay, ax);
+        }
+        const back = head + Math.PI;
+        const cb = Math.cos(back);
+        const sb = Math.sin(back);
         ctx.strokeStyle = tint;
         ctx.lineWidth = Math.max(2.5, 5 * cam.zoom);
-        const back = g.facing + Math.PI;
         for (let k = -2; k <= 2; k++) {
           const off = k * 7 * cam.zoom;
-          const px = -Math.sin(g.facing) * off;
-          const py = Math.cos(g.facing) * off;
-          const len = (58 + Math.abs(k) * -8) * cam.zoom;
+          const px = -Math.sin(head) * off;
+          const py = Math.cos(head) * off;
+          // Clear of the whole formation before the first pixel is drawn.
+          const start = r * 1.05;
+          const len = (58 - Math.abs(k) * 8) * cam.zoom;
           ctx.globalAlpha = 1 - Math.abs(k) * 0.18;
           ctx.beginPath();
-          ctx.moveTo(sx + px + Math.cos(back) * r * 0.6, sy + py + Math.sin(back) * r * 0.6);
-          ctx.lineTo(sx + px + Math.cos(back) * (r * 0.6 + len), sy + py + Math.sin(back) * (r * 0.6 + len));
+          ctx.moveTo(sx + px + cb * start, sy + py + sb * start);
+          ctx.lineTo(sx + px + cb * (start + len), sy + py + sb * (start + len));
           ctx.stroke();
         }
       }

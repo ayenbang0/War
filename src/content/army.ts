@@ -8,7 +8,7 @@
 
 import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "./unit-types.ts";
 import { DOCTRINES, type DoctrineId } from "./doctrines.ts";
-import { ABILITIES, abilityCost, type AbilityId } from "./abilities.ts";
+import { ABILITIES, ABILITY_IDS, abilityCost, type AbilityId } from "./abilities.ts";
 
 /**
  * Points available to each side.
@@ -31,6 +31,14 @@ export const MAX_SQUADS = 45;
 /** How many times one ability may be bought. Twice is a deep magazine, not a
  *  different strategy. */
 export const MAX_OF_ONE_ABILITY = 2;
+/**
+ * Share of the budget a suggested army sets aside for the reserve.
+ *
+ * About a fifth: enough for a spread of abilities plus a second charge of the
+ * cheap ones, without gutting the force that has to hold the ground while you
+ * use them.
+ */
+const ABILITY_SHARE = 0.2;
 
 export type ArmyList = {
   readonly doctrine: DoctrineId;
@@ -118,4 +126,96 @@ export function defaultArmy(doctrine: DoctrineId = "maneuver", budget = DEFAULT_
     spent += c;
   }
   return { doctrine, squads };
+}
+
+/**
+ * A complete, balanced setup: troops AND the abilities to go with them.
+ *
+ * `defaultArmy` above fills a wish list until the money runs out, which is fine
+ * for a fixture but makes a poor suggestion: it buys no abilities at all, and
+ * it stops the moment the next thing on the list is unaffordable, leaving
+ * points on the table that the player then has to notice and spend themselves.
+ *
+ * This does three things instead.
+ *
+ * FIRST it sets aside a share for the reserve, because an ability bought is a
+ * company not bought and the trade has to be made deliberately rather than by
+ * whatever happens to be left over.
+ *
+ * SECOND it buys in a combined-arms RATIO rather than off a fixed list -- a
+ * core of foot, ranged support behind it, horse to get round a flank, eyes,
+ * and a specialist or two -- so the suggestion is an army rather than a pile.
+ *
+ * THIRD it spends the remainder down to nothing it can legally spend. Whatever
+ * cannot be spent at the end is genuinely unspendable: every per-type cap is
+ * full, or the cheapest company left costs more than the change.
+ */
+export function suggestArmy(doctrine: DoctrineId, budget: number): ArmyList {
+  const squads: UnitTypeId[] = [];
+  const abilities: AbilityId[] = [];
+  const spent = (): number => cost({ doctrine, squads, abilities });
+  const legal = (): boolean => validate({ doctrine, squads, abilities }, budget).ok;
+
+  // -- the reserve ------------------------------------------------------------
+  // Cheapest-first for THIS doctrine, which is the same as saying "what this
+  // doctrine is good at": the price list is where a doctrine's character lives.
+  const reserve = Math.round(budget * ABILITY_SHARE);
+  const byPrice = [...ABILITY_IDS].sort((a, b) => {
+    const d = abilityCost(a, doctrine) - abilityCost(b, doctrine);
+    return d !== 0 ? d : ABILITY_IDS.indexOf(a) - ABILITY_IDS.indexOf(b);
+  });
+  // A spread of different abilities first; only then a second charge of any.
+  // Checked against the reserve and the per-ability cap DIRECTLY rather than
+  // through validate(): at this point no troops have been bought yet, so a full
+  // validation fails on "an army needs at least one squad" and every ability
+  // was being popped straight back off. The suggestion arrived with an empty
+  // reserve every time.
+  for (let pass = 0; pass < MAX_OF_ONE_ABILITY; pass++) {
+    for (const id of byPrice) {
+      const price = abilityCost(id, doctrine);
+      if (spent() + price > reserve) continue;
+      if (abilities.filter((a) => a === id).length >= MAX_OF_ONE_ABILITY) continue;
+      abilities.push(id);
+    }
+  }
+
+  // -- the army ---------------------------------------------------------------
+  // One turn of this cycle is a balanced slice of an army; repeating it scales
+  // that shape up to whatever the budget affords.
+  const shape: UnitTypeId[] = [
+    "line", "line", "archer", "line", "skirmisher", "archer",
+    "horse", "line", "scout", "line", "skirmisher", "guard",
+    "healer", "line", "archer", "horse", "builder", "line",
+    "skirmisher", "mage", "line", "archer", "siege", "scout",
+  ];
+  let blocked = 0;
+  for (let i = 0; blocked < shape.length; i++) {
+    const id = shape[i % shape.length];
+    squads.push(id);
+    if (legal()) {
+      blocked = 0;
+    } else {
+      squads.pop();
+      blocked++;
+    }
+  }
+
+  // -- the change -------------------------------------------------------------
+  // Dearest first, so the last of the money buys something that matters rather
+  // than a trail of the cheapest thing on the board.
+  const byCostDown = [...UNIT_TYPE_IDS].sort((a, b) => UNIT_TYPES[b].cost - UNIT_TYPES[a].cost);
+  for (;;) {
+    let added = false;
+    for (const id of byCostDown) {
+      squads.push(id);
+      if (legal()) {
+        added = true;
+      } else {
+        squads.pop();
+      }
+    }
+    if (!added) break;
+  }
+
+  return { doctrine, squads, abilities };
 }

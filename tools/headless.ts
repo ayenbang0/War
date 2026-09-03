@@ -59,7 +59,7 @@ import { COMMANDERS, COMMANDER_IDS, type CommanderId } from "../src/content/comm
 import { ABILITIES, ABILITY_IDS, abilityCost } from "../src/content/abilities.ts";
 import { BRACE_SLOWDOWN, BRACE_SOAK, FORTIFY_SOAK, SPECIALS } from "../src/content/specials.ts";
 import { DOCTRINES, DOCTRINE_IDS } from "../src/content/doctrines.ts";
-import { DEFAULT_BUDGET, MAX_SQUADS, cost, defaultArmy, validate } from "../src/content/army.ts";
+import { DEFAULT_BUDGET, MAX_SQUADS, cost, defaultArmy, suggestArmy, validate } from "../src/content/army.ts";
 import { LEVELS } from "../src/content/levels/index.ts";
 import { statsFor } from "../src/sim/world.ts";
 import { OFFENSIVE_SPELLS, SPELLS, SPELL_IDS, SUPPORTIVE_SPELLS, hexPenalty, wardSoak, type SpellId } from "../src/sim/magic.ts";
@@ -1481,6 +1481,26 @@ section("army");
   const army = defaultArmy();
   const v = validate(army);
   check("the default army is legal", v.ok, v.problems.join("; "));
+  // The suggestion is a whole setup, not a pile of troops.
+  for (const d of DOCTRINE_IDS) {
+    for (const b of [107, 141, 179]) {
+      const sug = suggestArmy(d, b);
+      const v = validate(sug, b);
+      check("a suggested " + d + " army at " + b + " is legal",
+        v.ok, v.problems.join("; "));
+      check("  and brings a reserve", (sug.abilities ?? []).length >= 2,
+        (sug.abilities ?? []).join(","));
+      // "Uses all unit credits": whatever is left must be genuinely
+      // unspendable -- nothing legal can be added to it at all.
+      let spendable = false;
+      for (const id of UNIT_TYPE_IDS) {
+        if (validate({ ...sug, squads: [...sug.squads, id] }, b).ok) spendable = true;
+      }
+      check("  and spends everything it legally can",
+        !spendable, v.spent + "/" + b + " with " + (b - v.spent) + " left over");
+    }
+  }
+
   check("the default army spends most of its budget",
     v.spent > DEFAULT_BUDGET * 0.75 && v.spent <= DEFAULT_BUDGET,
     v.spent + "/" + DEFAULT_BUDGET);

@@ -24,7 +24,7 @@ const ABILITY_MARK: Record<AbilityId, string> = {
   flare: "☀",
   levy: "⚇",
 };
-import { MAX_SQUADS, cost, validate, type ArmyList } from "../content/army.ts";
+import { MAX_SQUADS, cost, suggestArmy, validate, type ArmyList } from "../content/army.ts";
 import { LEVELS, type LevelDef } from "../content/levels/index.ts";
 
 export type Setup = {
@@ -277,17 +277,14 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
       "Then set your men out in your own ground and press ENTER to begin."));
 
     auto.onclick = () => {
+      // A whole setup, not just troops: the reserve is part of an army, and a
+      // suggestion that leaves the ability row empty and points unspent is a
+      // suggestion the player has to finish themselves.
+      const whole = suggestArmy(doctrine, level.budget);
       picked.length = 0;
-      // Fill greedily against the budget and the per-type caps, so the
-      // suggestion is always legal even after costs are retuned.
-      const wish: UnitTypeId[] = [
-        "line", "line", "archer", "scout", "line", "skirmisher", "archer",
-        "horse", "line", "mage", "skirmisher", "guard", "horse", "siege", "archer",
-      ];
-      for (const id of wish) {
-        picked.push(id);
-        if (!validate({ doctrine, squads: picked }, level.budget).ok) picked.pop();
-      }
+      picked.push(...whole.squads);
+      bought.length = 0;
+      bought.push(...(whole.abilities ?? []));
       refresh();
     };
 
