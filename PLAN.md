@@ -13,6 +13,15 @@ Open questions for the user are collected in **§A.7 / §B.12**. Everything mark
 
 ---
 
+> **Amendments from the user, 2026-11-25 (these override the plan where they differ):**
+> 1. **Start from nothing** — see §A.5.
+> 2. **Story only.** "The game should ONLY be the storyline now, with the battles in between. All previous content should be used but not as a sandbox battler, it is a full on game." The standalone Play/setup battler, the old Marchwarden Campaign mode and skirmish point-buy are removed as modes once battles launch from the story (K5). Every unit, battlefield, captain, doctrine and reserve is reused inside the story. This overrides §B.4/§B.12.3's "skirmish keeps point-buy".
+> 3. **Opening cutscene, then a tutorial of every control.** The game opens with a story cutscene, then a tutorial that teaches all gestures and controls (battle pen vocabulary, kingdom map, city view, camera, time, keys).
+> 4. **Twice the map.** Twice the plan's region count (72 holdings instead of 36): twice the cities and areas to explore, with exploration events and special upgrades found there.
+> 5. **Armies on the map.** The fallen king's armies are visible on the kingdom map (K4).
+> 6. **A city level.** Each city can be zoomed into, one level down, to build buildings, manage politics, farms and so on. Layers become Kingdom → City → Battle (army) → Troop.
+> How these fold into the phases is in §B.11a.
+
 # Part A — Storyline: The Exile of Rimaros
 
 ## A.1 Premise (user-supplied, fixed)
@@ -205,6 +214,15 @@ BattleResult = { winner, per-squad survivors (hp fraction & dead), morale out, c
 | **K12 Netplay readiness** | kingdom lockstep verification | `kingdom-lockstep.ts` green |
 
 **Dependencies / risks:** (1) Phase 8 is unfinished and Act IV needs it — scope-cut option: capital siege as an *assault with fixed walls* if Phase 8 slips; (2) `main.ts` monolith (512 lines) must be split before K2; (3) World currently assumes point-buy armies and fresh-hp squads — the additive config in B.9 is the only intrusion; (4) economy balance is the long pole — build headless sweeps early; (5) scope: 40-node map × 8 factions in a pen-only UI risks clutter — hard caps on armies.
+
+## B.11a Phases after the 2026-11-25 amendments
+| Phase | Adds to the plan's phase | Runnable proof |
+|---|---|---|
+| **K3a Twice the map, exploration** | 72 holdings; unexplored holdings hidden until scouted; exploration events and special upgrades (data-driven) | headless: content valid, 10-year hash deterministic; e2e explores a holding and receives its event |
+| **K3b City view** | a city layer zoomed into from any owned holding: building plots laid out, farms, politics panel (unrest/loyalty hooks for K6); economy panels move there from the region card | e2e zooms into a city, builds, sows, zooms back out |
+| **K4** | armies drawn on the kingdom map (the plan's tokens), as asked | as planned |
+| **K5** | story-only cutover: Play/setup, skirmish and the old Campaign mode removed; every battle comes from the story | as planned + no sandbox entry point remains |
+| **K9** | opening cutscene; tutorial of every control (battle, kingdom, city) | as planned + e2e walks the cutscene and the tutorial |
 
 ## B.12 Open design questions
 1. Kingdom time: **real-time pausable** (recommended: matches "real-time only" spec and lockstep) vs. turn-based.
