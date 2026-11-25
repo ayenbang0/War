@@ -18,9 +18,9 @@
  * reading the opponent's plan, which the player is never allowed to do.
  */
 
-import { atan2, clamp, cos, min, sin, sqrt } from "./math.ts";
+import { atan2, clamp, cos, floor, min, sin, sqrt } from "./math.ts";
 import type { Group, World } from "./world.ts";
-import { TILE_SIZE } from "./terrain.ts";
+import { Terrain, TILE_SIZE } from "./terrain.ts";
 import { UNIT_TYPES } from "../content/unit-types.ts";
 import { COMMANDERS, type Commander } from "../content/commanders.ts";
 
@@ -311,7 +311,12 @@ export class ArmyAI {
         // Sappers dig where digging is worth doing, and the works they raise
         // then become ground worth holding for everyone else -- which is how a
         // position grows into a base rather than a scatter of holes.
-        if (this.canDig(world, q)) {
+        // Never hold sappers on a crossing: holding ground they cannot dig,
+        // sappers break the bridge in it (Phase 8), and a defender has no
+        // business cutting the bridge it is standing on.
+        const sappers = this.canDig(world, q);
+        if (sappers && this.besideBridge(world, q)) return this.advance(world, q, tick);
+        if (sappers) {
           world.orders.issue(
             { kind: "hold", squad: q.id, x: q.anchorX, y: q.anchorY, radius: 180 },
             this.player,
@@ -585,6 +590,18 @@ export class ArmyAI {
       const dx = (w.tx + 0.5) * TILE_SIZE - q.anchorX;
       const dy = (w.ty + 0.5) * TILE_SIZE - q.anchorY;
       if (dx * dx + dy * dy <= 320 * 320) return true;
+    }
+    return false;
+  }
+
+  /** Is there a span of bridge within a sapper's reach of this company? */
+  private besideBridge(world: World, q: Group): boolean {
+    const cx = floor(q.anchorX / TILE_SIZE);
+    const cy = floor(q.anchorY / TILE_SIZE);
+    for (let ty = cy - 2; ty <= cy + 2; ty++) {
+      for (let tx = cx - 2; tx <= cx + 2; tx++) {
+        if (world.terrain.typeAt(tx, ty) === Terrain.Bridge) return true;
+      }
     }
     return false;
   }

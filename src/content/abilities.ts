@@ -44,7 +44,7 @@ export const ABILITIES: Record<AbilityId, Ability> = {
   barrage: {
     id: "barrage",
     name: "Reserve barrage",
-    blurb: "Shot from off the field onto ground you choose. Kills what stands there, and will kill your own men just as happily.",
+    blurb: "Shot from off the field onto ground you choose. Kills what stands there, and will kill your own men just as happily. Batters walls and bridges under it.",
     cost: 5,
     charges: 3,
     cooldown: 45,
@@ -132,7 +132,7 @@ export const ABILITIES: Record<AbilityId, Ability> = {
   firepots: {
     id: "firepots",
     name: "Throw the firepots",
-    blurb: "Pitch and fire thrown onto ground you choose. Burns only the enemy, slower than a barrage, and for longer.",
+    blurb: "Pitch and fire thrown onto ground you choose. Burns only the enemy, slower than a barrage, and for longer. Sets woods, stockades and gates alight, and that fire burns anyone.",
     cost: 5,
     charges: 2,
     cooldown: 50,

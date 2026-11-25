@@ -161,6 +161,7 @@ export class BattleLayer implements LayerKeys {
       reinforcements: level.reinforcements,
       sightScale: level.night,
       floodAtSeconds: level.floodAtSeconds,
+      siege: level.siege,
     });
     const world = this.world;
     world.doctrine[0] = config.armies[0].doctrine;

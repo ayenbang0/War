@@ -21,6 +21,9 @@ import { UNIT_TYPES, type UnitTypeId } from "../src/content/unit-types.ts";
 import { TILE_SIZE } from "../src/sim/terrain.ts";
 import type { Order } from "../src/sim/orders.ts";
 import * as M from "../src/sim/math.ts";
+import { LEVELS } from "../src/content/levels/index.ts";
+import { defaultArmy } from "../src/content/army.ts";
+import { enemyArmy } from "../src/app/battle-config.ts";
 
 export type Check = { name: string; ok: boolean; detail: string };
 
@@ -237,6 +240,77 @@ export function runLockstep(): { ok: boolean; checks: Check[] } {
 
     add("orders arriving out of sequence change nothing", hashWorld(a) === hashWorld(b),
       hashWorld(a) + " vs " + hashWorld(b));
+  }
+
+  // -- 6. destruction: the ground itself changing under both peers ----------
+  //
+  // Phase 8 made the terrain part of the state that can diverge: walls wear
+  // and fall, woods burn and spread, routes are re-planned round breaches and
+  // men are put ashore when a span goes. Two peers on the siege battlefield,
+  // both armies machine-run, with firepots thrown into a wood and a barrage on
+  // the gate in the shared log -- and then the same match replayed from that
+  // log alone.
+  {
+    const level = LEVELS.find((l) => l.siege !== undefined);
+    if (!level) {
+      add("a siege battlefield exists to test destruction on", false);
+    } else {
+      const TICKS = TICK_RATE * 300;
+      const log: Order[] = [];
+      const siegePeer = (): World => {
+        const w = new World({
+          seed: level.seed, tilesWide: level.tilesWide, tilesHigh: level.tilesHigh,
+          duration: level.duration, soldierCapacity: 4096, aiPlayers: [0, 1],
+          victory: level.victory, controlPoints: level.controlPoints,
+          reinforcements: level.reinforcements, siege: level.siege,
+        });
+        const armies = [defaultArmy("defensive", level.budget), enemyArmy(level, level.budget)];
+        for (const zone of level.deployment) {
+          let n = 0;
+          for (const type of armies[zone.player].squads) {
+            const bx = (zone.x + 3 + (n % 4) * 5) * TILE_SIZE;
+            const by = (zone.y + 4 + ((n / 4) | 0) * 9) * TILE_SIZE;
+            for (let i = 0; i < UNIT_TYPES[type].soldiers; i++) {
+              w.spawnSoldier(zone.player, type, bx + (i % 5) * 14, by + ((i / 5) | 0) * 14,
+                zone.player === 0 ? 0 : M.PI);
+            }
+            n++;
+          }
+        }
+        w.armAbilities(1, ["firepots", "barrage"]);
+        return w;
+      };
+      const a = siegePeer();
+      const b = siegePeer();
+      // A wood east of the walls, and the east gate. Orders without a company
+      // are spent all the same: an ability is the commander's, not a squad's.
+      log.push(a.orders.issue({ kind: "ability", squad: -1, ability: "firepots", x: 66.5 * TILE_SIZE, y: 40.5 * TILE_SIZE }, 1, 40));
+      log.push(a.orders.issue({ kind: "ability", squad: -1, ability: "barrage", x: 52.5 * TILE_SIZE, y: 62.5 * TILE_SIZE }, 1, 400));
+      for (const o of log) b.orders.push(o);
+      const rev0 = a.terrain.revision;
+      let diverged = -1;
+      let burnt = 0;
+      for (let t = 0; t < TICKS; t++) {
+        a.step();
+        b.step();
+        burnt = M.max(burnt, a.terrain.burning.length);
+        if (t % 20 === 0 && hashWorld(a) !== hashWorld(b)) {
+          diverged = t;
+          break;
+        }
+      }
+      const fallen = a.terrain.revision - rev0;
+      add("two peers stay identical while the ground burns and falls", diverged < 0,
+        diverged >= 0 ? "diverged at tick " + diverged : TICKS + " ticks, " + fallen + " tiles changed, up to " + burnt + " alight");
+      add("the destruction actually happened", fallen >= 10 && burnt > 0,
+        fallen + " tile changes, up to " + burnt + " alight");
+
+      const replayed = siegePeer();
+      for (const o of log) replayed.orders.push(o);
+      for (let t = 0; t < TICKS; t++) replayed.step();
+      add("a recorded log reproduces a siege", hashWorld(replayed) === hashWorld(a),
+        hashWorld(a) + " vs " + hashWorld(replayed));
+    }
   }
 
   return { ok: checks.every((c) => c.ok), checks };

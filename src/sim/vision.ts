@@ -25,6 +25,15 @@ export const FOG_TILES = 2;
 /** World units per fog cell. */
 export const FOG_CELL = TILE_SIZE * FOG_TILES;
 
+/**
+ * How close to a parapet (a wall, gate or palisade) a man must stand to see
+ * over it: two tiles from the shooter's eye to the far face of a one-tile
+ * wall, so a man standing anywhere in the tile behind it -- the ones manning
+ * the circuit -- sees out, and anyone a tile further back sees stone. Symmetric on purpose: a man who can see over a wall can be seen on
+ * it, so a garrison that looks out is a garrison that can be shot at.
+ */
+export const PARAPET_REACH = TILE_SIZE * 2;
+
 /** Sight multiplier at the top of the elevation range, and at the bottom. */
 const HIGH_GROUND_BONUS = 0.45;
 /** How much of its sight a unit loses standing inside cover. */
@@ -79,9 +88,44 @@ export function hasLineOfSight(
     const t = i / steps;
     const along = t * dist;
     if (along < skip || dist - along < skip) continue;
-    if (TERRAIN_INFO[grid.typeAtWorld(ax + dx * t, ay + dy * t)].blocksSight) return false;
+    const info = TERRAIN_INFO[grid.typeAtWorld(ax + dx * t, ay + dy * t)];
+    if (!info.blocksSight) continue;
+    // Over the parapet: a wall within reach of either end does not blind.
+    if (info.parapet && (along < PARAPET_REACH || dist - along < PARAPET_REACH)) continue;
+    return false;
   }
   return true;
+}
+
+/**
+ * Cover a missile loses crossing a parapet just in front of its target.
+ *
+ * A wall is not cover you stand IN -- nobody can stand in a wall -- it is
+ * cover you stand BEHIND. So it is read along the line of the shot: if the
+ * last stretch before the target (within PARAPET_REACH) crosses a standing
+ * wall, gate or palisade, the shot loses that work's cover. 0 when it crosses
+ * none. Battlefields without works never call it.
+ */
+export function parapetCover(
+  grid: TerrainGrid,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  const dx = ax - bx;
+  const dy = ay - by;
+  const dist = sqrt(dx * dx + dy * dy);
+  if (dist <= 1e-9) return 0;
+  const reach = min(dist, PARAPET_REACH);
+  let best = 0;
+  // Half-tile steps back from the target toward the shooter.
+  for (let along = TILE_SIZE * 0.5; along <= reach; along += TILE_SIZE * 0.5) {
+    const t = along / dist;
+    const info = TERRAIN_INFO[grid.typeAtWorld(bx + dx * t, by + dy * t)];
+    if (info.parapet) best = max(best, info.cover);
+  }
+  return best;
 }
 
 /** Elevation advantage of an attacker over a target, as a range multiplier. */
