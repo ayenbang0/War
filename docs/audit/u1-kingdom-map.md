@@ -224,3 +224,11 @@ Count: P0 1, P1 7, P2 9, P3 2 — all addressed in the design before code, so th
 ## Re-audit after K2 (pending)
 
 To be done with screenshots once the surface exists (§C.6 U1, second half): the §C.5 runtime matrix (1280×720, 1920×1080, 2560×1080, 1080×2340, 200 % zoom), the three zoom distances, keyboard-only through every entry above, blur and resize mid-stroke, storage refused, and an unreadable save. The container has no local browser, so this needs either the published build or a browser on the user's machine.
+
+## U1 re-audit after implementation (runtime, 2026-11-25)
+Run in a cloud browser against the published site (no local browser is available in the build container).
+- **E2E on the live site:** 28 of 29 scenarios passed with real pointer and keyboard events, including every K2 scenario (open, render, region card, march ghost and commit, meaningless stroke, pause, step a day, speed, continue, unreadable save, no storage, Esc order). The one failure was the text-floor check measuring the harness's own results panel; fixed in the check.
+- **Screenshots** at 1440x813 and 1024x640: HUD panels, date/weather, speed group and alert feed are legible at 16 px and above; the king's counter reads as a crowned disc distinct from holdings; owned ground reads by hatching as well as colour.
+- **U1-R1 (P2)** Province names can overlap where two provinces meet ("THE VALE OF THE HARE" over "THE LISLE BRIDGES" at the opening zoom). Batched into K11.
+- **U1-R2 (P2)** At 1024x640 the key-hint panel covers the holding labels beneath it (Harrowfield). Batched into K11 (collapse the hint after the first minutes, or move it into a help toggle).
+- No P0 or P1 found on the kingdom map; the K2 gate holds.
