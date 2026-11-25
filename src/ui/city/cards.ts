@@ -27,6 +27,7 @@ import { C } from "../../content/kingdom/city-strings.ts";
 import { AC, ARMY_REFUSAL } from "../../content/kingdom/army-strings.ts";
 import { hasBarracks } from "../../sim/kingdom/armies.ts";
 import { recruitMenu } from "../kingdom/recruit-menu.ts";
+import { politicsSection, type PoliticsSection } from "./politics.ts";
 
 export type CityCardHooks = FrameHooks & {
   issue(body: KingdomOrderBody, said: string): void;
@@ -214,12 +215,14 @@ export function politicsCard(root: HTMLElement, doc: Document, world: KingdomWor
   const h = world.holding(holdingId) as Holding;
   let people: HTMLElement | null = null;
   let panel: EconomyPanel | null = null;
+  let morale: PoliticsSection | null = null;
   let heading: HTMLElement | null = null;
 
   const refresh = (): void => {
     if (!people || !panel) return;
     setText(people, String(h.population));
     panel.refresh();
+    morale?.refresh();
     if (heading) setText(heading, C.politicsTitle(h.name));
   };
 
@@ -231,12 +234,13 @@ export function politicsCard(root: HTMLElement, doc: Document, world: KingdomWor
     // Tax, bread and famine: K3's own section, the same buttons and orders.
     panel = economyPanel(doc, world, holdingId, hooks.economy, { sections: ["tax"], title: null });
     body.appendChild(panel.root);
-    // What the realm does not reckon yet, said plainly (audit C-04).
+    // K6: loyalty and unrest, what moves it, and the levers (politics.ts).
+    morale = politicsSection(doc, world, h, hooks);
+    body.appendChild(morale.root);
+    // What the realm does not reckon yet, said plainly (audit C-04): the lords are K8's.
     const later = make(doc, "dl", "k-rows c-later");
-    row(doc, later, C.loyalty).textContent = C.loyaltyNotYet;
     row(doc, later, C.lords).textContent = C.lordsNotYet;
-    row(doc, later, C.laws).textContent = C.lawsNotYet;
     body.appendChild(later);
-  }, refresh, () => panel?.focusTarget() ?? null);
+  }, refresh, () => morale?.focusTarget() ?? panel?.focusTarget() ?? null);
   return { screen, kind: "politics", index: -1, refresh };
 }

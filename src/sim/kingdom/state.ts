@@ -16,6 +16,7 @@ import type { BiomeId, HoldingKind, RoadTerrainId } from "../../content/kingdom/
 import type { ProvinceId } from "../../content/kingdom/map.ts";
 import type { FarmEventId, StockId, TaxRateId } from "../../content/kingdom/economy.ts";
 import type { Knowledge } from "../../content/kingdom/exploration.ts";
+import type { JusticeId, UnrestBand } from "../../content/kingdom/morale.ts";
 import type { UpgradeId } from "../../content/story/upgrades.ts";
 import type { UnitTypeId } from "../../content/unit-types.ts";
 import type { DoctrineId } from "../../content/doctrines.ts";
@@ -88,6 +89,19 @@ export type Holding = {
    * army that strips the fields is supply bought with goodwill.
    */
   foraged: number;
+  /**
+   * K6: unrest, in permille (0..UNREST_MAX; content/kingdom/morale.ts). Its
+   * complement is the town's loyalty. Reckoned every day for a holding whose
+   * lord's economy runs; at RESTLESS_AT it pays half its taxes, at REVOLT_AT
+   * it revolts. 0 while nobody's, or a lord's whose stewards do not run yet.
+   */
+  unrest: number;
+  /** K6: how the holding's quarrels are judged (a lever of the politics card). */
+  justice: JusticeId;
+  /** K6: days left of a festival held here; 0 = none running. */
+  festival: number;
+  /** K6: 1 + the absolute season (floor(day / 30)) of the last pardon here; 0 = never. One a season. */
+  pardoned: number;
 };
 
 /**
@@ -109,6 +123,13 @@ export type FactionEconomy = {
   hunger: number;
   /** The rate a holding this faction claims starts at; setTax on the realm sets it. */
   defaultTax: TaxRateId;
+  /**
+   * K6: Mercy/Terror (PLAN.md §A.4), MERCY_MIN..MERCY_MAX, 0 = neither yet;
+   * above 0 mercy, below 0 terror. A soft stat beside legitimacy, but not a
+   * ledger stock: nothing is spent from it, it is a reputation. Moved only by
+   * morale.ts `changeMercy` (the levers, and K9's story choices).
+   */
+  mercy: number;
 };
 
 /** What the king's party is doing where it stands (the from-nothing start, §A.5). */
@@ -404,7 +425,20 @@ export type KingdomEvent =
   /** An army fell back from a contact or a lost battle, toward `to` (0: it stands where it is). */
   | { kind: "fellBack"; army: number; to: number }
   /** A holding changed hands by assault. */
-  | { kind: "stormed"; holding: number; faction: number };
+  | { kind: "stormed"; holding: number; faction: number }
+  // -- K6: morale, unrest, legitimacy ---------------------------------------------------
+  /** A holding's unrest crossed into another band (content/kingdom/morale.ts UNREST_BANDS). */
+  | { kind: "unrestBand"; holding: number; band: UnrestBand; rising: boolean }
+  /** A holding threw off its lord; `army` is the rebel host raised there, or 0. */
+  | { kind: "revolt"; holding: number; from: number; rebels: number; army: number }
+  | { kind: "justiceSet"; holding: number; justice: JusticeId }
+  | { kind: "festivalHeld"; holding: number; days: number }
+  | { kind: "festivalOver"; holding: number }
+  | { kind: "pardoned"; holding: number }
+  /** A faction's Mercy/Terror moved. */
+  | { kind: "mercyChanged"; faction: number; mercy: number; delta: number }
+  /** Men left an army whose morale fell too low. */
+  | { kind: "moraleDesertion"; army: number; n: number };
 
 /** Why a plot changed stage, for the feed. */
 export type PlotCause = "sown" | "sprouted" | "ripened" | "harvested" | "overripe" | "weather" | "winter" | "regrew" | "foraged";

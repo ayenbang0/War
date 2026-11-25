@@ -77,11 +77,8 @@ export const C = {
   people: "People",
   loyalty: "Loyalty and unrest",
   lords: "Local lords",
-  laws: "Laws",
-  // Honest placeholders: these rules do not exist yet (PLAN §B.6, K6).
-  loyaltyNotYet: "not yet reckoned: the realm keeps no account of it until the lords' rules are written (K6)",
+  // An honest placeholder: the lords' rules are K8's (PLAN §B.7).
   lordsNotYet: "none sworn to you here yet",
-  lawsNotYet: "none proclaimed yet",
   famineSummary: (d: number) => "Famine: " + days(d) + " short of bread",
 
   // -- the region card's summary ---------------------------------------------

@@ -17,3 +17,5 @@ export * from "./armies.ts";
 export * from "./army-strings.ts";
 export * from "./descent.ts";
 export * from "./descent-strings.ts";
+export * from "./morale.ts";
+export * from "./morale-strings.ts";

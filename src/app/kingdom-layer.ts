@@ -58,6 +58,8 @@ import type { ContactChoice } from "../sim/kingdom/orders.ts";
 import type { Contact } from "../sim/kingdom/state.ts";
 import type { BattleResult } from "../sim/layers.ts";
 import { CONTACT_FEED } from "../content/kingdom/descent-strings.ts";
+import { BAND_WORD, MORALE_FEED } from "../content/kingdom/morale-strings.ts";
+import { ARMY_MORALE } from "../content/kingdom/morale.ts";
 
 /** Where the kingdom layer is in its life; mirrors BattlePhase. */
 export type KingdomPhase = "built" | "live" | "torn-down";
@@ -650,6 +652,7 @@ export class KingdomLayer implements LayerKeys {
           this.hud.alert(day, AC.hungry(army(e.army)));
         }
         if (e.short === 0) this.hungerSaid.delete(e.army);
+        if ((armyById(w, e.army)?.morale ?? 100) >= ARMY_MORALE.desertBelow) this.spiritSaid.delete(e.army);
         return false;
       case "followersDeserted":
         this.storesDirty = true;
@@ -693,9 +696,50 @@ export class KingdomLayer implements LayerKeys {
         this.storesDirty = true;
         return false;
       default:
+        return this.onMoraleEvent(e);
+    }
+  }
+
+  /** K6: unrest, revolts, the levers, Mercy/Terror and broken spirits. */
+  private onMoraleEvent(e: KingdomEvent): boolean {
+    const w = this.world;
+    const day = w.date.day;
+    const name = (id: number): string => w.holding(id)?.name ?? "?";
+    switch (e.kind) {
+      case "unrestBand":
+        if (w.holding(e.holding)?.owner === "king" && e.band !== "revolt") {
+          this.hud.alert(day, MORALE_FEED.band({ name: name(e.holding), band: BAND_WORD[e.band], rising: e.rising }));
+        }
+        return false;
+      case "revolt":
+        this.storesDirty = true;
+        if (e.from === KING_PLAYER) this.hud.alert(day, MORALE_FEED.revolt({ name: name(e.holding), rebels: e.rebels }));
+        return false;
+      case "festivalOver":
+        if (w.holding(e.holding)?.owner === "king") this.hud.alert(day, MORALE_FEED.festivalOver(name(e.holding)));
+        return false;
+      case "justiceSet":
+      case "festivalHeld":
+      case "pardoned":
+      case "mercyChanged":
+        // The order's own result line said it; the bar and the card show the state.
+        this.storesDirty = true;
+        return false;
+      case "moraleDesertion": {
+        const a = armyById(w, e.army);
+        if (a && a.owner === KING_PLAYER && !this.spiritSaid.has(e.army)) {
+          this.spiritSaid.add(e.army);
+          this.hud.alert(day, MORALE_FEED.desertion({ army: a.name, n: e.n }));
+        }
+        return false;
+      }
+      default:
         return false;
     }
   }
+
+  /** K6: armies whose broken spirit has been said, until it mends (see armyDay). */
+  private spiritSaid = new Set<number>();
 
   /** K4: armies whose hunger has been said, until they eat again. */
   private hungerSaid = new Set<number>();

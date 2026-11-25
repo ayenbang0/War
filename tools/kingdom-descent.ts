@@ -416,7 +416,7 @@ section("save v5: a waiting contact survives, and the log replays");
   marchToContact(w, a, id(w, "harrowfield"), 80);
   check("the levy reaches the Hare (hungry, but there)", w.contact !== null && armyMen(a) > 0);
   const json = saveToJson(w);
-  check("the save is version " + KINGDOM_SAVE_VERSION, JSON.parse(json).version === 5 && KINGDOM_SAVE_VERSION === 5 && JSON.parse(json).hosts === true);
+  check("the save is version " + KINGDOM_SAVE_VERSION, JSON.parse(json).version === KINGDOM_SAVE_VERSION && KINGDOM_SAVE_VERSION >= 5 && JSON.parse(json).hosts === true);
   const l = loadFromJson(json);
   check("and loads with the contact waiting", l.ok && l.value.contact !== null && l.value.contact.id === w.contact!.id && kingdomHash(l.value) === kingdomHash(w),
     l.ok ? "" : l.error);
@@ -463,7 +463,7 @@ section("migration v4 -> v5");
   delete v4.snapshot.contact;
   delete v4.snapshot.disengaged;
   const m = migrate(JSON.parse(JSON.stringify(v4)));
-  check("a version-4 save migrates to 5", m.ok && m.value.version === 5);
+  check("a version-4 save migrates to 5 and on to " + KINGDOM_SAVE_VERSION, m.ok && m.value.version === KINGDOM_SAVE_VERSION);
   check("no contact waits, nobody is disengaged, no hosts", m.ok && (m.value.snapshot as any).contact === null &&
     (m.value.snapshot as any).disengaged.length === 0 && m.value.hosts === false);
   const l = deserialize(JSON.parse(JSON.stringify(v4)));

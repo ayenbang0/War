@@ -64,6 +64,8 @@ import { ARMY_ORDER_KIND_SET, type KingdomOrder, type KingdomOrderBody } from ".
 import type { Army, ArmyDayReport, ArmyGoneReason, ArmyPosture, ArmySquad, Holding, Mover } from "./state.ts";
 import { adjustLegitimacy, credit, debit, debitUpTo, snapshotStocks } from "./ledger.ts";
 import { dailyNeed, economyActive, hasStanding, setTask } from "./economy.ts";
+import { moveUnrest } from "./unrest.ts";
+import { FORAGED_UNREST } from "../../content/kingdom/morale.ts";
 import { discover, holdingKnowledge, marchOptions, roadKnowledge, routeOptions, targetRefusal, updateSight } from "./explore.ts";
 import type { KingdomWorld } from "./world.ts";
 import { DESCENT_REFUSAL } from "../../content/kingdom/descent-strings.ts";
@@ -437,7 +439,7 @@ export function takeMen(a: Army, n: number, pick: (s: ArmySquad) => boolean, wou
 }
 
 /** A per-mille share of `of`, with its remainder carried in `carry`: [whole, newCarry]. */
-function perMille(of: number, permille: number, carry: number): [number, number] {
+export function perMille(of: number, permille: number, carry: number): [number, number] {
   const t = of * permille + carry;
   const n = floor(t / 1000);
   return [n, t - n * 1000];
@@ -878,6 +880,8 @@ export function runArmyDay(world: KingdomWorld): void {
       // Living off the land strips the fields, whoever's they are: supply
       // bought with goodwill (K6 reads `foraged` as unrest).
       at.foraged++;
+      // K6: and the town remembers it, if its lord's unrest is reckoned.
+      if (at.owner !== null && economyActive(FACTION_IDS.indexOf(at.owner))) moveUnrest(world, at, FORAGED_UNREST);
       forageHarm(world, at);
     }
     let loaded = 0;

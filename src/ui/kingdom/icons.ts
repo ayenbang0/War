@@ -18,8 +18,11 @@ const FILL = "#c9b48a";
 
 type Ctx = CanvasRenderingContext2D;
 
+/** A bar cell's icon: a ledger stock, or K6's Mercy/Terror (not a stock, but beside them). */
+export type IconId = LedgerStockId | "mercy";
+
 /** Each glyph draws in a 20x20 box. */
-const GLYPHS: Readonly<Record<LedgerStockId, (c: Ctx) => void>> = {
+const GLYPHS: Readonly<Record<IconId, (c: Ctx) => void>> = {
   coin: (c) => {
     c.beginPath(); c.arc(10, 10, 7.5, 0, Math.PI * 2); c.fillStyle = FILL; c.fill(); c.stroke();
     c.beginPath(); c.arc(10, 10, 4.5, 0, Math.PI * 2); c.stroke();
@@ -56,10 +59,18 @@ const GLYPHS: Readonly<Record<LedgerStockId, (c: Ctx) => void>> = {
     c.beginPath(); c.moveTo(3, 15); c.lineTo(3, 6); c.lineTo(7, 10); c.lineTo(10, 4); c.lineTo(13, 10); c.lineTo(17, 6);
     c.lineTo(17, 15); c.closePath(); c.fillStyle = FILL; c.fill(); c.stroke();
   },
+  mercy: (c) => {
+    // A balance: the post, the beam, a pan hung from each end.
+    c.beginPath(); c.moveTo(10, 3); c.lineTo(10, 17); c.moveTo(6, 17); c.lineTo(14, 17); c.moveTo(3, 6); c.lineTo(17, 6); c.stroke();
+    for (const x of [4.5, 15.5]) {
+      c.beginPath(); c.moveTo(x, 6); c.lineTo(x - 2.5, 11); c.moveTo(x, 6); c.lineTo(x + 2.5, 11); c.stroke();
+      c.beginPath(); c.moveTo(x - 3, 11); c.quadraticCurveTo(x, 14.5, x + 3, 11); c.closePath(); c.fillStyle = FILL; c.fill(); c.stroke();
+    }
+  },
 };
 
 /** A stock's icon on a fresh canvas, drawn at the device's ratio (capped at 3). */
-export function stockIcon(doc: Document, stock: LedgerStockId): HTMLCanvasElement {
+export function stockIcon(doc: Document, stock: IconId): HTMLCanvasElement {
   const canvas = doc.createElement("canvas") as HTMLCanvasElement;
   const dpr = Math.min(3, Math.max(1, doc.defaultView?.devicePixelRatio ?? 1));
   canvas.width = Math.round(ICON_PX * dpr);

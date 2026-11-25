@@ -15,6 +15,7 @@
  * Another faction's army gets a card too, read-only: what the scouts see.
  */
 
+import { armyRestMorale } from "../../sim/kingdom/morale.ts";
 import type { KingdomWorld } from "../../sim/kingdom/world.ts";
 import type { KingdomOrderBody } from "../../sim/kingdom/orders.ts";
 import type { Army } from "../../sim/kingdom/state.ts";
@@ -101,7 +102,7 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
         (a.hunger > 0 ? " · " + AC.hunger(a.hunger) : ""));
       const wage = armyWage(a);
       setText(els.wages, wage > 0 ? AC.wagesLine({ coin: wage, unpaid: a.unpaid }) : AC.wagesNone);
-      setText(els.morale, AC.moraleLine(a.morale));
+      setText(els.morale, AC.moraleLine({ morale: a.morale, rest: armyRestMorale(world, a), falling: a.hunger > 0 || a.unpaid > 0 }));
       setText(els.doing, doingLine(a));
       setText(els.abilities, a.abilities.length ? a.abilities.map((x) => ABILITIES[x].name).join(", ") : AC.abilitiesNone);
     }

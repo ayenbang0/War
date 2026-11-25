@@ -36,6 +36,8 @@ import {
 import { BUILDINGS, type BuildingDef, type BuildingId, type Cost } from "../../content/kingdom/buildings.ts";
 import { CROPS, type CropDef, type CropId } from "../../content/kingdom/crops.ts";
 import { REFUSAL } from "../../content/kingdom/ui-strings.ts";
+import { moveUnrest } from "./unrest.ts";
+import { CLAIM_UNREST, MERCY_START, MUSTER_UNREST, RESTLESS_AT } from "../../content/kingdom/morale.ts";
 import { calendar, type CalendarDate } from "./clock.ts";
 import type { KingdomOrder, KingdomOrderBody } from "./orders.ts";
 import type { FactionEconomy, FieldPlot, Holding, KingTask, PlotCause, PlotStage } from "./state.ts";
@@ -69,7 +71,7 @@ export function newFactionEconomy(id: FactionId): FactionEconomy {
   const king = id === "king";
   const stocks = {} as Record<StockId, number>;
   for (const s of STOCK_IDS) stocks[s] = king ? KING_START[s] : 0;
-  return { stocks, legitimacy: king ? KING_START_LEGITIMACY : 0, hunger: 0, defaultTax: DEFAULT_TAX };
+  return { stocks, legitimacy: king ? KING_START_LEGITIMACY : 0, hunger: 0, defaultTax: DEFAULT_TAX, mercy: MERCY_START };
 }
 
 export function newBook(e: FactionEconomy): FactionBook {
@@ -330,6 +332,9 @@ export function applyEconomyOrder(world: KingdomWorld, order: KingdomOrder & Eco
       h.taxCarry = 0;
       h.doleCarry = 0;
       h.famine = 0;
+      // K6: strangers are not yet trusted; whatever festival was running is not ours.
+      h.unrest = CLAIM_UNREST;
+      h.festival = 0;
       // A rally is for unclaimed hamlets; the people of your own are taxed and mustered instead.
       if (world.king.task === "rally") setTask(world, "none");
       world.events.push({ kind: "claimed", holding: h.id, faction: f });
@@ -464,6 +469,8 @@ function turnSeason(world: KingdomWorld, d: CalendarDate): void {
       const n = min(h.population, floor((h.population * pct) / 100));
       h.population -= n;
       credit(e, book, "levy", n, "muster");
+      // K6: conscription stirs the town that gave its sons (PLAN §B.6).
+      if (n > 0) moveUnrest(world, h, MUSTER_UNREST);
     }
     seasonalBoons(world, f);
   }
@@ -512,7 +519,9 @@ function collectTaxes(world: KingdomWorld, f: number): void {
   const bonus = taxPct(world, f);
   for (const h of ownedBy(world, f)) {
     if (h.famine > 0) continue;
-    const owed = withPct(h.population * TAX_RATES[TAX_RATE_IDS.indexOf(h.tax)].per100, bonus) + h.taxCarry;
+    // K6, the lesser threshold of unrest: a restless town pays half.
+    const half = h.unrest >= RESTLESS_AT ? 2 : 1;
+    const owed = floor(withPct(h.population * TAX_RATES[TAX_RATE_IDS.indexOf(h.tax)].per100, bonus) / half) + h.taxCarry;
     const coin = floor(owed / 100);
     h.taxCarry = owed - coin * 100;
     credit(e, book, "coin", coin, "tax");

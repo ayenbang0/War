@@ -53,7 +53,7 @@ export type BuildingLater = {
   readonly warningDays?: number;
   /** K6: legitimacy a season. */
   readonly legitimacy?: number;
-  /** K6: regional unrest change a season (negative calms). */
+  /** K6: unrest a day, in steps of SHRINE_UNREST_SCALE permille (content/kingdom/morale.ts); negative calms. */
   readonly unrest?: number;
   /** K4: recruits squads from levy here. */
   readonly recruits?: boolean;
@@ -141,12 +141,12 @@ export const BUILDINGS: Readonly<Record<BuildingId, BuildingDef>> = {
     economy: {}, later: { defence: 3 },
   },
   shrine: {
-    id: "shrine", name: "Shrine", purpose: "Legitimacy and calm (later).",
+    id: "shrine", name: "Shrine", purpose: "Calms the town every day; a little legitimacy each season.",
     cost: { coin: 8, timber: 4 }, days: 5, upkeep: {}, slots: 1, unique: true,
     economy: {}, later: { legitimacy: 1, unrest: -1 },
   },
   hall: {
-    id: "hall", name: "Hall", purpose: "A lord's hall: legitimacy, and the wounded mend here (later).",
+    id: "hall", name: "Hall", purpose: "A lord's hall: calms the town, legitimacy each season, and the wounded mend here.",
     cost: { coin: 30, timber: 20 }, days: 12, upkeep: { coin: 1 }, slots: 1, unique: true,
     economy: {}, later: { legitimacy: 2, unrest: -2, recovery: 2 },
   },

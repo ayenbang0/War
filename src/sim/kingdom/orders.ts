@@ -22,6 +22,7 @@ import type { UnitTypeId } from "../../content/unit-types.ts";
 import type { DoctrineId } from "../../content/doctrines.ts";
 import type { AbilityId } from "../../content/abilities.ts";
 import type { BattleResult } from "../layers.ts";
+import type { JusticeId } from "../../content/kingdom/morale.ts";
 
 /** How a contact is settled (K5). Hash code is the index. Append only. */
 export type ContactChoice = "fight" | "withdraw" | "auto";
@@ -87,7 +88,14 @@ export type KingdomOrderBody =
    * by the auto-resolve. While a contact waits the realm is held, so the
    * result applies to exactly the armies the battle was built from.
    */
-  | { kind: "resolveContact"; contact: number; choice: ContactChoice; result: BattleResult | null };
+  | { kind: "resolveContact"; contact: number; choice: ContactChoice; result: BattleResult | null }
+  // -- K6: a town's politics (sim/kingdom/morale.ts) --
+  /** Set how an owned holding's quarrels are judged. */
+  | { kind: "setJustice"; holding: number; justice: JusticeId }
+  /** Feast an owned holding for a week: coin and grain for calm and a little legitimacy. */
+  | { kind: "holdFestival"; holding: number }
+  /** Pardon an owned holding's prisoners: calm at once, and Mercy; once a season. */
+  | { kind: "pardon"; holding: number };
   // K7: hire / pay.
   // Append new kinds; never renumber the existing ones.
 
@@ -101,7 +109,12 @@ export const KINGDOM_ORDER_KINDS: readonly KingdomOrderKind[] = [
   "setDoctrine", "unlockAbility", "intercept", "kingJoin",
   // K5
   "resolveContact",
+  // K6
+  "setJustice", "holdFestival", "pardon",
 ];
+
+/** The K6 order kinds (src/sim/kingdom/morale.ts applies them). */
+export const MORALE_ORDER_KIND_SET: ReadonlySet<KingdomOrderKind> = new Set(["setJustice", "holdFestival", "pardon"]);
 
 /** The K4 order kinds (src/sim/kingdom/armies.ts applies them). */
 export const ARMY_ORDER_KINDS: readonly KingdomOrderKind[] = KINGDOM_ORDER_KINDS.slice(

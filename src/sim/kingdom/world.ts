@@ -52,6 +52,8 @@ import { EXPLORE_REFUSAL } from "../../content/story/strings.ts";
 import { OPENING_HOSTS } from "../../content/kingdom/descent.ts";
 import { applyContactOrder, checkContactOrder, detectContacts } from "./descent.ts";
 import type { Contact } from "./state.ts";
+import { applyMoraleOrder, checkMoraleOrder, isMoraleOrder, runMoraleDay, type MoraleOrderBody } from "./morale.ts";
+import { DEFAULT_JUSTICE } from "../../content/kingdom/morale.ts";
 
 /** Default name of the exiled king (docs/PROVISIONAL.md A.7.3). */
 export const DEFAULT_KING_NAME = "Aldric of Rimaros";
@@ -190,6 +192,10 @@ export class KingdomWorld {
         doleCarry: 0,
         famine: 0,
         foraged: 0,
+        unrest: 0,
+        justice: DEFAULT_JUSTICE,
+        festival: 0,
+        pardoned: 0,
       };
       this.holdings.push(h);
       this.byKey.set(h.key, h);
@@ -301,6 +307,11 @@ export class KingdomWorld {
       // K4: the armies' day -- wages, bread, hunger and desertion, mending
       // and replacements -- after the party and the towns have eaten.
       runArmyDay(this);
+      // K6: morale and unrest -- every town's unrest from today's taxes,
+      // famine, foraging and quartering; revolts; the season's legitimacy;
+      // every army's morale and the men low spirits cost (morale.ts). After
+      // the armies' day, so today's wages and bread are what it reads.
+      runMoraleDay(this);
       // K3a: the realm's sight as the day begins (towers built, holdings
       // claimed); the king's is also kept up as he marches, below.
       for (let f = 0; f < FACTION_IDS.length; f++) updateSight(this, f);
@@ -318,7 +329,7 @@ export class KingdomWorld {
     marchArmies(this);
     // K5: contact, in army-id order (descent.ts). One of the king's side holds the realm from the next tick.
     detectContacts(this, marching);
-    // K6: morale and unrest.  K7: contracts and wages.
+    // K7: contracts and wages.
     this.now++;
     return this.events;
   }
@@ -369,6 +380,11 @@ export class KingdomWorld {
     }
     if (isArmyOrder(order)) {
       const why = applyArmyOrder(this, order as KingdomOrder & ArmyOrderBody);
+      if (why) this.reject(order, why);
+      return;
+    }
+    if (isMoraleOrder(order)) {
+      const why = applyMoraleOrder(this, order as KingdomOrder & MoraleOrderBody);
       if (why) this.reject(order, why);
       return;
     }
@@ -424,6 +440,7 @@ export class KingdomWorld {
       return targetRefusal(this, KING_PLAYER, body.to);
     }
     if (isArmyOrder(body)) return checkArmyOrder(this, body, player);
+    if (isMoraleOrder(body)) return checkMoraleOrder(this, body, player);
     if (!isEconomyOrder(body)) return null;
     return checkEconomyOrder(this, body as EconomyOrderBody, player);
   }

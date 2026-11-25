@@ -15,6 +15,7 @@ import type { KingdomLayer } from "../app/kingdom-layer.ts";
 import type { CityLayer } from "../app/city-layer.ts";
 import { C } from "../content/kingdom/city-strings.ts";
 import { E } from "../content/kingdom/ui-strings.ts";
+import { P } from "../content/kingdom/morale-strings.ts";
 import { OVERFLOW_PX } from "../input/zoom-through.ts";
 import { scenario, type Driver, type Pt } from "./harness.ts";
 import {
@@ -104,8 +105,9 @@ scenario("k3b-city-view", "enter a holding's city, build and sow on its plan, se
   t.key("KeyP");
   t.expect(t.hook.top() === "politics-card", "P opens the politics card (top: " + t.hook.top() + ")");
   const card = document.querySelector(".k-card")?.textContent ?? "";
-  t.expect(card.includes(C.people) && card.includes(C.loyalty) && card.includes(C.loyaltyNotYet) &&
-    card.includes(C.lordsNotYet) && card.includes(C.lawsNotYet), "it shows people, and says plainly what is not reckoned yet");
+  // K6 filled the loyalty row (scenarios-k6.ts drives its levers); the lords are still K8's.
+  t.expect(card.includes(C.people) && card.includes(C.loyalty) && card.includes(P.causes) &&
+    card.includes(C.lordsNotYet), "it shows people and loyalty, and says plainly what is not reckoned yet");
   t.click(t.button("Low"));
   stepDays(t, 1);
   t.expect(h.tax === "low", "the tax is set from the city (" + h.tax + ")");

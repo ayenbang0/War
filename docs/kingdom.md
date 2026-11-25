@@ -908,3 +908,126 @@ and the layer hashes before and after all agree.
 Captains' armies that move and choose battles (K8); reinforcements from
 nearby armies (K5.9); damage to crops and buildings (K5.17); morale rules
 beyond a battle's (K6).
+
+## K6 — morale, unrest and legitimacy
+
+The three morale systems of PLAN.md §B.6, nested: an army's morale, a town's
+unrest, the realm's legitimacy -- and the realm's Mercy/Terror (§A.4), which
+touches the first two. Every number is provisional (docs/PROVISIONAL.md
+K6.1–K6.12).
+
+### Files
+
+| File | What |
+|---|---|
+| `src/content/kingdom/morale.ts` | the tables: unrest's scale, bands and thresholds, every cause's pressure, justice, festivals, pardons, the muster, a lost battle, revolts, army morale, the season's legitimacy; `validateMorale` |
+| `src/content/kingdom/morale-strings.ts` | the refusals (`MORALE_REFUSAL`), the politics card (`P`, cause labels, justice names), the HUD (`MERCY`), the army card (`MORALE_WORDS`), the feed (`MORALE_FEED`) |
+| `src/sim/kingdom/morale.ts` | `unrestCauses` (the one list), `runMoraleDay`, revolts, army morale, `changeMercy`, `battleLostUnrest`, the three politics orders |
+| `src/sim/kingdom/unrest.ts` | `moveUnrest`, the one writer of a town's unrest (so the muster and foraging can stir a town without importing the morale rules) |
+| `src/ui/city/politics.ts` | the politics card's K6 section |
+| `tools/kingdom-morale.ts` | the K6 suite and the proof (in `npm test`) |
+| `src/e2e/scenarios-k6.ts` | `k6-politics-levers` |
+
+### State
+
+`Holding` gains `unrest` (permille 0..1000), `justice` (`none | courts |
+rope`), `festival` (days left) and `pardoned` (1 + the absolute season of
+the last pardon, 0 never). `FactionEconomy` gains `mercy` (−100..100; not a
+ledger stock: no flows, no day's change). Army morale is K4's `morale`
+field, 0..100, now moved.
+
+### The day
+
+`runMoraleDay` runs on a day's first tick after the economy's day and the
+armies' day, so it reads today's famine, wages and bread. For each
+economy-run faction (K6.11), in id order:
+
+1. every town it owns: the courts are paid if they sit (ledger `justice`),
+   then `unrestCauses` is summed and applied; a festival counts down;
+2. at a season's turn: legitimacy from shrines and halls (capped, `deeds`),
+   and the rope's terror;
+3. every army's morale (below), the men low spirits cost, and armies with
+   nobody left removed (`deserted`);
+4. revolts: every town at or above `REVOLT_AT`.
+
+Outside that day: `collectTaxes` halves a restless town's taxes; the
+season's muster (`turnSeason`) and an army foraging (`runArmyDay`) stir a
+town through `moveUnrest`; `claimHolding` sets a new town's unrest to 10,
+walls stormed to 30; `applyBattleResult` stirs the province of a battle the
+king's side lost (`battleLostUnrest`) and lifts the winner's morale.
+
+### One list
+
+`unrestCauses(world, h)` returns every cause moving the town today, with its
+pressure in permille, in `UNREST_CAUSE_IDS` order: taxes, famine,
+quartering, the king's standing, custom, shrines, a hall, justice, a
+festival, mercy. The day applies its sum; the politics card lists its rows
+and its trend (`unrestTrend`). So the card never lists a cause the sim does
+not apply. The happenings (foraging, the muster, a battle, a pardon) move
+unrest when they happen and are not on the list; the card says how many days
+armies have foraged there this season.
+
+### Army morale and the battle
+
+Hungry −4 a day, unpaid −3; fed and paid it moves a point a day toward its
+rest level (`armyRestMorale`: 55, +15 with the king, + legitimacy/10, +
+terror/20). Below 20, 3% of its fit men desert a day. This is the morale
+`buildBattleSpec` gives a side, and K5's `nerveFromMorale` turns it into
+every soldier's starting nerve: a hungry, unpaid army fights shaken. A
+victory adds 8 on top of what the field left; K5's withdrawal already costs
+10.
+
+### Orders
+
+| Order | Check (one function for the button and the tick) |
+|---|---|
+| `setJustice {holding, justice}` | the king's town; a known justice; not the one it has |
+| `holdFestival {holding}` | the king's town; none running; the stores can pay `festivalCost` |
+| `pardon {holding}` | the king's town; not yet this season; it has unrest to pardon |
+
+Taxes are K3's `setTax`; shrines and halls are K3's `build`.
+
+### Revolt
+
+A town at the threshold becomes nobody's; its garrison is cleared; one in ten
+of its people (up to two squads of levy spears) stands in it as a rebel host
+of its old lord's banner from the map, or the Chancellor's (`rebelFaction`);
+too few, or the crown at its army cap, and it only flips. Legitimacy −3
+(`disgrace`). No random draw anywhere in K6.
+
+### Player experience
+
+The city's politics card (P) shows loyalty and unrest in words and numbers,
+the thresholds, today's trend and each cause raising or calming it; K3's tax;
+justice as a toggle group; Hold a festival and Pardon the prisoners, each
+marked unavailable with its reason and saying why when pressed; shrines and
+halls standing. The HUD's top bar shows Mercy (or Terror) beside the stocks.
+The army card's morale line says where it is heading. The feed says when a
+town changes band, revolts, a festival ends, or an army's men start to slip
+away.
+
+### Save format version 6
+
+Adds the four holding fields and `mercy`; the ledger gains two sink
+categories (`festivals`, `justice`), so pages are re-laid. `migrate5to6`
+makes every town calm with no justice, festival or pardon, and mercy 0
+(K6.12). Unrest and mercy are bounds-checked on load; a justice must be
+known, in the snapshot and in every logged order.
+
+### Determinism and the golden
+
+The kingdom golden moved (`c4706524` → `c3917824`): `kingdomHash` now mixes
+the four holding fields and mercy. The decade's own play is unchanged (it
+holds no town), so only the hash's input grew. The battle tiers did not
+move.
+
+### The proof (tools/kingdom-morale.ts)
+
+Monotonicity, a test per input: the same town twice, a day apart, differing
+in ONE input -- each tax rate, famine, an army quartered unpaid, the king's
+standing, a shrine, a hall, courts paid and unpaid, the rope, mercy, terror,
+foraging -- and the town's unrest moves the way the cause's row says, by
+exactly its row, and nothing else K6 owns moves but what the row declares
+(its coin, its grain). Then the levers as orders, the thresholds, army
+morale and desertion, the battle's starting morale both ways, save v6 and
+the v5 migration, and the ledger balancing with festivals and justices on it.

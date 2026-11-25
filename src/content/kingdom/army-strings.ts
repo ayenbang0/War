@@ -5,6 +5,8 @@
  */
 
 import { ARMY_ORDINALS } from "./armies.ts";
+import { MORALE_WORDS } from "./morale-strings.ts";
+import { ARMY_MORALE } from "./morale.ts";
 
 /** Why an army order is refused. The same string disables the button and rejects the order. */
 export const ARMY_REFUSAL = {
@@ -92,7 +94,8 @@ export const AC = {
   hunger: (days: number) => "Hungry " + days + " day" + (days === 1 ? "" : "s"),
   morale: "Morale",
   /** Morale is kept in the sim (K6 gives it rules); until then the card says so in words, with no number to read into. */
-  moraleLine: (_n: number) => "not yet reckoned (comes with K6)",
+  /** K6: the army's spirit, and where pay, bread and the king are taking it (MORALE_WORDS). */
+  moraleLine: (p: { morale: number; rest: number; falling: boolean }) => MORALE_WORDS.line(p) + (p.morale < ARMY_MORALE.desertBelow ? ". " + MORALE_WORDS.breaking : ""),
   doing: "Doing",
   posture: { none: "standing", hold: "holding, dug in", patrol: "patrolling", recover: "resting to mend" } as const,
   marching: (name: string) => "marching to " + name,

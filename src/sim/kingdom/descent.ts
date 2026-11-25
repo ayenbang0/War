@@ -56,6 +56,8 @@ import type { KingdomOrder, KingdomOrderBody } from "./orders.ts";
 import type { Army, Contact, ContactSide, Holding, Mover } from "./state.ts";
 import { armyById, armyMen, inContact, removeArmy, standsIn, takeMen } from "./armies.ts";
 import { adjustLegitimacy } from "./ledger.ts";
+import { battleLostUnrest } from "./morale.ts";
+import { ARMY_MORALE, STORMED_UNREST } from "../../content/kingdom/morale.ts";
 import { hasStanding } from "./economy.ts";
 import { routeOptions, updateSight } from "./explore.ts";
 import { autoResolve } from "./autoresolve.ts";
@@ -555,6 +557,15 @@ export function applyBattleResult(
   if (r.legitimacy > 0) adjustLegitimacy(kingE, book, r.legitimacy, "deeds");
   else if (r.legitimacy < 0) adjustLegitimacy(kingE, book, r.legitimacy, "disgrace");
   if (r.legitimacy !== 0) world.events.push({ kind: "stocksChanged", faction: KING_PLAYER });
+  // K6: a victory lifts the winner's spirits on top of what the field left
+  // them (recent victories, PLAN §B.6); a defeat of the king's side stirs the
+  // town it was fought at and his others of that province (lost battles).
+  if (r.winner === 0 || r.winner === 1) {
+    const w = armyById(world, c.sides[r.winner].army);
+    if (w) w.morale = min(100, w.morale + ARMY_MORALE.win);
+    const kingSide = c.sides[0].faction === KING_PLAYER ? 0 : c.sides[1].faction === KING_PLAYER ? 1 : -1;
+    if (kingSide >= 0 && r.winner !== kingSide) battleLostUnrest(world, h.id);
+  }
   if (r.damage.crops > 0) {
     for (const p of h.plots) {
       if (p.stage !== "sown" && p.stage !== "growing" && p.stage !== "ripe") continue;
@@ -585,6 +596,9 @@ export function applyBattleResult(
     if (c.sides[d].army === 0 && r.winner === c.attacker && armyById(world, c.sides[c.attacker].army)) {
       h.owner = FACTION_IDS[c.sides[c.attacker].faction];
       h.garrison = [];
+      // K6: a town taken by storm does not love its new lord.
+      h.unrest = STORMED_UNREST;
+      h.festival = 0;
       world.events.push({ kind: "stormed", holding: h.id, faction: c.sides[c.attacker].faction });
       world.events.push({ kind: "claimed", holding: h.id, faction: c.sides[c.attacker].faction });
     }

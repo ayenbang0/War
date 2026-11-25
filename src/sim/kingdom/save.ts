@@ -47,13 +47,16 @@ import { KNOW_KNOWN, KNOW_SEEN, KNOW_UNKNOWN, type Knowledge } from "../../conte
 import { STORY_EVENTS } from "../../content/story/events.ts";
 import { UPGRADE_IDS, type UpgradeId } from "../../content/story/upgrades.ts";
 import { updateSight } from "./explore.ts";
+import {
+  DEFAULT_JUSTICE, JUSTICE_IDS, MERCY_MAX, MERCY_MIN, MERCY_START, UNREST_MAX, type JusticeId,
+} from "../../content/kingdom/morale.ts";
 import type { LedgerDay } from "./ledger.ts";
 import { calendar } from "./clock.ts";
 import { roadBetween } from "./graph.ts";
 import { KINGDOM_STREAMS, KingdomWorld } from "./world.ts";
 
 export const KINGDOM_SAVE_FORMAT = "war.kingdom";
-export const KINGDOM_SAVE_VERSION = 5;
+export const KINGDOM_SAVE_VERSION = 6;
 
 export type SavedPlot = { id: number; crop: string | null; stage: PlotStage; progress: number; days: number; health: number };
 export type SavedHolding = {
@@ -71,6 +74,10 @@ export type SavedHolding = {
   doleCarry: number;
   famine: number;
   foraged: number;
+  unrest: number;
+  justice: JusticeId;
+  festival: number;
+  pardoned: number;
 };
 export type SavedSquad = { id: number; unit: UnitTypeId; men: number; wounded: number; levy: boolean };
 export type SavedArmy = {
@@ -103,6 +110,7 @@ export type SavedEconomy = {
   legitimacy: number;
   hunger: number;
   defaultTax: TaxRateId;
+  mercy: number;
   open: LedgerDay;
   closed: LedgerDay | null;
 };
@@ -116,7 +124,12 @@ export type SavedExploration = {
 };
 
 /**
- * Version 5 (K5): the descent -- the contact the realm is held on, if any
+ * Version 6 (K6): morale -- every holding's unrest (permille), its justice,
+ * the days left of a festival and the season of its last pardon; every
+ * faction's Mercy/Terror; two new ledger categories (festivals, justice).
+ * Army morale was already saved (K4).
+ *
+ * (Version 5 (K5): the descent -- the contact the realm is held on, if any
  * (so a meeting left undecided reappears on continue), the pairs that have
  * settled a contact and not yet parted, and whether the world began with the
  * opening hosts (KingdomConfig.hosts), which a replay of the log needs. A
@@ -136,9 +149,9 @@ export type SavedExploration = {
  * ledger pages, and the new fields on holdings (works, idle, tax and its
  * remainders, famine), plots (days, health) and the king (task).)
  */
-export type KingdomSaveV5 = {
+export type KingdomSaveV6 = {
   format: typeof KINGDOM_SAVE_FORMAT;
-  version: 5;
+  version: 6;
   map: string;
   /** Fingerprint of the static map; see mapFingerprint. */
   mapFingerprint: string;
@@ -164,7 +177,7 @@ export type KingdomSaveV5 = {
 };
 
 /** The current save shape. */
-export type KingdomSave = KingdomSaveV5;
+export type KingdomSave = KingdomSaveV6;
 
 export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
 
@@ -175,6 +188,8 @@ export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok
 const V2_CATEGORIES = LEDGER_CATEGORY_IDS.indexOf("finds");
 /** ...and a version-3 page those before K4's first. */
 const V3_CATEGORIES = LEDGER_CATEGORY_IDS.indexOf("provisions");
+/** ...and a version-5 page (K4 and K5 alike) those before K6's first. */
+const V5_CATEGORIES = LEDGER_CATEGORY_IDS.indexOf("festivals");
 
 /** Re-lay a ledger page's flow from `from` categories wide to `to` wide (the new ones zero). */
 function relayPage(v: unknown, from: number, to: number): unknown {
@@ -343,7 +358,32 @@ export const MIGRATIONS: Readonly<Record<number, (save: Record<string, unknown>)
   2: migrate2to3,
   3: migrate3to4,
   4: migrate4to5,
+  5: migrate5to6,
 };
+
+/**
+ * Version 5 (K5) -> 6 (K6). Before K6 no town's unrest was reckoned: every
+ * holding starts calm (0), with no justice, no festival and no pardon given;
+ * every faction's Mercy/Terror is the story's start (0); ledger pages gain
+ * K6's two categories (festivals, justice) at zero. No id moves. The order
+ * log holds no politics orders, so it replays -- under K6's daily rules,
+ * which are the honest meaning of an old log under new rules: a replay from
+ * day 0 reckons unrest from the start, so the snapshot and a replay may
+ * differ in unrest only, and the load takes the snapshot (as every step).
+ */
+function migrate5to6(save: Record<string, unknown>): Record<string, unknown> {
+  const snap = { ...(save.snapshot as Record<string, unknown>) };
+  snap.holdings = (Array.isArray(snap.holdings) ? snap.holdings : []).map((v) => ({
+    ...(v as Record<string, unknown>), unrest: 0, justice: DEFAULT_JUSTICE, festival: 0, pardoned: 0,
+  }));
+  snap.economy = (Array.isArray(snap.economy) ? snap.economy : []).map((v) => {
+    const e: Record<string, unknown> = { ...(v as Record<string, unknown>), mercy: MERCY_START };
+    e.open = relayPage(e.open, V5_CATEGORIES, LEDGER_CATEGORY_IDS.length);
+    e.closed = relayPage(e.closed, V5_CATEGORIES, LEDGER_CATEGORY_IDS.length);
+    return e;
+  });
+  return { ...save, version: 6, snapshot: snap };
+}
 
 /**
  * Version 4 (K4) -> 5 (K5). Before K5 no army had met another: no contact
@@ -374,8 +414,9 @@ function migrate3to4(save: Record<string, unknown>): Record<string, unknown> {
   snap.armies = [];
   snap.economy = (Array.isArray(snap.economy) ? snap.economy : []).map((v) => {
     const e = { ...(v as Record<string, unknown>) };
-    e.open = relayPage(e.open, V3_CATEGORIES, LEDGER_CATEGORY_IDS.length);
-    e.closed = relayPage(e.closed, V3_CATEGORIES, LEDGER_CATEGORY_IDS.length);
+    // To the v4 width (K6's categories come in migrate5to6).
+    e.open = relayPage(e.open, V3_CATEGORIES, V5_CATEGORIES);
+    e.closed = relayPage(e.closed, V3_CATEGORIES, V5_CATEGORIES);
     return e;
   });
   return { ...save, version: 4, snapshot: snap };
@@ -448,7 +489,7 @@ export function serialize(world: KingdomWorld): KingdomSave {
   const page = (d: LedgerDay | null): LedgerDay | null => (d === null ? null : { day: d.day, start: [...d.start], flow: [...d.flow] });
   return {
     format: KINGDOM_SAVE_FORMAT,
-    version: 5,
+    version: 6,
     map: world.map.id,
     mapFingerprint: mapFingerprint(world),
     seed: world.seed,
@@ -476,6 +517,10 @@ export function serialize(world: KingdomWorld): KingdomSave {
         doleCarry: h.doleCarry,
         famine: h.famine,
         foraged: h.foraged,
+        unrest: h.unrest,
+        justice: h.justice,
+        festival: h.festival,
+        pardoned: h.pardoned,
       })),
       king: {
         id: world.king.id, companions: [...world.king.companions], mover: cloneMover(world.king.mover),
@@ -487,6 +532,7 @@ export function serialize(world: KingdomWorld): KingdomSave {
         legitimacy: e.legitimacy,
         hunger: e.hunger,
         defaultTax: e.defaultTax,
+        mercy: e.mercy,
         open: page(world.books[f].open) as LedgerDay,
         closed: page(world.books[f].closed),
       })),
@@ -535,6 +581,18 @@ function num(v: unknown, what: string): number {
 function int(v: unknown, what: string, lo = 0): number {
   const n = num(v, what);
   if (!Number.isInteger(n) || n < lo) throw new Bad(what + " is not a whole number >= " + lo);
+  return n;
+}
+/** K6: unrest in permille, 0..UNREST_MAX. */
+function unrestOf(v: unknown, what: string): number {
+  const n = int(v, what);
+  if (n > UNREST_MAX) throw new Bad(what + " is over " + UNREST_MAX);
+  return n;
+}
+/** K6: Mercy/Terror, MERCY_MIN..MERCY_MAX. */
+function mercyOf(v: unknown, what: string): number {
+  const n = int(v, what, MERCY_MIN);
+  if (n > MERCY_MAX) throw new Bad(what + " is over " + MERCY_MAX);
   return n;
 }
 function u32(v: unknown, what: string): number {
@@ -622,6 +680,12 @@ function readOrder(v: unknown, what: string): KingdomOrder {
         kind, contact: int(o.contact, what + ".contact"), choice: oneOf(o.choice, CONTACT_CHOICES, what + ".choice"),
         result: o.result === null ? null : readResult(o.result, what + ".result"), tick, player, seq,
       };
+    // K6. The holding may name nothing (the sim refuses it); a justice is from a table.
+    case "setJustice":
+      return { kind, holding: int(o.holding, what + ".holding"), justice: oneOf(o.justice, JUSTICE_IDS, what + ".justice"), tick, player, seq };
+    case "holdFestival":
+    case "pardon":
+      return { kind, holding: int(o.holding, what + ".holding"), tick, player, seq };
     default:
       return { kind: "harvest", plot: int(o.plot, what + ".plot"), tick, player, seq };
   }
@@ -967,6 +1031,10 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
       taxCarry: int(h.taxCarry, what + ".taxCarry"), doleCarry: int(h.doleCarry, what + ".doleCarry"),
       famine: int(h.famine, what + ".famine"),
       foraged: int(h.foraged, what + ".foraged"),
+      unrest: unrestOf(h.unrest, what + ".unrest"),
+      justice: oneOf(h.justice, JUSTICE_IDS, what + ".justice"),
+      festival: int(h.festival, what + ".festival"),
+      pardoned: int(h.pardoned, what + ".pardoned"),
     };
   });
 
@@ -992,6 +1060,7 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
     return {
       stocks, legitimacy, hunger: int(o.hunger, what + ".hunger"),
       defaultTax: oneOf(o.defaultTax, TAX_RATE_IDS, what + ".defaultTax"),
+      mercy: mercyOf(o.mercy, what + ".mercy"),
       open: readPage(o.open, what + ".open"),
       closed: o.closed === null ? null : readPage(o.closed, what + ".closed"),
     };
@@ -1052,6 +1121,10 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
     live.doleCarry = h.doleCarry;
     live.famine = h.famine;
     live.foraged = h.foraged;
+    live.unrest = h.unrest;
+    live.justice = h.justice;
+    live.festival = h.festival;
+    live.pardoned = h.pardoned;
   });
   world.king.companions = companions;
   world.king.mover = mover;
@@ -1068,6 +1141,7 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
     live.legitimacy = e.legitimacy;
     live.hunger = e.hunger;
     live.defaultTax = e.defaultTax;
+    live.mercy = e.mercy;
     world.books[i].open = e.open;
     world.books[i].closed = e.closed;
   });

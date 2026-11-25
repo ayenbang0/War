@@ -469,6 +469,11 @@ function scripted(seed: number, days: number, each?: (w: KingdomWorld) => void, 
   const gift: { day: number; stocks: Partial<Record<(typeof STOCK_IDS)[number], number>> }[] = [
     { day: 33, stocks: { coin: 120, timber: 30, iron: 8, grain: 300 } },
     { day: 49, stocks: { levy: 25, coin: 60, iron: 4 } },
+    // K6: bread for the last weeks, or a month of famine at Cold Hearth
+    // ends in a revolt (K6's rule, tools/kingdom-morale.ts) and the
+    // stand-down this script ends on has no town of the king's to go home to.
+    // A little at a time: loose grain spoils.
+    ...[50, 55, 60, 65, 70, 75, 80, 85, 90].map((day) => ({ day, stocks: { grain: 150 } })),
   ];
   const start = w.date.day;
   for (let d = start; d < days; d++) {
@@ -580,7 +585,7 @@ section("migration v3 -> v4");
         if (page.flow[s * nc + c] !== want) kept = false;
       }
     }
-    check("ledger pages re-laid for K4's three categories, every old value kept", kept && nc === oldNC + 3);
+    check("ledger pages re-laid for K4's three categories (and K6's two), every old value kept", kept && nc === oldNC + 5);
     // (Its log is kept, not re-run: K4's rules -- the followers leave a
     // hungry camp -- would play an old log out differently. The snapshot is
     // the realm; the log is its history.)

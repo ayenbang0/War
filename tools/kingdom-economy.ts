@@ -75,6 +75,14 @@ function own(w: KingdomWorld, key: string): Holding {
   h.owner = "king";
   return h;
 }
+/**
+ * K6 setup: hold a holding's unrest at 0, so a K3 rule (a crop's season, a
+ * tax rate's yield) is measured alone over a long run, not cut short by a
+ * revolt that K6's own tests (tools/kingdom-morale.ts) hold to account.
+ */
+function calm(h: Holding): void {
+  h.unrest = 0;
+}
 /** Test setup: give the king stock through the ledger, so conservation still holds. */
 function give(w: KingdomWorld, stocks: Partial<Record<(typeof STOCK_IDS)[number], number>>): void {
   for (const s of STOCK_IDS) if (stocks[s]) credit(kingE(w), kingBook(w), s, stocks[s]!, "trade");
@@ -242,6 +250,7 @@ section("plots");
   const plot = h.plots[0];
   const stages: string[] = [];
   const record = (_w: KingdomWorld, ev: KingdomEvent[]) => {
+    calm(h);
     for (const x of ev) if (x.kind === "plotStage" && x.plot === plot.id) stages.push(x.stage + ":" + x.cause + "@" + day(_w));
   };
   check("an empty field can be sown with rye in autumn", w.check({ kind: "sow", plot: plot.id, crop: "rye" }) === null);
@@ -283,7 +292,7 @@ section("plots");
   // Left ripe too long: spoiled.
   const p2 = h.plots[1];
   p2.crop = "wheat"; p2.stage = "ripe"; p2.days = 0; p2.progress = 1;
-  runDays(w, CROPS.wheat.ripeDays + 2);
+  runDays(w, CROPS.wheat.ripeDays + 2, () => calm(h));
   check("a ripe field left too long spoils", (p2.stage as string) === "spoiled");
   check("a spoiled field can be sown again (in the crop's season)", w.check({ kind: "sow", plot: p2.id, crop: "wheat" }) !== REFUSAL.plotInUse &&
     w.check({ kind: "sow", plot: p2.id, crop: "herbs" }) === null, String(w.check({ kind: "sow", plot: p2.id, crop: "herbs" })));
@@ -471,7 +480,7 @@ section("taxes");
     give(w, { grain: 5000 });
     issue(w, { kind: "setTax", holding: h.id, rate });
     let coin = 0;
-    runDays(w, 125, (_w) => { if (_w.now % TICKS_PER_DAY === 1 && _w.books[0].closed) coin += flowOf(_w.books[0].closed, "coin", "tax"); });
+    runDays(w, 125, (_w) => { calm(h); if (_w.now % TICKS_PER_DAY === 1 && _w.books[0].closed) coin += flowOf(_w.books[0].closed, "coin", "tax"); });
     return { rate, coin, pop: h.population };
   });
   let mono = true;

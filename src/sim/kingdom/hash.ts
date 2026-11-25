@@ -22,6 +22,7 @@ import { FACTION_IDS, type FactionId } from "../../content/kingdom/factions.ts";
 import { ROAD_TERRAIN_IDS, WEATHER_IDS } from "../../content/kingdom/terrain.ts";
 import { BUILDING_IDS } from "../../content/kingdom/buildings.ts";
 import { CROP_IDS } from "../../content/kingdom/crops.ts";
+import { JUSTICE_IDS } from "../../content/kingdom/morale.ts";
 import { STOCK_IDS, TAX_RATE_IDS } from "../../content/kingdom/economy.ts";
 import { CONTACT_CHOICES, KINGDOM_ORDER_KINDS, type KingdomOrder } from "./orders.ts";
 import { mixBattleResult } from "../layers.ts";
@@ -100,6 +101,9 @@ export function mixOrder(h: number, o: KingdomOrder): number {
       h = mixU32(h, o.result ? 1 : 0);
       return o.result ? mixBattleResult(h, o.result) : h;
     }
+    case "setJustice": return mixU32(mixU32(h, o.holding), JUSTICE_IDS.indexOf(o.justice));
+    case "holdFestival": return mixU32(h, o.holding);
+    case "pardon": return mixU32(h, o.holding);
   }
 }
 
@@ -186,6 +190,11 @@ export function kingdomHash(world: KingdomWorld): string {
     h = mixU32(h, x.doleCarry);
     h = mixU32(h, x.famine);
     h = mixU32(h, x.foraged);
+    // K6: unrest and the levers pulled here.
+    h = mixU32(h, x.unrest);
+    h = mixU32(h, JUSTICE_IDS.indexOf(x.justice));
+    h = mixU32(h, x.festival);
+    h = mixU32(h, x.pardoned);
   }
 
   h = mixU32(h, world.roads.length);
@@ -238,6 +247,7 @@ export function kingdomHash(world: KingdomWorld): string {
     h = mixF64(h, e.legitimacy);
     h = mixU32(h, e.hunger);
     h = mixU32(h, TAX_RATE_IDS.indexOf(e.defaultTax));
+    h = mixU32(h, e.mercy + 0x8000); // K6: Mercy/Terror, offset so it is never negative
     h = mixLedgerDay(h, world.books[f].open);
     h = mixLedgerDay(h, world.books[f].closed);
   });

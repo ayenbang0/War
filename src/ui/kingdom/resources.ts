@@ -27,6 +27,7 @@ import { stockIcon } from "./icons.ts";
 
 import { armiesOf, armyUpkeep } from "../../sim/kingdom/armies.ts";
 import { AC } from "../../content/kingdom/army-strings.ts";
+import { MERCY } from "../../content/kingdom/morale-strings.ts";
 
 function make(doc: Document, tag: string, cls?: string, text?: string): HTMLElement {
   const n = doc.createElement(tag);
@@ -54,6 +55,10 @@ export class ResourcesBar {
   private readonly store: HTMLElement;
   private readonly burn: HTMLElement;
   private readonly trouble: HTMLElement;
+  /** K6: the realm's Mercy/Terror, after the stocks (it is not one: no ledger, no day's change). */
+  private readonly mercyItem: HTMLElement;
+  private readonly mercyName: HTMLElement;
+  private readonly mercyValue: HTMLElement;
 
   constructor(doc: Document) {
     this.root = make(doc, "div", "k-box k-stores");
@@ -71,6 +76,13 @@ export class ResourcesBar {
       list.appendChild(item);
       this.cells.set(s, { item, value, delta });
     }
+    this.mercyItem = make(doc, "li", "k-stock k-stock-mercy");
+    this.mercyItem.setAttribute("title", MERCY.name + " / " + MERCY.terror + ": " + MERCY.about);
+    this.mercyItem.appendChild(stockIcon(doc, "mercy"));
+    this.mercyName = make(doc, "span", "k-stock-name", MERCY.name);
+    this.mercyValue = make(doc, "span", "k-stock-value", "0");
+    this.mercyItem.append(this.mercyName, this.mercyValue);
+    list.appendChild(this.mercyItem);
     const lines = make(doc, "p", "k-stock-lines");
     this.lasts = make(doc, "span", "k-lasts");
     this.store = make(doc, "span", "k-store");
@@ -97,6 +109,12 @@ export class ResourcesBar {
       const label = STOCK_NAME[s] + " " + v + ", " + (d === 0 ? E.noChange : E.sinceYesterday(d));
       if (cell.item.getAttribute("aria-label") !== label) cell.item.setAttribute("aria-label", label);
     }
+    // K6: Mercy above zero, Terror below -- named by which it is, never by colour alone.
+    const m = e.mercy;
+    setText(this.mercyName, m >= 0 ? MERCY.name : MERCY.terror);
+    setText(this.mercyValue, String(m < 0 ? -m : m));
+    const ml = MERCY.label(m);
+    if (this.mercyItem.getAttribute("aria-label") !== ml) this.mercyItem.setAttribute("aria-label", ml);
     setText(this.lasts, STOCK_NAME.grain + " " + E.grainLasts(grainDays(world)));
     const st = storageOf(world, KING_PLAYER);
     setText(this.store, " · " + E.grainStore(st.granary + st.loose));
@@ -114,6 +132,11 @@ export class ResourcesBar {
   shown(s: LedgerStockId): { value: string; delta: string } {
     const c = this.cells.get(s)!;
     return { value: c.value.textContent ?? "", delta: c.delta.textContent ?? "" };
+  }
+
+  /** The Mercy/Terror cell as shown, for the tests ("Mercy 2", "Terror 3"). */
+  get mercyText(): string {
+    return (this.mercyName.textContent ?? "") + " " + (this.mercyValue.textContent ?? "");
   }
 
   get troubleText(): string {
