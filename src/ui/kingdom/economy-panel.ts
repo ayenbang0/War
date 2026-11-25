@@ -1,9 +1,13 @@
 /**
- * The economy panel of the region card, and its two choice menus: the build
- * menu and the plot manager's sow menu (K3; docs/audit/u2-economy-panels.md).
+ * The economy panel, and its two choice menus: the build menu and the plot
+ * manager's sow menu (K3; docs/audit/u2-economy-panels.md).
  *
- * THE PANEL is part of the non-modal region card, shown for a holding the
- * king owns: its tax (a group of toggle buttons with aria-pressed, plus "Same
+ * K3b: the region card no longer carries the panel (it shows a summary and
+ * "Enter the city"); the city view's cards use these pieces instead -- the
+ * politics card draws only the tax section (`sections`, no heading), and the
+ * lot card opens `buildMenu` with a note naming the lot it builds on.
+ *
+ * THE PANEL, shown for a holding the king owns, has its tax (a group of toggle buttons with aria-pressed, plus "Same
  * rate everywhere"), its bread and any famine, its building slots with a
  * Build… button, and its fields with Sow… and Harvest. It is rebuilt only
  * when what it shows changes (a signature of the holding's state), and a
@@ -98,9 +102,22 @@ function signature(world: KingdomWorld, h: Holding): string {
   ].join("|");
 }
 
-export function economyPanel(doc: Document, world: KingdomWorld, holdingId: number, hooks: EconomyHooks): EconomyPanel {
+/** Which parts of the panel to draw (K3b: the city's politics card draws only the tax). */
+export type EconomySection = "tax" | "buildings" | "fields";
+
+export type EconomyPanelOptions = {
+  readonly sections?: readonly EconomySection[];
+  /** The section's heading; null for none (the card it sits in has its own). */
+  readonly title?: string | null;
+};
+
+export function economyPanel(
+  doc: Document, world: KingdomWorld, holdingId: number, hooks: EconomyHooks, opts: EconomyPanelOptions = {},
+): EconomyPanel {
   const h = world.holding(holdingId) as Holding;
   const root = make(doc, "section", "k-economy");
+  const sections = opts.sections ?? ["tax", "buildings", "fields"];
+  const heading = opts.title === undefined ? E.economy : opts.title;
   let shown = "";
   /** The key of the last control the player used here, so a menu's return lands on it. */
   let lastKey = "";
@@ -112,10 +129,18 @@ export function economyPanel(doc: Document, world: KingdomWorld, holdingId: numb
       return;
     }
     root.style.display = "block";
-    root.setAttribute("aria-labelledby", "k-economy-title");
-    const title = make(doc, "h3", "k-section", E.economy);
-    title.id = "k-economy-title";
-    root.appendChild(title);
+    if (heading !== null) {
+      root.setAttribute("aria-labelledby", "k-economy-title");
+      const title = make(doc, "h3", "k-section", heading);
+      title.id = "k-economy-title";
+      root.appendChild(title);
+    }
+    if (sections.includes("tax")) buildTax();
+    if (sections.includes("buildings")) buildBuildings();
+    if (sections.includes("fields")) buildFields();
+  };
+
+  const buildTax = (): void => {
 
     // Tax.
     const rate = TAX_RATES[TAX_RATE_IDS.indexOf(h.tax)];
@@ -155,8 +180,9 @@ export function economyPanel(doc: Document, world: KingdomWorld, holdingId: numb
     };
     taxes.appendChild(realm);
     root.appendChild(taxes);
+  };
 
-    // Buildings.
+  const buildBuildings = (): void => {
     root.appendChild(make(doc, "h3", "k-section", E.buildings));
     const slots = make(doc, "ul", "k-list");
     h.buildings.forEach((b, i) => {
@@ -172,8 +198,9 @@ export function economyPanel(doc: Document, world: KingdomWorld, holdingId: numb
     buildBtn.setAttribute("aria-label", E.buildAt(h.name));
     buildBtn.onclick = () => { lastKey = "build"; hooks.openMenu(buildMenu(doc, world, h, hooks)); };
     root.appendChild(buildBtn);
+  };
 
-    // Fields.
+  const buildFields = (): void => {
     root.appendChild(make(doc, "h3", "k-section", E.fields));
     const fields = make(doc, "ul", "k-list k-fields");
     h.plots.forEach((p, i) => {
@@ -327,11 +354,12 @@ function costOf(c: Cost): string {
   return amountsLine(c);
 }
 
-export function buildMenu(doc: Document, world: KingdomWorld, h: Holding, hooks: EconomyHooks): Screen {
+/** `note` adds a line to the intro (K3b: which lot of the city the building goes on). */
+export function buildMenu(doc: Document, world: KingdomWorld, h: Holding, hooks: EconomyHooks, note = ""): Screen {
   return choiceMenu(doc, {
     name: "build-menu",
     title: E.buildTitle(h.name),
-    intro: E.buildIntro,
+    intro: note ? E.buildIntro + " " + note : E.buildIntro,
     options: () => BUILDING_IDS.map((id): Option => {
       const def = BUILDINGS[id];
       const order: KingdomOrderBody = { kind: "build", holding: h.id, building: id };

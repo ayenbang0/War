@@ -731,6 +731,64 @@ begin("app: screens and layers");
   check("K2: Home now offers a new exile too", btn("Begin a new exile") !== null);
   click("The Exile of Rimaros");
   check("K2: the Exile continues the saved realm", hook.kingdom()?.world.now === kAt);
+
+  // The city view (K3b): a layer below the map, started and torn down as cleanly.
+  {
+    const r = hook.kingdom()!;
+    const w = r.world;
+    // A fixture: give the king a hamlet (the e2e claims one the player's way).
+    const h0 = w.holdings.find((h) => h.kind === "hamlet" && h.owner === null)!;
+    (h0 as { owner: string | null }).owner = "king";
+    const winB = win.listenerCount();
+    const docB = docListeners();
+    const canB = canvas.count();
+    const clock = (): string => JSON.stringify({ run: r.clock.run, speed: r.clock.speed });
+    const clock0 = clock();
+    const now0 = w.now;
+    const mapFrames = r.renderer.stats.frames;
+    r.requestCity(h0.id);
+    const c = hook.city();
+    check("K3b: the city layer is live over the suspended map", c !== null && c.phase === "live" && hook.top() === "city" &&
+      r.isSuspended && hook.realm() === r && hook.kingdom() === null);
+    check("K3b: entering keeps the realm's clock and day", clock() === clock0 && w.now === now0);
+    check("K3b: the city panel is on the page", doc.querySelectorAll(".c-panel").length === 1);
+    check("K3b: focus lands on its heading", (doc.activeElement as unknown) === c?.panel.heading);
+    win.runFrames(12);
+    check("K3b: the city draws its plan", (c?.renderer.stats.frames ?? 0) > 5);
+    check("K3b: the map does not draw under it", r.renderer.stats.frames === mapFrames);
+    if (r.clock.run === "paused") press("Space");
+    const t1 = w.now;
+    win.runFrames(30);
+    check("K3b: the realm's clock runs on in the city", w.now > t1, (w.now - t1) + " ticks");
+    press("Space");
+    check("K3b: Space pauses it from the city", r.clock.run === "paused");
+    press("KeyP");
+    check("K3b: P opens the politics card", hook.top() === "politics-card");
+    press("Escape");
+    check("K3b: Esc closes the card first", hook.top() === "city" && c?.card === null);
+    const kept = JSON.stringify({ now: w.now, clock: clock(), stocks: w.kingStocks.stocks });
+    press("Escape");
+    check("K3b: Esc again leaves the city", hook.top() === "kingdom" && hook.kingdom() === r && !r.isSuspended && c?.phase === "torn-down");
+    check("K3b: leaving keeps the realm as the city left it", JSON.stringify({ now: w.now, clock: clock(), stocks: w.kingStocks.stocks }) === kept);
+    check("K3b: one frame loop again, the map's", win.pendingFrames() === 1, String(win.pendingFrames()));
+    check("K3b: every window listener the city added is gone", win.listenerCount() === winB, String(win.listenerCount() - winB));
+    check("K3b: every document listener too", docListeners() === docB, String(docListeners() - docB));
+    check("K3b: and every canvas listener", canvas.count() === canB, String(canvas.count() - canB));
+    check("K3b: the city panel is off the page", doc.querySelectorAll(".c-panel").length === 0);
+    win.runFrames(3);
+    check("K3b: the map draws again", r.renderer.stats.frames > mapFrames);
+    // Losing the holding while inside goes back up, and says why.
+    r.requestCity(h0.id);
+    const c2 = hook.city();
+    (h0 as { owner: string | null }).owner = null;
+    win.runFrames(2);
+    check("K3b: a holding lost while inside sends you back to the map", hook.top() === "kingdom" && c2?.phase === "torn-down" &&
+      r.hud.resultText.includes("no longer yours"), r.hud.resultText);
+    check("K3b: and leaves no listener behind", canvas.count() === canB && win.listenerCount() === winB);
+    // Another's holding has no city.
+    r.requestCity(h0.id);
+    check("K3b: another's holding cannot be entered", hook.top() === "kingdom" && hook.city() === null);
+  }
   press("Escape");
 
   app.dispose();
@@ -813,6 +871,22 @@ begin("ui policy (BS-06, BS-07, BS-10, BS-11, RT-02)");
       check(page.slice(3) + " links explore.css", read(page).includes("/src/ui/kingdom/explore.css"));
     }
   }
+  // The city view's stylesheet too (K3b, audit C-01).
+  {
+    const ccss = read("../src/ui/city/city.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const bad: string[] = [];
+    for (const m of ccss.matchAll(/font(?:-size)?\s*:\s*([^;}]+)/g)) {
+      const v = m[1];
+      for (const n of v.matchAll(/(\d*\.?\d+)(px|rem|em)\b/g)) {
+        if (v.slice(0, n.index ?? 0).trimEnd().endsWith("/")) continue;
+        if (n[2] === "px" || parseFloat(n[1]) < 1) bad.push(m[0].trim());
+      }
+    }
+    check("city.css: no font size in px or under 1rem", bad.length === 0, bad.join(" | "));
+    check("city.css: the panel heading has an authored focus ring", /\.c-title:focus-visible[^{]*\{[^}]*outline:\s*3px/.test(ccss));
+    check("city.css: index.html and e2e.html load it", read("../index.html").includes("/src/ui/city/city.css") &&
+      read("../e2e.html").includes("/src/ui/city/city.css"));
+  }
   const token = /--text:\s*(\d*\.?\d+)rem/.exec(css);
   check("the body text token is at least 1rem", token !== null && parseFloat(token[1]) >= 1, token ? token[0] : "missing");
 
@@ -850,6 +924,71 @@ begin("ui policy (BS-06, BS-07, BS-10, BS-11, RT-02)");
   check("primary buttons' text holds 4.5:1", ratio("#f4efe2", tok("friend")) >= 4.5);
   check("disabled primary text holds 4.5:1", ratio(tok("ink-1"), "#d9d1bd") >= 4.5);
   check("the focus ring holds 3:1 on parchment", ratio(tok("focus"), tok("panel")) >= 3);
+}
+
+// -- the city plans (K3b) ----------------------------------------------------------
+
+begin("city plans (K3b)");
+{
+  const { KingdomWorld } = await import("../src/sim/kingdom/world.ts");
+  const { planFor, pickAt } = await import("../src/render/city/layout.ts");
+  type P = { readonly x: number; readonly y: number };
+  // Separating axes for two convex polygons: true when they overlap by more than `eps`.
+  const overlap = (a: readonly P[], b: readonly P[], eps = 0.5): boolean => {
+    for (const poly of [a, b]) {
+      for (let i = 0; i < poly.length; i++) {
+        const p = poly[i];
+        const q = poly[(i + 1) % poly.length];
+        const nx = q.y - p.y;
+        const ny = p.x - q.x;
+        const len = Math.hypot(nx, ny) || 1;
+        let aMin = Infinity, aMax = -Infinity, bMin = Infinity, bMax = -Infinity;
+        for (const v of a) { const d = (v.x * nx + v.y * ny) / len; aMin = Math.min(aMin, d); aMax = Math.max(aMax, d); }
+        for (const v of b) { const d = (v.x * nx + v.y * ny) / len; bMin = Math.min(bMin, d); bMax = Math.max(bMax, d); }
+        if (aMax - eps <= bMin || bMax - eps <= aMin) return false;
+      }
+    }
+    return true;
+  };
+  const w = new KingdomWorld({ seed: 7 });
+  const sigs = new Set<string>();
+  const clash: string[] = [];
+  const outside: string[] = [];
+  const counts: string[] = [];
+  const picks: string[] = [];
+  let same = true;
+  for (const h of w.holdings) {
+    const a = planFor(w, h.id);
+    const b = planFor(w, h.id);
+    if (JSON.stringify(a) !== JSON.stringify(b)) same = false;
+    sigs.add(JSON.stringify({ lots: a.lots, fields: a.fields, streets: a.streets }));
+    if (a.lots.length !== h.buildings.length || a.fields.length !== h.plots.length) counts.push(h.name);
+    for (let i = 0; i < a.lots.length; i++) {
+      for (let j = i + 1; j < a.lots.length; j++) if (overlap(a.lots[i].poly, a.lots[j].poly)) clash.push(h.name + " lots " + i + "/" + j);
+      for (const f of a.fields) if (overlap(a.lots[i].poly, f.poly)) clash.push(h.name + " lot " + i + " on field " + f.index);
+      for (const v of a.lots[i].poly) if (v.x < 0 || v.y < 0 || v.x > a.width || v.y > a.height) outside.push(h.name + " lot " + i);
+      const at = pickAt(a, { x: a.lots[i].x, y: a.lots[i].y }, 1);
+      if (!at || at.kind !== "lot" || at.index !== i) picks.push(h.name + " lot " + i);
+    }
+    for (const f of a.fields) {
+      const at = pickAt(a, { x: f.cx, y: f.cy }, 1);
+      if (!at || at.kind !== "field" || at.index !== f.index) picks.push(h.name + " field " + f.index);
+    }
+  }
+  check("every holding's plan is the same each time it is drawn", same);
+  check("every holding's plan is its own", sigs.size === w.holdings.length, sigs.size + " of " + w.holdings.length);
+  check("each plan has one lot per building slot and one field per plot", counts.length === 0, counts.join(", "));
+  check("no lot overlaps another lot or a field", clash.length === 0, clash.slice(0, 6).join(", "));
+  check("every lot is on the sheet", outside.length === 0, outside.slice(0, 6).join(", "));
+  check("a tap on a lot's or a field's middle picks it", picks.length === 0, picks.slice(0, 6).join(", "));
+  // Each country looks like itself (audit C-07).
+  const by = (pred: (p: ReturnType<typeof planFor>) => boolean): string[] =>
+    w.holdings.filter((h) => pred(planFor(w, h.id))).map((h) => h.biome);
+  const water = by((p) => p.water !== null);
+  check("river and coast towns have their water, and only they", water.length > 0 &&
+    water.every((b) => b === "river" || b === "river-town" || b === "coast"), water.join(","));
+  const hills = by((p) => p.contours.length > 0);
+  check("hill country has its height lines", hills.every((b) => b === "highland" || b === "border-hills"), hills.join(","));
 }
 
 console.log("");

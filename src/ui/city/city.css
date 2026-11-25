@@ -1,0 +1,43 @@
+/*
+ * The city view (K3b; docs/audit/u2-city-view.md). Sits inside the kingdom
+ * HUD (.kingdom-ui), so it shares its type, buttons and focus ring; held to
+ * the same floor as kingdom.css (ui-check: no px fonts, nothing under 1rem,
+ * an authored 3px focus ring).
+ */
+
+/* The map's key hint is for the map: the city panel carries its own. */
+.kingdom-ui.in-city .k-keys { display: none; }
+
+.c-panel {
+  position: absolute; z-index: 7;
+  left: max(12px, env(safe-area-inset-left)); top: 96px;
+  width: min(21rem, calc(100vw - 24px)); max-height: calc(100vh - 330px); overflow: auto;
+  flex-direction: column; gap: 4px;
+  pointer-events: auto;
+  background: rgba(239, 232, 214, 0.96); border: 1px solid #a3906c; border-radius: 4px;
+  padding: 12px 14px; box-shadow: 0 6px 22px rgba(38, 32, 22, 0.25);
+}
+.c-eyebrow { margin: 0; color: #5f5138; font-size: 1rem; letter-spacing: 0.04em; text-transform: uppercase; }
+.c-title { margin: 0; font-size: 1.3125rem; }
+.c-sub { margin: 0 0 6px; color: #5f5138; }
+.c-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 2px; }
+.c-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.c-item { width: 100%; text-align: left; }
+.c-actions .c-item { width: auto; }
+/* What is open beside the panel: a heavier rule AND bold, not colour alone. */
+.c-item[aria-current="true"] { border-left: 4px solid #2e4a6d; font-weight: 700; }
+.c-item.c-warn { border-style: dashed; color: #8c3a34; }
+.c-item.c-good { font-weight: 700; }
+.c-keys { margin: 8px 0 0; color: #5f5138; }
+.c-note { margin: 8px 0 0; }
+.c-note:empty { display: none; }
+.c-later dd { color: #5f5138; font-style: italic; }
+.c-title:focus-visible {
+  outline: 3px solid #1f4f86; outline-offset: 2px; box-shadow: 0 0 0 5px #f6f0e0;
+}
+
+@media (max-width: 700px) {
+  /* A narrow window: the panel is a strip under the top bar; cards still rise from the bottom. */
+  .c-panel { top: auto; bottom: max(150px, 30vh); max-height: 34vh; width: auto; right: 12px; }
+  .c-keys { display: none; }
+}

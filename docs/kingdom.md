@@ -574,3 +574,73 @@ reopens its card) and the upgrades held.
 
 No armies seeing (K4 adds sources); captains do not explore; no event chains
 or story beats (K9); `later` upgrade effects are data only.
+## K3b — the city view
+
+The layer below the kingdom map: one holding of the king's, drawn as a town
+plan, where its lots are built on, its fields sown and reaped and its tax set.
+`Layer = KingdomLayer | CityLayer | BattleLayer` (`src/app/layers.ts`).
+
+### A view of the same realm
+
+The city has no world of its own. `CityLayer` (`src/app/city-layer.ts`)
+reads the kingdom's `KingdomWorld` and issues K3's orders (`build`, `sow`,
+`harvest`, `setTax`) through the realm's `issueFromUi`. While it is live the
+kingdom layer is **suspended** (`suspend()`): no frame loop, pen, camera or
+zoom-through, its card closed, but not torn down. The city's frame calls
+`realm.advance(dt)`, which is the map's own clock, ticks, autosave and HUD,
+so pause, speed, the date, the stores and the alerts stay where they were.
+`resume(holding)` brings the map back. No sim file changed.
+
+### Going in and out
+
+| In | Out |
+|---|---|
+| **Enter the city** on an owned holding's region card | **Esc** (after a menu, a card and a stroke have had theirs) |
+| a **double tap** on the holding (two taps within 0.45 s) | **Leave the city** in the panel |
+| the **wheel past the map's closest zoom** over it (`input/zoom-through.ts`: 220 wheel px build up at the limit, forgotten after 0.6 s) | the **wheel past the town's widest zoom**, or `-` held there for 0.6 s |
+
+Another's holding is refused in words. A holding lost while inside sends you
+back up, and the map says why. Entering scales the plan in from the
+holding's place on the map (0.45 s); leaving cuts the map to the holding at
+its closest zoom and eases out (0.45 s); both are cuts under reduced motion.
+
+### The town plan (`src/render/city/`)
+
+`layout.ts` is pure: `cityPlan({key, seed, biome, kind, slots, plots,
+roadAngles})` → streets along the real roads out, a square (green, market or
+bailey), one lot per building slot clockwise from the main street, fields
+outside the core (never across the water), the ring a palisade or wall
+follows, houses, trees, a river or the sea for river and coast country,
+height lines for hill country, stones and heather for moor and the Reach,
+hedgerows for farmland. Seeded by the holding's seed and key, so a town
+looks the same each visit and no two look alike. `pickAt` hit-tests lots
+(first), the square, then fields. `renderer.ts` draws it in the map-table
+look with the holding's live state: a lot empty, staked (next to build),
+being built (scaffold hatch and a progress bar), standing (block, glyph,
+name) or idle (struck through); the enclosure once built; each field's crop
+by pattern and label.
+
+**Lot order.** The sim's `build` takes the first free slot, so a town builds
+round its square in turn: the next free lot is staked, and a later free lot's
+card and the build menu say which lot the building will go on.
+
+### The UI (`src/ui/city/`)
+
+The **city panel** (left): name, kind, province and people; Politics and
+Leave buttons; every lot and field as a button (the keyboard's way to what
+the plan offers the pen). The **lot card** (state, upkeep, what it does,
+Build… / Build on lot N…), the **field card** (crop, stage, health, Sow…,
+Harvest) and the **politics card** (people; K3's tax section with bread and
+famine; loyalty, lords and laws said plainly to be not yet reckoned, K6)
+are non-modal cards in the region card's frame; the build and sow menus are
+K3's. The region card now shows a summary (tax, lots, fields, famine) and
+the way in. Keys in the city: Esc, Space, `.`, 1 2 3, `P` politics, `F` the
+whole town, the camera keys. The pen taps; a longer line does nothing in a
+town and says so.
+
+Tests: ui-check "K3b" (start/teardown leaves no listener; the realm's clock
+and state kept; a lost holding leaves) and "city plans (K3b)"
+(deterministic, distinct, no overlaps, picks); e2e `k3b-city-view`,
+`k3b-zoom-through`, and K3's two scenarios now run through the city. Audit:
+`docs/audit/u2-city-view.md` (no open P0/P1; runtime pass pending a real
+browser).

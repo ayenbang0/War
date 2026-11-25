@@ -6,6 +6,11 @@
 
 import type { BattleLayer } from "./battle-layer.ts";
 import type { KingdomLayer } from "./kingdom-layer.ts";
+import type { CityLayer } from "./city-layer.ts";
 
-export type Layer = KingdomLayer | BattleLayer;
+/**
+ * K3b: the city is the layer below the kingdom map. While it is live the
+ * kingdom layer is suspended under it (not torn down): `CityLayer.realm`.
+ */
+export type Layer = KingdomLayer | CityLayer | BattleLayer;
 export type LayerKind = Layer["kind"];

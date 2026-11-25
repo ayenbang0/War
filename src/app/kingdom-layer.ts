@@ -40,6 +40,9 @@ import { KingdomClock, type KingdomSpeed } from "./kingdom-clock.ts";
 import { ExploreUi } from "../ui/kingdom/explore-ui.ts";
 import { knowsHolding } from "../sim/kingdom/explore.ts";
 import { X } from "../content/story/strings.ts";
+import { ZoomThrough } from "../input/zoom-through.ts";
+import { holdingAt } from "../input/kingdom-gestures.ts";
+import { C } from "../content/kingdom/city-strings.ts";
 import { saveKingdom, type SaveOutcome, type StorageLike } from "./kingdom-save.ts";
 
 /** Where the kingdom layer is in its life; mirrors BattlePhase. */
@@ -70,6 +73,11 @@ export type KingdomHooks = {
   pushScreen(s: Screen): void;
   /** Pop `s` if it is on top; otherwise do nothing. */
   popScreen(s: Screen): void;
+  /**
+   * K3b: go down a layer, into the city of one of the king's holdings.
+   * `from` is where the holding is on screen, for the transition.
+   */
+  enterCity?(holding: number, from: MapPoint): void;
 };
 
 /** How the realm was opened, for the first line in the feed. */
@@ -81,8 +89,14 @@ const FADE_SECONDS = 0.6;
 const FIND_KING_SECONDS = 0.5;
 /** Longest frame step fed to the clock and the camera: a tab that slept resumes, it does not leap. */
 const MAX_FRAME_SECONDS = 0.25;
+/** K3b: two taps on one holding this close together enter its city. */
+const DOUBLE_TAP_SECONDS = 0.45;
+/** K3b: the eased zoom out to the map on leaving a city (instant under reduced motion). */
+const LAYER_SECONDS = 0.45;
+/** K3b: on leaving a city the map eases out to at least this many miles across. */
+const RETURN_MILES = 260;
 
-function reducedMotion(win: Window): boolean {
+export function reducedMotion(win: Window): boolean {
   try {
     return typeof win.matchMedia === "function" && win.matchMedia("(prefers-reduced-motion: reduce)").matches;
   } catch {
@@ -134,6 +148,13 @@ export class KingdomLayer implements LayerKeys {
   /** Set by an event that changes what the resources bar shows. */
   private storesDirty = false;
   private oldCanvasLabel: string | null = null;
+  /** K3b: a city is open over the map. The realm still runs (the city drives `advance`); the map is not drawn and takes no input. */
+  private suspended = false;
+  /** K3b: the map's zoom when a city was entered, to ease back out to. */
+  private zoomBefore = 0;
+  /** K3b: the last tap on a holding, for a double tap. */
+  private lastTap: { holding: number; at: number } | null = null;
+  private readonly zoomIn: ZoomThrough;
 
   constructor(world: KingdomWorld, env: KingdomEnv, hooks: KingdomHooks, opening: KingdomOpening, notice: string | null = null) {
     this.world = world;
@@ -172,6 +193,25 @@ export class KingdomLayer implements LayerKeys {
     // Built now but off until start(), and removed by teardown() whether or
     // not the layer was ever started -- the battle layer's rule.
     this.pen = new KingdomPen(env.canvas, this.cam, sink);
+    // K3b: wheeling on past the closest zoom over a holding of the king's
+    // goes down into its city. Added before the camera's controls, so it sees
+    // whether the camera was already at its limit before this notch.
+    this.zoomIn = new ZoomThrough(env.canvas, {
+      direction: "in",
+      atLimit: () => this.cam.zoom >= this.cam.maxZoom - 1e-9,
+      target: (sx, sy) => {
+        const p = { x: this.cam.screenToWorldX(sx), y: this.cam.screenToWorldY(sy) };
+        const hv = holdingAt(kingdomContext(this.world, this.kingDrawn(), this.cam.pxToWorld), p);
+        if (!hv) return null;
+        return this.world.holding(hv.id)?.owner === "king" ? hv.id : "refused";
+      },
+      through: (id) => this.requestCity(id),
+      refused: (sx, sy) => {
+        const hv = holdingAt(kingdomContext(this.world, this.kingDrawn(), this.cam.pxToWorld),
+          { x: this.cam.screenToWorldX(sx), y: this.cam.screenToWorldY(sy) });
+        if (hv) this.hud.result(C.notYours(this.world.holding(hv.id)?.name ?? "?"));
+      },
+    });
     this.controls = new KingdomCameraControls(env.canvas, this.cam, !this.reduced);
     this.pen.setEnabled(false);
     this.controls.setEnabled(false);
@@ -211,6 +251,7 @@ export class KingdomLayer implements LayerKeys {
     win.removeEventListener("pagehide", this.onPageHide);
     doc.removeEventListener("visibilitychange", this.onVisibility);
     this.pen.dispose();
+    this.zoomIn.dispose();
     this.controls.dispose();
     this.hud.root.parentNode?.removeChild(this.hud.root);
     if (this.oldCanvasLabel === null) canvas.removeAttribute("aria-label");
@@ -225,10 +266,12 @@ export class KingdomLayer implements LayerKeys {
 
   /** The screen on top decides what is live (plan §C.4). */
   setContexts(contexts: readonly InputContext[]): void {
-    if (this.phase === "torn-down") return;
+    // While a city is open its layer decides (and lends the HUD's buttons out).
+    if (this.phase === "torn-down" || this.suspended) return;
     const pen = contexts.includes("pen");
     this.pen.setEnabled(pen && this.phase === "live");
     this.controls.setEnabled(contexts.includes("camera") && this.phase === "live");
+    this.zoomIn.setEnabled(contexts.includes("camera") && this.phase === "live");
     // The HUD's buttons are usable exactly while the map is: under a card
     // (non-modal) yes, under a confirm no.
     this.hud.setLive(pen);
@@ -312,6 +355,18 @@ export class KingdomLayer implements LayerKeys {
     }
     this.runTicks(n);
     this.hud.result(K.steppedDay);
+  }
+
+  /**
+   * K3b: run the realm's clock for `dt` real seconds and return the ticks it
+   * ran. The map's own frame calls it; so does an open city's, because the
+   * city is a view of the same realm and its time does not stop there.
+   */
+  advance(dt: number): number {
+    const n = this.clock.advance(dt, this.hooks.simHeld());
+    this.runTicks(n);
+    this.hud.setRun(this.clock.run, this.clock.speed);
+    return n;
   }
 
   /** Run `n` ticks and react to what they did. The only caller of world.tick(). */
@@ -497,6 +552,17 @@ export class KingdomLayer implements LayerKeys {
       else this.hud.result(intent.message);
       if (intent.at) this.pulse(intent.at);
     } else if (intent.card) {
+      // K3b: a second tap on the same holding of the king's, soon after the
+      // first, goes into its city (the first opened its card, as ever).
+      const c = intent.card;
+      const last = this.lastTap;
+      if (c.kind === "region" && last && last.holding === c.holding && this.clockSeconds - last.at <= DOUBLE_TAP_SECONDS &&
+        this.world.holding(c.holding)?.owner === "king" && this.hooks.enterCity) {
+        this.lastTap = null;
+        this.requestCity(c.holding);
+        return;
+      }
+      this.lastTap = c.kind === "region" ? { holding: c.holding, at: this.clockSeconds } : null;
       this.openCard(intent.card);
     } else {
       this.hud.result(intent.message);
@@ -526,6 +592,7 @@ export class KingdomLayer implements LayerKeys {
         this.hud.result(K.haltDone);
       },
       closed: () => { if (this.card === view) this.card = null; },
+      enterCity: (id: number) => this.requestCity(id),
       issue: (body: KingdomOrderBody, said: string) => this.issueFromUi(body, said),
       economy: {
         issue: (body: KingdomOrderBody, said: string) => this.issueFromUi(body, said),
@@ -547,6 +614,68 @@ export class KingdomLayer implements LayerKeys {
     if (!c) return;
     this.hooks.popScreen(c.screen);
     this.card = null;
+  }
+
+  // -- K3b: the city layer below ------------------------------------------------
+
+  /** Go into the city of a holding: only the king's own, and only where the app offers a city. */
+  requestCity(id: number): void {
+    const h = this.world.holding(id);
+    if (!h || !this.hooks.enterCity || this.phase !== "live" || this.suspended) return;
+    if (h.owner !== "king") {
+      this.hud.result(C.notYours(h.name));
+      return;
+    }
+    this.pen.cancelStroke();
+    this.closeCard();
+    this.hooks.enterCity(id, { x: this.cam.worldToScreenX(h.x), y: this.cam.worldToScreenY(h.y) });
+  }
+
+  get isSuspended(): boolean {
+    return this.suspended;
+  }
+
+  /**
+   * A city opens over the map: stop drawing the map and taking input, keep
+   * the realm (its clock runs on through `advance`, called by the city), the
+   * HUD, the autosave and the page listeners.
+   */
+  suspend(): void {
+    if (this.phase !== "live" || this.suspended) return;
+    this.suspended = true;
+    this.env.win.cancelAnimationFrame(this.raf);
+    this.pen.setEnabled(false);
+    this.controls.setEnabled(false);
+    this.zoomIn.setEnabled(false);
+    this.closeCard();
+    this.intent = null;
+    this.stroke = null;
+    this.lastTap = null;
+    this.zoomBefore = this.cam.zoom;
+    this.hud.root.classList.add("in-city");
+  }
+
+  /**
+   * Back from the city of `holding`: the map again, its camera eased out from
+   * the holding at the closest zoom (camera-systems: framing between layers),
+   * or cut there under reduced motion.
+   */
+  resume(holding: number, said: string | null = null): void {
+    if (this.phase !== "live" || !this.suspended) return;
+    this.suspended = false;
+    this.hud.root.classList.remove("in-city");
+    const h = this.world.holding(holding);
+    if (h) {
+      const out = Math.min(this.zoomBefore || this.cam.zoom, this.cam.zoomForSpan(RETURN_MILES));
+      if (this.reduced) this.cam.cut(h.x, h.y, out);
+      else {
+        this.cam.cut(h.x, h.y, this.cam.maxZoom);
+        this.cam.flyTo(h.x, h.y, out, LAYER_SECONDS);
+      }
+      this.hud.result(said ?? C.left(h.name));
+    }
+    this.lastFrame = null;
+    this.raf = this.env.win.requestAnimationFrame(this.frame);
   }
 
   // -- camera -----------------------------------------------------------------
@@ -588,13 +717,14 @@ export class KingdomLayer implements LayerKeys {
   }
 
   private frame = (now: number): void => {
-    if (this.phase !== "live") return;
+    if (this.phase !== "live" || this.suspended) return;
     const dt = this.lastFrame === null ? 0 : Math.min(Math.max(0, (now - this.lastFrame) / 1000), MAX_FRAME_SECONDS);
     this.lastFrame = now;
     this.clockSeconds += dt;
 
     this.runTicks(this.clock.advance(dt, this.hooks.simHeld()));
     this.controls.update(dt);
+    this.zoomIn.update(dt);
     this.cam.update(dt);
 
     const king = this.kingDrawn();

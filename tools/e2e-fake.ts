@@ -17,6 +17,7 @@ class PointerEventLike extends FakeEvent {}
 g.PointerEvent = PointerEventLike;
 g.MouseEvent = PointerEventLike;
 g.KeyboardEvent = PointerEventLike;
+g.WheelEvent = PointerEventLike;
 g.requestAnimationFrame = (fn: (t: number) => void) => win.requestAnimationFrame(fn);
 g.getComputedStyle = (e: InstanceType<typeof FakeElement>) => ({ display: e.shown ? "block" : "none" });
 g.innerWidth = win.innerWidth;
@@ -32,6 +33,7 @@ await import("../src/e2e/scenarios-k2.ts");
 await import("../src/e2e/scenarios-k2fix.ts");
 await import("../src/e2e/scenarios-k3.ts");
 await import("../src/e2e/scenarios-k3a.ts");
+await import("../src/e2e/scenarios-k3b.ts");
 const only = process.argv[2];
 const results = await runFromQuery(only ? "?only=" + only : "", out as unknown as HTMLElement);
 clearInterval(pump);

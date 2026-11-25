@@ -34,6 +34,8 @@ import { MEMORY_ONLY_NOTICE, ProgressStore, type KeyValueStore } from "./progres
 import { KingdomWorld } from "../sim/kingdom/world.ts";
 import { K, dateLine } from "../content/kingdom/ui-strings.ts";
 import { KingdomLayer, type KingdomOpening } from "./kingdom-layer.ts";
+import { CityLayer } from "./city-layer.ts";
+import type { MapPoint } from "../render/kingdom/layout.ts";
 import { clearKingdom, loadKingdom, type StorageLike } from "./kingdom-save.ts";
 
 export type AppEnv = {
@@ -145,7 +147,10 @@ export class App {
     firstFocus: () => null,
     mount: () => { /* the layer is started by enterRealm() */ },
     unmount: () => this.leaveLayer(),
-    setVisible: (v) => { if (this.live?.kind === "kingdom") this.live.setShown(v); },
+    setVisible: (v) => {
+      if (this.live?.kind === "kingdom") this.live.setShown(v);
+      else if (this.live?.kind === "city") this.live.realm.setShown(v);
+    },
   };
 
   constructor(env: AppEnv) {
@@ -240,9 +245,45 @@ export class App {
       simHeld: () => this.stack.pausesSim(),
       pushScreen: (s) => this.stack.push(s),
       popScreen: (s) => { if (this.stack.top === s) this.stack.pop(); },
+      enterCity: (holding, from) => this.enterCity(layer, holding, from),
     }, opening, notice);
     this.enterLayer(layer);
     return layer;
+  }
+
+  // -- the city (K3b) -------------------------------------------------------------
+
+  /**
+   * Down a layer: the city of one of the king's holdings. The kingdom layer
+   * is suspended, not torn down; the city's screen goes above the kingdom's,
+   * so the kingdom HUD (date, speed, stores, alerts) stays over the town.
+   */
+  enterCity(realm: KingdomLayer, holding: number, from: MapPoint): CityLayer | null {
+    if (this.live !== realm || realm.phase !== "live") return null;
+    // Whatever was over the map (its card) goes first.
+    if (this.stack.has(this.realm) && this.stack.top !== this.realm) this.stack.popTo(this.realm);
+    realm.suspend();
+    const city = new CityLayer(realm, holding, {
+      win: this.env.win, doc: this.env.doc, canvas: this.els.canvas, ctx: this.els.ctx,
+    }, {
+      requestLeave: () => { if (this.stack.has(city.screen)) this.stack.popTo(this.realm); },
+      pushScreen: (s) => this.stack.push(s),
+      popScreen: (s) => { if (this.stack.top === s) this.stack.pop(); },
+    }, from);
+    city.onUnmount = () => this.cityLeft(city);
+    this.enterLayer(city);
+    return city;
+  }
+
+  /** The city screen left the stack, however that happened: back up to the map. */
+  private cityLeft(city: CityLayer): void {
+    if (this.live !== city) return;
+    const realm = city.realm;
+    city.teardown();
+    this.live = realm;
+    this.router.setLayer(realm);
+    realm.resume(city.holding, city.leftWith);
+    // The stack's change (this pop) hands the realm its input contexts.
   }
 
   private openChronicle(): void {
@@ -325,6 +366,14 @@ export class App {
         layer.start();
         layer.setContexts(this.stack.activeInputs());
         return;
+      case "city":
+        // Started before the push: the push focuses the panel's heading.
+        this.live = layer;
+        this.router.setLayer(layer);
+        layer.start();
+        this.stack.push(layer.screen);
+        layer.setContexts(this.stack.activeInputs());
+        return;
     }
   }
 
@@ -341,6 +390,12 @@ export class App {
         return;
       case "kingdom":
         layer.teardown();
+        return;
+      case "city":
+        // Not reached in play (the city's screen is above the realm's and
+        // leaves first), but never leave a realm running under a dead city.
+        layer.teardown();
+        layer.realm.teardown();
         return;
     }
   }
