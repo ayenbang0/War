@@ -125,6 +125,8 @@ function smallText(root: Element): string[] {
   for (const el of Array.from(root.querySelectorAll("*"))) {
     const e = el as HTMLElement;
     if (!e.textContent || e.textContent.trim() === "" || e.children.length > 0) continue;
+    // The harness's own results panel is not part of the game.
+    if (e.closest("#e2e-results")) continue;
     const size = parseFloat(getComputedStyle(e).fontSize || "");
     if (!Number.isFinite(size)) continue;
     if (size < 16) out.push((e.className || e.tagName) + " " + size + "px");
