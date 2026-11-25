@@ -1,0 +1,29 @@
+/*
+ * K3a: the event card and the Finds list. Kept apart from kingdom.css so the
+ * exploration layer's styles live with its code; it reuses kingdom.css's
+ * panel, button and choice-list classes. Text in rem, per docs/ui-policy.md.
+ */
+
+/* The letter sits above the build/sow menus' backdrop, should both ever show. */
+.k-event-backdrop { z-index: 3; }
+.k-event { width: min(40rem, 100%); }
+.k-event-from { margin: 0 0 0.25rem; color: #5f5138; font-style: italic; }
+.k-event-text { margin: 0.5rem 0 0.75rem; line-height: 1.5; color: #3a3124; }
+.k-event-ask { margin: 0.25rem 0 0; font-weight: 700; color: #3a3124; }
+
+/* The Finds toggle and its small list, under the top bar. */
+.k-finds-box { position: relative; }
+.k-finds {
+  position: absolute; right: 0; top: calc(100% + 0.25rem); z-index: 2;
+  width: min(26rem, calc(100vw - 1.5rem)); max-height: 60vh; overflow: auto;
+  background: #efe8d6; border: 1px solid #a3906c; border-radius: 4px;
+  padding: 0.75rem 1rem; box-shadow: 0 6px 18px rgba(38, 32, 22, 0.3);
+  color: #3a3124; text-align: left;
+}
+.k-finds-title { margin: 0 0 0.25rem; font-size: 1.125rem; }
+.k-finds-heading { margin: 0.75rem 0 0.25rem; font-size: 1rem; color: #6d5c40; }
+.k-finds-letters { list-style: none; padding-left: 0; display: grid; gap: 0.375rem; }
+
+@media (max-width: 700px) {
+  .k-finds { position: fixed; left: 0.5rem; right: 0.5rem; width: auto; top: auto; bottom: 0.5rem; }
+}

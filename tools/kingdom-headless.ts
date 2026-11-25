@@ -39,7 +39,7 @@ import {
 } from "../src/sim/kingdom/index.ts";
 import {
   RIMAROS, BIOMES, BIOME_IDS, FACTIONS, FACTION_IDS, ROAD_TERRAIN, WEATHER, HOLDING_KINDS,
-  validateKingdomMap, holdingSeed, CAMPAIGN_HOLDINGS, type KingdomMapDef,
+  validateKingdomMap, holdingSeed, CAMPAIGN_HOLDINGS, KNOW_KNOWN, type KingdomMapDef,
 } from "../src/content/kingdom/index.ts";
 import { COMMANDERS, COMMANDER_IDS } from "../src/content/commanders.ts";
 import { levelById } from "../src/content/levels/index.ts";
@@ -100,6 +100,24 @@ function decadeScript(world: KingdomWorld, years = YEARS): KingdomOrder[] {
   return out;
 }
 
+/**
+ * A world with the fog lifted and every site already found, for the tests
+ * of the march itself (K1's): he may be sent anywhere by any road, and never
+ * halts to read a letter. The fog and the sites have their own tests
+ * (tools/kingdom-explore.ts).
+ */
+function explored(seed: number): KingdomWorld {
+  const w = new KingdomWorld({ seed });
+  for (const ex of w.explore) {
+    ex.holdings.fill(KNOW_KNOWN);
+    ex.roads.fill(KNOW_KNOWN);
+  }
+  for (const h of w.holdings) {
+    if (w.map.holdings[h.id - 1].site !== undefined) w.explore[0].finds.push({ site: h.id, event: -1, day: 0, choice: -1, failed: false });
+  }
+  return w;
+}
+
 /** Where the king stands, exactly, as text. */
 function placeOf(world: KingdomWorld): string {
   const m = world.king.mover;
@@ -132,14 +150,16 @@ section("content");
 {
   const problems = validateKingdomMap(RIMAROS);
   check("the campaign map validates", problems.length === 0, problems.slice(0, 3).join("; "));
-  check("36 holdings (docs/PROVISIONAL.md B.12.2)", RIMAROS.holdings.length === CAMPAIGN_HOLDINGS,
+  check("72 holdings, twice K1's 36 (docs/PROVISIONAL.md B.12.2, K3a.1)", RIMAROS.holdings.length === CAMPAIGN_HOLDINGS && CAMPAIGN_HOLDINGS === 72,
     String(RIMAROS.holdings.length));
 
   const provinceNames = RIMAROS.provinces.map((p) => p.name);
   const a3 = ["Red March", "Lisle Bridges", "Hallow Ferry", "Long Wood", "Vale of the Hare",
     "Open Fields", "Stag Heights", "Wolf Moor", "Crow's Reach"];
-  check("the eight provinces of A.3, the Farthest Reach and the Crown Seat",
-    RIMAROS.provinces.length === 10 &&
+  // K3a added three wild provinces to explore: the Grey Wold, the Iron Fells, the Saltings.
+  check("the eight provinces of A.3, the Farthest Reach, the Crown Seat and K3a's three wilds",
+    RIMAROS.provinces.length === 13 &&
+    ["Grey Wold", "Iron Fells", "Saltings"].every((n) => provinceNames.some((p) => p.includes(n))) &&
     a3.every((n) => provinceNames.some((p) => p.includes(n))) &&
     provinceNames.some((p) => p.includes("Farthest Reach")) && provinceNames.some((p) => p.includes("Crown Seat")),
     provinceNames.join(", "));
@@ -154,8 +174,11 @@ section("content");
       FACTIONS[c].persona?.boldness === COMMANDERS[c].boldness));
   const rimaros = RIMAROS.holdings.find((h) => h.key === RIMAROS.crownSeat);
   check("the usurper holds the Crown Seat", rimaros?.owner === "usurper" && rimaros.seat === true);
-  check("the Margrave holds the Red March",
-    RIMAROS.holdings.filter((h) => h.province === "red-march").every((h) => h.owner === "margrave"));
+  // K3a: every settlement of the March is the Margrave's; the Margrave's
+  // Folly, an abandoned fort, is a site to explore, held by nobody.
+  check("the Margrave holds every settlement of the Red March",
+    RIMAROS.holdings.filter((h) => h.province === "red-march" && h.site === undefined).every((h) => h.owner === "margrave") &&
+    RIMAROS.holdings.filter((h) => h.province === "red-march" && h.site !== undefined).every((h) => h.owner === null));
   check("every faction has a persona except the human seat",
     FACTION_IDS.every((f) => (f === "king") === (FACTIONS[f].persona === null)));
   check("the king is order player 0", FACTION_IDS[0] === "king");
@@ -225,6 +248,19 @@ section("content");
   }) > 0);
   check("validator catches a holding off the map", broken((m) => { (m.holdings[3] as { x: number }).x = -5; }) > 0);
   check("validator catches an unknown road surface", broken((m) => { m.roads.push(["lisle", "fell-end", "teleporter"]); }) > 0);
+  // K3a: readability and exploration.
+  {
+    const m = JSON.parse(JSON.stringify(RIMAROS)) as KingdomMapDef & { roads: [string, string, string][] };
+    m.roads.push(["cold-hearth", "linnet-cross", "road"]);
+    const p = validateKingdomMap(m);
+    check("validator catches two roads that cross", p.some((x) => x.includes("crosses")), p.slice(0, 2).join("; "));
+  }
+  check("validator catches a site somebody holds", broken((m) => {
+    (m.holdings.find((h) => (h as { site?: string }).site) as { owner: string }).owner = "wolf";
+  }) > 0);
+  check("validator catches a king who starts not knowing where he is", broken((m) => {
+    (m as unknown as { startKnown: string[] }).startKnown = RIMAROS.startKnown.filter((k) => k !== RIMAROS.start);
+  }) > 0);
 }
 
 // -- 2. rng streams ------------------------------------------------------------
@@ -347,7 +383,7 @@ section("march");
     if (fw[i][k] + fw[k][j] < fw[i][j]) fw[i][j] = fw[i][k] + fw[k][j];
   }
 
-  const base = new KingdomWorld({ seed: SEED });
+  const base = explored(SEED);
   let optimal = true;
   let worstGap = 0;
   for (let i = 0; i < n; i++) {
@@ -376,7 +412,7 @@ section("march");
   const startId = base.holdingByKey(RIMAROS.start)!.id;
   for (const dest of base.holdings) {
     if (dest.id === startId) continue;
-    const w = new KingdomWorld({ seed: SEED });
+    const w = explored(SEED);
     const plan = w.planKingRoute(dest.id)!;
     w.issue({ kind: "moveKing", to: dest.id });
     const visited: number[] = [];
@@ -427,7 +463,7 @@ section("march");
 
   // Rough country is slower than road: the same distance by a pass takes longer.
   {
-    const w = new KingdomWorld({ seed: SEED });
+    const w = explored(SEED);
     const fell = w.holdingByKey("fell-end")!;
     const lin = w.holdingByKey("linnet-cross")!;
     const r = findRoute(w.graph, moverAt(fell.id), lin.id)!;
@@ -437,7 +473,7 @@ section("march");
 
   // Turned round mid-road: he reverses where he stands, no jump to either end.
   {
-    const w = new KingdomWorld({ seed: SEED });
+    const w = explored(SEED);
     const start = w.king.mover.node;
     const far = w.holdingByKey("harrowfield")!.id;
     w.issue({ kind: "moveKing", to: far });
@@ -459,7 +495,7 @@ section("march");
 
   // Halted mid-road: he stays exactly there.
   {
-    const w = new KingdomWorld({ seed: SEED });
+    const w = explored(SEED);
     w.issue({ kind: "moveKing", to: w.holdingByKey("rimaros")!.id });
     for (let i = 0; i < 13; i++) w.tick();
     w.issue({ kind: "haltKing" });
@@ -476,7 +512,7 @@ section("march");
 
   // Orders the sim must refuse, identically on every machine.
   {
-    const w = new KingdomWorld({ seed: SEED });
+    const w = explored(SEED);
     const where = w.king.mover.node;
     w.issue({ kind: "moveKing", to: 99999 });
     const ev1 = w.tick();
@@ -575,7 +611,8 @@ section("arrival order");
   const proto = new KingdomWorld({ seed: SEED });
   const q = new KingdomOrderQueue();
   const T = 40;
-  const lisle = proto.holdingByKey("lisle")!.id;
+  // Two places the king knows the way to on day one (K3a: the rest is fog).
+  const lisle = proto.holdingByKey("greyshaw")!.id;
   const thorn = proto.holdingByKey("thornwick")!.id;
   const fell = proto.holdingByKey("fell-end")!.id;
   const o1 = q.stamp({ kind: "moveKing", to: lisle }, 0, T);

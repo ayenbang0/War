@@ -11,10 +11,19 @@
 import { LEVELS } from "../levels/index.ts";
 import { FACTIONS, type FactionId } from "./factions.ts";
 import { BIOMES, HOLDING_KINDS, ROAD_TERRAIN } from "./terrain.ts";
-import { holdingSeed, type KingdomMapDef } from "./map.ts";
+import { SITE_KINDS, holdingSeed, type KingdomMapDef } from "./map.ts";
 
-/** Target size of the campaign map (docs/PROVISIONAL.md B.12.2). */
-export const CAMPAIGN_HOLDINGS = 36;
+/** Target size of the campaign map (docs/PROVISIONAL.md B.12.2): twice the first 36 (K3a). */
+export const CAMPAIGN_HOLDINGS = 72;
+
+/**
+ * Readability (K3a, twice the map): holdings at least this far apart, so two
+ * names and two glyphs never sit on each other at the opening zoom, and no
+ * road may pass closer than ROAD_CLEARANCE_MILES to a holding it does not
+ * join, or a march would seem to go through a town it does not visit.
+ */
+export const MIN_HOLDING_SPACING_MILES = 40;
+export const ROAD_CLEARANCE_MILES = 18;
 
 /**
  * Every problem with the map, in a stable order. Empty means valid.
@@ -59,16 +68,34 @@ export function validateKingdomMap(map: KingdomMapDef): string[] {
   }
 
   // Two holdings on one spot would make a zero-length road and an ambiguous
-  // map click; keep them a few miles apart.
+  // map click; keep them far enough apart that their names read (K3a).
+  const spacing = MIN_HOLDING_SPACING_MILES;
   for (let i = 0; i < map.holdings.length; i++) {
     for (let j = i + 1; j < map.holdings.length; j++) {
       const a = map.holdings[i];
       const b = map.holdings[j];
       const dx = a.x - b.x;
       const dy = a.y - b.y;
-      if (dx * dx + dy * dy < 15 * 15) problems.push(a.key + " and " + b.key + " are closer than 15 miles");
+      if (dx * dx + dy * dy < spacing * spacing) problems.push(a.key + " and " + b.key + " are closer than " + spacing + " miles");
     }
   }
+
+  // K3a: exploration sites and what the king knows on day one.
+  map.holdings.forEach((h) => {
+    if (h.site === undefined) return;
+    if (!(SITE_KINDS as readonly string[]).includes(h.site)) problems.push(h.key + ": unknown site kind " + h.site);
+    // A site is found by going there; one already held would be found by its holder.
+    if (h.owner !== null) problems.push(h.key + ": an exploration site is nobody's at the start");
+    if (h.key === map.start) problems.push(h.key + ": the king cannot start on a site he has not found");
+  });
+  const known = new Set<string>();
+  for (const k of map.startKnown) {
+    if (!keys.has(k)) problems.push("startKnown names unknown holding " + k);
+    if (known.has(k)) problems.push("startKnown lists " + k + " twice");
+    known.add(k);
+    if (map.holdings[keys.get(k) ?? -1]?.site !== undefined) problems.push("startKnown names " + k + ", a site still to be found");
+  }
+  if (!known.has(map.start)) problems.push("the king does not know the holding he starts in");
 
   const pairs = new Set<string>();
   const adjacency = map.holdings.map(() => [] as number[]);
@@ -85,6 +112,23 @@ export function validateKingdomMap(map: KingdomMapDef): string[] {
     if (ia !== undefined && ib !== undefined && ia !== ib) {
       adjacency[ia].push(ib);
       adjacency[ib].push(ia);
+    }
+  }
+
+  // Readability: roads do not cross (the map is a planar drawing, as the
+  // hand-drawn one was), and none grazes a holding it does not join.
+  const ends = map.roads.map(([a, b]) => [map.holdings[keys.get(a) ?? -1], map.holdings[keys.get(b) ?? -1]] as const);
+  for (let i = 0; i < ends.length; i++) {
+    const [p, q] = ends[i];
+    if (!p || !q) continue;
+    for (let j = i + 1; j < ends.length; j++) {
+      const [r, t] = ends[j];
+      if (!r || !t || r === p || r === q || t === p || t === q) continue;
+      if (segmentsCross(p, q, r, t)) problems.push("road " + p.key + "-" + q.key + " crosses road " + r.key + "-" + t.key);
+    }
+    for (const h of map.holdings) {
+      if (h === p || h === q) continue;
+      if (segmentDistance(p, q, h) < ROAD_CLEARANCE_MILES) problems.push("road " + p.key + "-" + q.key + " passes too close to " + h.key);
     }
   }
 
@@ -140,4 +184,27 @@ export function validateKingdomMap(map: KingdomMapDef): string[] {
   }
 
   return problems;
+}
+
+type XY = { readonly x: number; readonly y: number };
+
+/** Do two segments cross at a point inside both (touching at an end does not count)? */
+function segmentsCross(p: XY, q: XY, r: XY, s: XY): boolean {
+  const d = (q.x - p.x) * (s.y - r.y) - (q.y - p.y) * (s.x - r.x);
+  if (d === 0) return false;
+  const t = ((r.x - p.x) * (s.y - r.y) - (r.y - p.y) * (s.x - r.x)) / d;
+  const u = ((r.x - p.x) * (q.y - p.y) - (r.y - p.y) * (q.x - p.x)) / d;
+  return t > 0.001 && t < 0.999 && u > 0.001 && u < 0.999;
+}
+
+/** Miles from a point to a segment. */
+function segmentDistance(a: XY, b: XY, p: XY): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 === 0 ? 0 : ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const ex = a.x + t * dx - p.x;
+  const ey = a.y + t * dy - p.y;
+  return Math.sqrt(ex * ex + ey * ey);
 }

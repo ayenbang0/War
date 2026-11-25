@@ -448,3 +448,129 @@ No armies, rations or wages (K4: the categories exist); no plunder (K5); no
 morale or unrest rules (K6: legitimacy and the famine signal are ready); no
 captains' economies (K8); building battle/defence/vision values are data only.
 Timber and coin have no storage cap.
+
+## K3a — twice the map, exploration, events and special upgrades
+
+PLAN §C K3a (the user's "2x the cities and areas to explore, with events and
+special upgrades"). Sim in `src/sim/kingdom/explore.ts`; content in
+`src/content/kingdom/` and the new `src/content/story/`; UI in
+`src/ui/kingdom/event-card.ts`, `explore-ui.ts`, `explore.css`.
+
+### Files
+
+| Path | What |
+|---|---|
+| `src/content/kingdom/map.ts` | 72 holdings (K1's 36 first, unchanged, then 36 appended), 115 roads, three wild provinces (the Grey Wold, the Iron Fells, the Saltings), `site` on 25 holdings, `startKnown` |
+| `src/content/kingdom/exploration.ts` | the three knowledge states and the sight radii |
+| `src/content/kingdom/validate.ts` | now also: holdings ≥ 40 miles apart, no two roads cross, no road passes within 18 miles of a holding it does not join, sites are unowned and not the start, `startKnown` is sane |
+| `src/content/story/events.ts` | 28 exploration events (2–3 choices each), by site kind or "any" |
+| `src/content/story/upgrades.ts` | 16 special upgrades and their effects |
+| `src/content/story/validate.ts` | `validateEvents`, `validateUpgrades`, `validateSites` |
+| `src/content/story/strings.ts` | every word of the card, the Finds list, the feed lines and the refusals |
+| `src/sim/kingdom/explore.ts` | the fog (`sightSources`, `applySight`, `updateSight`, `revealAround`), targeting and routing under the fog, `discover`, `checkResolve`/`applyResolve`, the upgrade hooks the economy calls |
+| `src/ui/kingdom/event-card.ts` | the event card (modal, holds the clock) |
+| `src/ui/kingdom/explore-ui.ts` | opens the card on a find, the Finds toggle and list, the feed lines |
+| `tools/kingdom-explore.ts` | the K3a suite (in `npm test`) |
+| `tools/fixtures/kingdom-save-v2.json` | a real K3 save (made by the K3 code), for the v2 → v3 migration test |
+| `src/e2e/scenarios-k3a.ts` | `k3a-fog-and-find`, `k3a-decide-later` |
+
+### The fog
+
+Per faction (`world.explore[f]`, `FACTION_IDS` order), one value per holding
+and per road, in id order: **0 unknown**, **1 known** (remembered), **2 seen**.
+`applySight(world, f, sources)` is the one function: everything seen falls
+back to known, then each holding within a source's radius and each road any
+point of which is within it becomes seen. Distances are compared squared, with
+only + − × ÷, so the result is exact on every machine. Nothing ever returns to
+unknown (the suite checks this every day of a ten-year run).
+
+Sources (`sightSources`), in order: the king's retinue (50 miles, +25 with
+the Wayfinder's Map), then each owned holding in id order (hamlet 35, village
+40, town 50, keep 55, city 65 miles; a standing, paid-up watchtower lifts its
+holding to 80, +30 with the Lantern of the Watch). K4 appends armies.
+
+When: every faction at construction and at each day boundary (after the
+economy); the king's also on every tick his party moves. A reveal (an event
+choice) marks places **known**, not seen.
+
+At the start the king knows the map's `startKnown` holdings (the Reach and the
+great towns) and the roads between two of them. The captains know everything
+(their fog matters from K8).
+
+### Marching under the fog
+
+`moveKing` is refused ("nobody in the party knows the way there yet") unless
+the destination is known, or is unknown but at the end of a known road whose
+other end is known — a **frontier** holding, drawn as an unnamed "?". The route
+keeps to known roads and passes only through known holdings
+(`routeOptions`: `findRoute` gained `usable`, `through` and `cost` options;
+`advanceMover` gained `cost` and `stopAt`). The planner, the ghost and the
+check the UI uses are the same calls.
+
+### Sites and events
+
+A holding with a `site` (ruin, shrine, mine, forest, coast, fort) holds one
+event. The first time the king's party sets foot there — as its destination
+or on the way — it **halts** (`stopAt`), and `discover` draws an event on the
+**events stream** (the only user of that stream so far): uniformly from the
+events of the site's kind and the "any" events that faction has not yet
+drawn, in table order. The find (`{site, event, day, choice: -1, failed}`) is
+kept for ever, so a site's event fires exactly once.
+
+### Resolving: `resolveEvent {site, choice}` (appended to `KINGDOM_ORDER_KINDS`)
+
+Refused if there is no waiting letter there for that player, if the choice
+index is not one, or if the stores cannot pay its price. Otherwise: the price
+(`pay`) is paid (ledger: **offerings**), whatever comes of a gamble; one roll
+on the events stream decides a gamble (`int(100) < pct`); then the outcome's
+effects in order: `gain` (ledger: **finds**), `lose` (as much as there is,
+**offerings**), `legitimacy` (**deeds** / **disgrace**), `upgrade` (kept for
+good; a one-off `grant` lands under **boons**), `reveal`. A waiting letter
+blocks nothing: the sim runs on; the card is what holds the clock.
+
+### Special upgrades
+
+Effects are read by the economy's own formulas, so with no upgrade held every
+formula is K3's exactly: harvest yield %, forage %, tax %, muster %, granary
+storage, loose-grain spoilage %, a one-off grant, a daily boon (ledger:
+boons), legitimacy per standing building each season (deeds), road cost % for
+the party, sight. `later` effects (armies, battle) are recorded for K4–K7.
+
+### Save format version 3
+
+Adds `snapshot.explore[]` per faction (knowledge arrays, finds, upgrades) and
+three ledger categories. `MIGRATIONS[2]`: a save of the frozen K3 map
+(`K3_MAP`, fingerprint `94dd4aa0`) keeps holding ids 1–36; every later id
+moves piecewise (old roads +36, old plots +99, the king and after by the
+inserted plots), in the snapshot and in the order log alike; holdings 37–72
+are added as a new world has them; ledger pages are re-laid for the new
+categories; the king knows the whole old map (a K3 player saw it), the new
+country is unexplored; sight is worked out on load. The log is kept and
+replays under K3a's rules.
+
+### Determinism and the golden
+
+The kingdom golden moved in K3a (expected, regenerated with
+`UPDATE_KINGDOM_GOLDEN=1`): the map is twice the size and is hashed, the fog
+and the finds are hashed, and the decade script's marches to places the king
+does not know are now refused while those that reach a site halt there and
+draw on the events stream. The battle tiers do not move.
+
+### UI
+
+The renderer draws only what the king knows: unknown holdings and roads are
+bare parchment, frontier holdings a ringed "?", remembered roads fainter,
+province washes and names once one of their holdings is known, and a small
+diamond on a known site not yet visited. The pen only offers known places and
+frontier marks; tapping a mark opens nothing and says what it is. Arriving at
+a site opens the **event card**: modal, traps Tab, holds the kingdom clock
+(`pausesSim`), focus on the letter's title; each choice a button with its
+cost and odds in words; a price the stores cannot pay is dashed, says why and
+refuses; **Decide later** / Esc leave the letter waiting. The **Finds** toggle
+in the top bar (a disclosure, not a screen) lists waiting letters (each
+reopens its card) and the upgrades held.
+
+### What K3a does not do
+
+No armies seeing (K4 adds sources); captains do not explore; no event chains
+or story beats (K9); `later` upgrade effects are data only.

@@ -54,6 +54,10 @@ export const PROVINCE_WASH: Record<string, string> = {
   "stag-wolf": "rgba(140, 124, 110, 0.26)",
   "red-march": "rgba(168, 96, 80, 0.22)",
   "crows-reach": "rgba(110, 120, 140, 0.24)",
+  // K3a: the wild country beyond the shires -- paler, since no one rules it yet.
+  "grey-wold": "rgba(150, 146, 138, 0.20)",
+  "iron-fells": "rgba(128, 104, 96, 0.22)",
+  "the-saltings": "rgba(140, 170, 176, 0.20)",
 };
 
 /** One font stack for the map and its panels: a book face, as a map table would be lettered. */

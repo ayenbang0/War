@@ -19,6 +19,8 @@ import { TICKS_PER_DAY } from "../sim/kingdom/clock.ts";
 import { KING_PLAYER } from "../content/kingdom/factions.ts";
 import { K, NONE_PLATE, NONE_REASON, etaWords } from "../content/kingdom/ui-strings.ts";
 import { kingCounterAt, type MapPoint } from "../render/kingdom/layout.ts";
+import { isFrontier, knowsHolding } from "../sim/kingdom/explore.ts";
+import { X } from "../content/story/strings.ts";
 import {
   recognizeKingdom, type HoldingView, type KingdomGesture, type KingdomGestureContext, type Point, type TokenView,
 } from "./kingdom-gestures.ts";
@@ -55,7 +57,12 @@ export function kingdomContext(world: KingdomWorld, kingTrue: MapPoint, pxToWorl
   const tokens: TokenView[] = [
     { id: world.king.id, kind: "king", owner: KING_PLAYER, x: counter.x, y: counter.y, at: m.road === 0 ? m.node : 0 },
   ];
-  const holdings: HoldingView[] = world.holdings.map((h) => ({ id: h.id, x: h.x, y: h.y, kind: h.kind }));
+  // K3a: the pen sees only what the king knows -- known holdings, and the
+  // unexplored marks at the ends of roads he knows. A place he has never
+  // heard of is not there to tap or march to.
+  const holdings: HoldingView[] = world.holdings
+    .filter((h) => knowsHolding(world, KING_PLAYER, h.id) || isFrontier(world, KING_PLAYER, h.id))
+    .map((h) => ({ id: h.id, x: h.x, y: h.y, kind: h.kind }));
   return { player: KING_PLAYER, tokens, holdings, pxToWorld };
 }
 
@@ -96,6 +103,13 @@ export function interpretStroke(
       };
     case "tapHolding": {
       const h = world.holding(g.holding);
+      if (h && !knowsHolding(world, KING_PLAYER, h.id)) {
+        // An unexplored mark: nothing to show until someone has been there.
+        return {
+          gesture: g, ghost: { kind: "tap", label: X.unexplored },
+          order: null, card: null, at: { x: h.x, y: h.y }, march: null, message: X.unexploredTap,
+        };
+      }
       return {
         gesture: g, ghost: { kind: "tap", label: h ? h.name : "" },
         order: null, card: { kind: "region", holding: g.holding }, at: h ? { x: h.x, y: h.y } : null, march: null,
@@ -108,19 +122,21 @@ export function interpretStroke(
       if (!h || !plan) return none({ kind: "none", reason: "no-road" });
       const eta = etaWords(plan.etaTicks, TICKS_PER_DAY);
       const dest = { x: h.x, y: h.y };
+      // An unexplored mark has no name yet.
+      const name = knowsHolding(world, KING_PLAYER, h.id) ? h.name : X.unexplored;
       return {
         gesture: g,
         ghost: {
           kind: "march",
           route: routePoints(world, kingTrue, plan.route.nodes),
           dest,
-          label: K.marchPlate({ name: h.name, eta }),
+          label: K.marchPlate({ name, eta }),
         },
         order: { kind: "moveKing", to: g.to },
         card: null,
         at: dest,
-        march: { to: g.to, name: h.name, eta, etaTicks: plan.etaTicks },
-        message: K.setOut({ name: h.name, eta }),
+        march: { to: g.to, name, eta, etaTicks: plan.etaTicks },
+        message: K.setOut({ name, eta }),
       };
     }
   }

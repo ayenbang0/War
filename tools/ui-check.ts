@@ -801,6 +801,18 @@ begin("ui policy (BS-06, BS-07, BS-10, BS-11, RT-02)");
     check("kingdom.css: no font size in px or under 1rem", bad.length === 0, bad.join(" | "));
     check("kingdom.css: an authored focus ring", /:focus-visible[^{]*\{[^}]*outline:\s*3px/.test(kcss));
   }
+  // K3a: the event card and the Finds list have their own sheet, held to the same floor.
+  {
+    const xcss = read("../src/ui/kingdom/explore.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const bad: string[] = [];
+    for (const m of xcss.matchAll(/font(?:-size)?\s*:\s*([^;}]+)/g)) {
+      for (const n of m[1].matchAll(/(\d*\.?\d+)(px|rem|em)\b/g)) if (n[2] === "px" || parseFloat(n[1]) < 1) bad.push(m[0].trim());
+    }
+    check("explore.css: no font size in px or under 1rem", bad.length === 0, bad.join(" | "));
+    for (const page of ["../index.html", "../e2e.html"]) {
+      check(page.slice(3) + " links explore.css", read(page).includes("/src/ui/kingdom/explore.css"));
+    }
+  }
   const token = /--text:\s*(\d*\.?\d+)rem/.exec(css);
   check("the body text token is at least 1rem", token !== null && parseFloat(token[1]) >= 1, token ? token[0] : "missing");
 

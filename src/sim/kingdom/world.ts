@@ -34,7 +34,7 @@ import {
   advanceMover, buildGraph, findRoute, moverAt, moverPosition, roadLength, setRoute,
   type RoadGraph, type Route,
 } from "./graph.ts";
-import type { FactionEconomy, FieldPlot, Holding, KingToken, KingdomEvent, Road } from "./state.ts";
+import type { FactionEconomy, FactionExploration, FieldPlot, Holding, KingToken, KingdomEvent, Road } from "./state.ts";
 import { DEFAULT_TAX } from "../../content/kingdom/economy.ts";
 import type { FactionBook } from "./ledger.ts";
 import { snapshotStocks } from "./ledger.ts";
@@ -42,6 +42,10 @@ import {
   applyEconomyOrder, checkEconomyOrder, dailyNeed, isEconomyOrder, newBook, newFactionEconomy, runEconomyDay, setTask,
   type EconomyOrderBody,
 } from "./economy.ts";
+import {
+  applyResolve, checkResolve, discover, marchOptions, newExploration, routeOptions, targetRefusal, updateSight,
+} from "./explore.ts";
+import { EXPLORE_REFUSAL } from "../../content/story/strings.ts";
 
 /** Default name of the exiled king (docs/PROVISIONAL.md A.7.3). */
 export const DEFAULT_KING_NAME = "Aldric of Rimaros";
@@ -97,6 +101,8 @@ export class KingdomWorld {
   readonly economy: FactionEconomy[];
   /** Every faction's ledger, in FACTION_IDS order (K3). */
   readonly books: FactionBook[];
+  /** Every faction's map knowledge, finds and special upgrades, in FACTION_IDS order (K3a). */
+  readonly explore: FactionExploration[];
 
   readonly rng: KingdomRng;
   readonly orders = new KingdomOrderQueue();
@@ -193,6 +199,11 @@ export class KingdomWorld {
     // same as K1's, which keeps old saves' fingerprints valid (save.ts v1 -> v2).
     this.economy = FACTION_IDS.map((f) => newFactionEconomy(f));
     this.books = this.economy.map((e) => newBook(e));
+    // K3a: what each faction knows on day one, then what it can see from there.
+    this.explore = FACTION_IDS.map((_, f) => newExploration(this, f));
+    for (let f = 0; f < FACTION_IDS.length; f++) updateSight(this, f);
+    // Day one's sightings are the start, not news.
+    this.events = [];
   }
 
   // -- orders ------------------------------------------------------------------
@@ -230,6 +241,9 @@ export class KingdomWorld {
       // K3: the economy's day -- farm weather, seasons, plots, buildings,
       // taxes, foraging and rallying, bread, spoilage (economy.ts).
       runEconomyDay(this);
+      // K3a: the realm's sight as the day begins (towers built, holdings
+      // claimed); the king's is also kept up as he marches, below.
+      for (let f = 0; f < FACTION_IDS.length; f++) updateSight(this, f);
     }
     // K8: captains' AI issues orders here, through this.orders, before draining.
     for (const order of this.orders.drain(this.now)) {
@@ -275,8 +289,11 @@ export class KingdomWorld {
     switch (order.kind) {
       case "moveKing": {
         if (order.player !== KING_PLAYER) return this.reject(order, "only the king's seat commands the king");
-        const route = findRoute(this.graph, this.king.mover, order.to);
-        if (!route) return this.reject(order, "no road leads there");
+        // K3a: only somewhere the party knows of, by roads it knows.
+        const unknown = targetRefusal(this, KING_PLAYER, order.to);
+        if (unknown) return this.reject(order, unknown);
+        const route = findRoute(this.graph, this.king.mover, order.to, routeOptions(this, KING_PLAYER));
+        if (!route) return this.reject(order, EXPLORE_REFUSAL.noKnownRoad);
         setRoute(this.graph, this.king.mover, route);
         // A party on the march neither forages nor rallies.
         setTask(this, "none");
@@ -286,6 +303,14 @@ export class KingdomWorld {
         if (order.player !== KING_PLAYER) return this.reject(order, "only the king's seat commands the king");
         this.king.mover.route = [];
         setTask(this, "none");
+        return;
+      }
+      case "resolveEvent": {
+        const f = order.player;
+        const before = f >= 0 && f < this.economy.length ? snapshotStocks(this.economy[f]).join() : "";
+        const why = applyResolve(this, f, order.site, order.choice);
+        if (why) return this.reject(order, why);
+        if (snapshotStocks(this.economy[f]).join() !== before) this.events.push({ kind: "stocksChanged", faction: f });
         return;
       }
       default: {
@@ -306,6 +331,8 @@ export class KingdomWorld {
    * (A queued order is checked again when it applies, against the world then.)
    */
   check(body: KingdomOrderBody, player: number = KING_PLAYER): string | null {
+    if (body.kind === "resolveEvent") return checkResolve(this, player, body.site, body.choice);
+    if (body.kind === "moveKing") return targetRefusal(this, KING_PLAYER, body.to);
     if (!isEconomyOrder(body)) return null;
     return checkEconomyOrder(this, body as EconomyOrderBody, player);
   }
@@ -322,12 +349,18 @@ export class KingdomWorld {
     const m = this.king.mover;
     const leaving = m.road === 0 && m.route.length > 0 ? m.node : 0;
     const heading = m.route[0];
-    const reached = advanceMover(this.graph, m, this.retinueEffortPerTick(), WEATHER[this.weather].travel);
+    const moving = m.route.length > 0;
+    const reached = advanceMover(this.graph, m, this.retinueEffortPerTick(), WEATHER[this.weather].travel, marchOptions(this, KING_PLAYER));
     if (leaving !== 0) this.events.push({ kind: "kingDeparted", from: leaving, to: heading });
     for (let i = 0; i < reached.length; i++) {
       const last = i === reached.length - 1 && m.route.length === 0;
       this.events.push({ kind: "kingArrived", at: reached[i], destination: last });
     }
+    // K3a: the party sees as it goes, and a site set foot in for the first
+    // time is found (advanceMover already halted there). Standing still, the
+    // view only changes at the day boundary, so it is not recomputed.
+    if (moving) updateSight(this, KING_PLAYER);
+    if (reached.length > 0) discover(this, KING_PLAYER, reached[reached.length - 1]);
   }
 
   /** Effort the retinue has per tick in clear weather (miles x surface cost). */
@@ -360,7 +393,8 @@ export class KingdomWorld {
    * nothing.
    */
   planKingRoute(to: number): { route: Route; etaTicks: number } | null {
-    const route = findRoute(this.graph, this.king.mover, to);
+    if (targetRefusal(this, KING_PLAYER, to)) return null;
+    const route = findRoute(this.graph, this.king.mover, to, routeOptions(this, KING_PLAYER));
     if (!route) return null;
     const etaTicks = ceil((route.effort * WEATHER[this.weather].travel) / this.retinueEffortPerTick());
     return { route, etaTicks };

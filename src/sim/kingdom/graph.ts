@@ -57,6 +57,35 @@ export function roadBetween(graph: RoadGraph, a: number, b: number): Road | unde
   return undefined;
 }
 
+/**
+ * What a particular traveller may use and how hard it finds it (K3a). The
+ * plain graph knows nothing of the fog or of upgrades; a caller passes these
+ * in, so the router stays one function and its tie-breaks stay the same.
+ */
+export type RouteOptions = {
+  /** May this road be travelled at all? (Fog: only roads the faction knows.) Default: all. */
+  readonly usable?: (road: Road) => boolean;
+  /**
+   * May a route go ON from this holding, or only end there? (Fog: an
+   * unknown holding at the end of a known road can be marched to but not
+   * through.) Never asked of the holding the traveller stands in. Default: all.
+   */
+  readonly through?: (holding: number) => boolean;
+  /** Effort per mile of a road for this traveller. Default: road.cost. */
+  readonly cost?: (road: Road) => number;
+};
+
+/** Options for advanceMover. */
+export type AdvanceOptions = {
+  /** Effort per mile, as for RouteOptions.cost. Default: road.cost. */
+  readonly cost?: (road: Road) => number;
+  /**
+   * Stop on reaching this holding even mid-route (route cleared): the party
+   * halts at a site it is finding for the first time (K3a).
+   */
+  readonly stopAt?: (holding: number) => boolean;
+};
+
 export type Route = {
   /**
    * Holdings to reach, in order, starting with the first one the mover heads
@@ -86,7 +115,8 @@ export type Route = {
  *
  * Returns null if the destination is unknown or unreachable.
  */
-export function findRoute(graph: RoadGraph, mover: Mover, destination: number): Route | null {
+export function findRoute(graph: RoadGraph, mover: Mover, destination: number, opts: RouteOptions = {}): Route | null {
+  const costOf = opts.cost ?? ((r: Road) => r.cost);
   if (!graph.holdings.has(destination)) return null;
   if (mover.road === 0 && mover.node === destination) return { nodes: [], effort: 0 };
 
@@ -104,8 +134,8 @@ export function findRoute(graph: RoadGraph, mover: Mover, destination: number): 
   } else {
     const r = graph.roads.get(mover.road);
     if (!r) return null;
-    dist.set(mover.to, (r.length - mover.along) * r.cost);
-    dist.set(mover.from, mover.along * r.cost);
+    dist.set(mover.to, (r.length - mover.along) * costOf(r));
+    dist.set(mover.from, mover.along * costOf(r));
     starts.add(mover.to);
     starts.add(mover.from);
   }
@@ -121,10 +151,12 @@ export function findRoute(graph: RoadGraph, mover: Mover, destination: number): 
     if (u === 0) break;
     done.add(u);
     if (u === destination) break;
+    if (opts.through && !(mover.road === 0 && u === mover.node) && !opts.through(u)) continue;
     for (const [v, rid] of graph.links.get(u) ?? []) {
       if (done.has(v)) continue;
       const r = graph.roads.get(rid) as Road;
-      const nd = best + r.length * r.cost;
+      if (opts.usable && !opts.usable(r)) continue;
+      const nd = best + r.length * costOf(r);
       const cur = dist.get(v) as number;
       if (nd < cur || (nd === cur && !starts.has(v) && u < (prev.get(v) ?? Infinity))) {
         dist.set(v, nd);
@@ -171,7 +203,8 @@ export function setRoute(graph: RoadGraph, mover: Mover, route: Route): void {
  * ids of the holdings reached, in order. A mover with an empty route stays
  * put, wherever it is -- including mid-road after a halt.
  */
-export function advanceMover(graph: RoadGraph, mover: Mover, effort: number, weather: number): number[] {
+export function advanceMover(graph: RoadGraph, mover: Mover, effort: number, weather: number, opts: AdvanceOptions = {}): number[] {
+  const costOf = opts.cost ?? ((r: Road) => r.cost);
   const reached: number[] = [];
   let left = effort;
   while (left > 0 && mover.route.length > 0) {
@@ -188,7 +221,7 @@ export function advanceMover(graph: RoadGraph, mover: Mover, effort: number, wea
       mover.node = 0;
     }
     const r = graph.roads.get(mover.road) as Road;
-    const perMile = r.cost * weather;
+    const perMile = costOf(r) * weather;
     const need = (r.length - mover.along) * perMile;
     if (need <= left) {
       left -= need;
@@ -198,6 +231,10 @@ export function advanceMover(graph: RoadGraph, mover: Mover, effort: number, wea
       mover.from = 0;
       mover.to = 0;
       reached.push(mover.route.shift() as number);
+      if (opts.stopAt && mover.route.length > 0 && opts.stopAt(mover.node)) {
+        mover.route = [];
+        break;
+      }
     } else {
       mover.along += left / perMile;
       left = 0;

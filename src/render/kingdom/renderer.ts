@@ -17,6 +17,15 @@
  *
  * Owner identity is never colour alone (U1-01): hollow = unclaimed, solid with
  * a crown tick = the king's, hatched = sworn to the crown.
+ *
+ * The fog (K3a) is the king's knowledge (sim/kingdom/explore.ts): a holding
+ * or road he has never seen or been told of is not drawn at all -- the sheet
+ * there is bare parchment, as an explorer's map is -- except an unknown
+ * holding at the end of a road he knows, which is drawn as an unnamed "?" so
+ * the way to it can be seen and marched. Roads he remembers but cannot see
+ * now are drawn fainter. A province's wash and name appear once one of its
+ * holdings is known. A known site not yet set foot in carries a small
+ * diamond: something to find there.
  */
 
 import type { KingdomWorld } from "../../sim/kingdom/world.ts";
@@ -25,6 +34,9 @@ import type { RoadTerrainId } from "../../content/kingdom/terrain.ts";
 import type { KingdomCamera } from "./camera.ts";
 import { KING_COUNTER_RADIUS_PX, type MapPoint } from "./layout.ts";
 import * as P from "./palette.ts";
+import { KING_PLAYER } from "../../content/kingdom/factions.ts";
+import { KNOW_SEEN, KNOW_UNKNOWN } from "../../content/kingdom/exploration.ts";
+import { holdingKnowledge, isFrontier, isUnfoundSite, roadKnowledge } from "../../sim/kingdom/explore.ts";
 
 /** A stroke being drawn, or one fading out after release. */
 export type InkStroke = {
@@ -84,11 +96,11 @@ function easeOutBack(t: number): number {
 
 export class KingdomRenderer {
   /** Frames drawn, and what the last one drew: read by the e2e harness. */
-  readonly stats = { frames: 0, holdings: 0, roads: 0, labels: 0, king: false };
+  readonly stats = { frames: 0, holdings: 0, roads: 0, labels: 0, king: false, frontier: 0, hidden: 0 };
 
   private readonly ctx: CanvasRenderingContext2D;
   private grain: CanvasPattern | null = null;
-  private readonly provinceLabels: { name: string; x: number; y: number }[] = [];
+  private readonly provinceLabels: { name: string; x: number; y: number; holdings: number[] }[] = [];
   private readonly seats = new Set<number>();
 
   constructor(ctx: CanvasRenderingContext2D, world: KingdomWorld, doc: Document) {
@@ -102,7 +114,7 @@ export class KingdomRenderer {
       for (const h of hs) { x += h.x; y += h.y; }
       // Lettered a little below the province's middle, where its holdings
       // usually are not, so the name and the towns do not fight.
-      this.provinceLabels.push({ name: p.name.toUpperCase(), x: x / hs.length, y: y / hs.length + 26 });
+      this.provinceLabels.push({ name: p.name.toUpperCase(), x: x / hs.length, y: y / hs.length + 26, holdings: hs.map((h) => h.id) });
     }
     for (const def of world.map.holdings) {
       if (!def.seat) continue;
@@ -118,6 +130,15 @@ export class KingdomRenderer {
     const H = cam.viewH;
     const sx = (x: number): number => cam.worldToScreenX(x);
     const sy = (y: number): number => cam.worldToScreenY(y);
+    // K3a: what the king knows, read once per frame.
+    const known = new Set<number>();
+    const frontier = new Set<number>();
+    for (const h of world.holdings) {
+      if (holdingKnowledge(world, KING_PLAYER, h.id) !== KNOW_UNKNOWN) known.add(h.id);
+      else if (isFrontier(world, KING_PLAYER, h.id)) frontier.add(h.id);
+    }
+    this.stats.frontier = frontier.size;
+    this.stats.hidden = world.holdings.length - known.size - frontier.size;
 
     // -- the table and the sheet --------------------------------------------
     ctx.fillStyle = P.table;
@@ -139,6 +160,7 @@ export class KingdomRenderer {
     // -- province washes ------------------------------------------------------
     const washR = WASH_MILES * cam.zoom;
     for (const h of world.holdings) {
+      if (!known.has(h.id)) continue;
       const x = sx(h.x);
       const y = sy(h.y);
       if (x < -washR || y < -washR || x > W + washR || y > H + washR) continue;
@@ -164,6 +186,7 @@ export class KingdomRenderer {
     ctx.textBaseline = "middle";
     ctx.font = "italic 600 20px " + P.MAP_FONT;
     for (const p of this.provinceLabels) {
+      if (!p.holdings.some((id) => known.has(id))) continue;
       const x = sx(p.x);
       const y = sy(p.y);
       if (x < -200 || x > W + 200 || y < -40 || y > H + 40) continue;
@@ -182,7 +205,13 @@ export class KingdomRenderer {
       if (!a || !b) continue;
       const x0 = sx(a.x); const y0 = sy(a.y); const x1 = sx(b.x); const y1 = sy(b.y);
       if (Math.max(x0, x1) < -10 || Math.min(x0, x1) > W + 10 || Math.max(y0, y1) < -10 || Math.min(y0, y1) > H + 10) continue;
+      const k = roadKnowledge(world, KING_PLAYER, r.id);
+      if (k === KNOW_UNKNOWN) continue;
+      // Remembered, not in sight: drawn fainter (and the sight edge is where it changes).
+      ctx.save();
+      if (k !== KNOW_SEEN) ctx.globalAlpha = 0.55;
       this.drawRoad(x0, y0, x1, y1, r.terrain);
+      ctx.restore();
       roads++;
     }
 
@@ -196,7 +225,13 @@ export class KingdomRenderer {
       const x = sx(h.x);
       const y = sy(h.y);
       if (x < -20 || y < -20 || x > W + 20 || y > H + 20) continue;
+      if (frontier.has(h.id)) {
+        this.drawUnexplored(x, y);
+        continue;
+      }
+      if (!known.has(h.id)) continue;
       this.drawHolding(h, x, y, h.id === f.selectedHolding);
+      if (isUnfoundSite(world, KING_PLAYER, h.id)) this.drawSiteMark(x + GLYPH_PX[h.kind] + 3, y - GLYPH_PX[h.kind] - 3);
       holdings++;
     }
 
@@ -209,6 +244,8 @@ export class KingdomRenderer {
     }
     const order = world.holdings
       .filter((h) => {
+        // Only what the king knows is named; an unexplored mark has no name.
+        if (!known.has(h.id)) return false;
         const x = sx(h.x);
         const y = sy(h.y);
         return x > -150 && y > -30 && x < W + 30 && y < H + 30;
@@ -403,6 +440,46 @@ export class KingdomRenderer {
       ctx.fill();
       ctx.stroke();
     }
+    ctx.restore();
+  }
+
+  /** An unknown holding at the end of a known road: a ringed "?" (K3a). */
+  private drawUnexplored(x: number, y: number): void {
+    const { ctx } = this;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, 8, 0, Math.PI * 2);
+    ctx.fillStyle = P.halo;
+    ctx.fill();
+    ctx.setLineDash([2.5, 2.5]);
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = P.inkMid;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = "700 13px " + P.MAP_FONT;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = P.ink;
+    ctx.fillText("?", x, y + 0.5);
+    ctx.restore();
+  }
+
+  /** A known site the party has not yet set foot in: a small diamond by its glyph (K3a). */
+  private drawSiteMark(x: number, y: number): void {
+    const { ctx } = this;
+    const r = 4;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x, y - r);
+    ctx.lineTo(x + r, y);
+    ctx.lineTo(x, y + r);
+    ctx.lineTo(x - r, y);
+    ctx.closePath();
+    ctx.fillStyle = P.marchInk;
+    ctx.fill();
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = P.halo;
+    ctx.stroke();
     ctx.restore();
   }
 

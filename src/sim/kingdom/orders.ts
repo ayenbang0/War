@@ -38,7 +38,10 @@ export type KingdomOrderBody =
   /** Sow a crop in a plot of an owned holding: empty, harvested or spoiled. */
   | { kind: "sow"; plot: number; crop: CropId }
   /** Reap a ripe plot. */
-  | { kind: "harvest"; plot: number };
+  | { kind: "harvest"; plot: number }
+  // -- K3a: exploration --
+  /** Answer the letter waiting from a site: pick choice `choice` (0-based) of its event. */
+  | { kind: "resolveEvent"; site: number; choice: number };
   // K4: recruit / march / merge / split.  K7: hire / pay.
   // Append new kinds; never renumber the existing ones.
 
@@ -46,6 +49,7 @@ export type KingdomOrderKind = KingdomOrderBody["kind"];
 
 export const KINGDOM_ORDER_KINDS: readonly KingdomOrderKind[] = [
   "moveKing", "haltKing", "forage", "rally", "claimHolding", "setTax", "build", "sow", "harvest",
+  "resolveEvent",
 ];
 
 export type KingdomOrder = KingdomOrderBody & {

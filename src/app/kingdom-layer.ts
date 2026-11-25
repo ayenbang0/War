@@ -37,6 +37,9 @@ import type { Point } from "../input/kingdom-gestures.ts";
 import { KingdomHud } from "../ui/kingdom/hud.ts";
 import { kingCard, regionCard, type CardView } from "../ui/kingdom/cards.ts";
 import { KingdomClock, type KingdomSpeed } from "./kingdom-clock.ts";
+import { ExploreUi } from "../ui/kingdom/explore-ui.ts";
+import { knowsHolding } from "../sim/kingdom/explore.ts";
+import { X } from "../content/story/strings.ts";
 import { saveKingdom, type SaveOutcome, type StorageLike } from "./kingdom-save.ts";
 
 /** Where the kingdom layer is in its life; mirrors BattlePhase. */
@@ -110,6 +113,8 @@ export class KingdomLayer implements LayerKeys {
   lastSave: SaveOutcome | null = null;
   /** Saves made (or tried) so far, for the tests. */
   saves = 0;
+  /** K3a: the event card, the Finds list and exploration's feed lines. */
+  readonly explore: ExploreUi;
 
   private readonly env: KingdomEnv;
   private readonly hooks: KingdomHooks;
@@ -150,6 +155,13 @@ export class KingdomLayer implements LayerKeys {
     this.hud.resources.update(world);
     this.hud.alert(world.date.day, opening === "begun" ? K.begun : K.resumed(dateLine(world.date)));
     if (notice) this.hud.setNotice(notice);
+    this.explore = new ExploreUi(env.doc, world, {
+      pushScreen: (sc) => this.hooks.pushScreen(sc),
+      popScreen: (sc) => this.hooks.popScreen(sc),
+      alert: (text) => this.hud.alert(this.world.date.day, text),
+      issue: (body, said) => this.issueFromUi(body, said),
+    });
+    this.explore.attach(this.hud.root);
 
     this.renderer = new KingdomRenderer(env.ctx, world, env.doc);
     const sink: KingdomStrokeSink = {
@@ -340,7 +352,8 @@ export class KingdomLayer implements LayerKeys {
         }
         return true;
       case "kingDeparted":
-        this.hud.alert(day, K.departed({ from: name(e.from), to: name(e.to) }));
+        // K3a: a place not yet found has no name in the feed either.
+        this.hud.alert(day, K.departed({ from: name(e.from), to: knowsHolding(w, KING_PLAYER, e.to) ? name(e.to) : X.unexplored }));
         return false;
       case "kingArrived": {
         const h = w.holding(e.at);
@@ -403,6 +416,17 @@ export class KingdomLayer implements LayerKeys {
       case "foraged":
       case "taskSet":
         // Daily work is shown by the bar's numbers and the king card's "Doing", not the feed.
+        return false;
+      // -- K3a: exploration (ui/kingdom/explore-ui.ts) --------------------------
+      case "eventResolved":
+      case "upgradeGained":
+        this.storesDirty = true;
+        this.explore.onEvent(e);
+        return false;
+      case "sighted":
+      case "siteDiscovered":
+      case "revealed":
+        this.explore.onEvent(e);
         return false;
     }
   }

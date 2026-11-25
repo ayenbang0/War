@@ -51,13 +51,15 @@ export const LEGITIMACY_MAX = 100;
 export type LedgerCategoryId =
   | "tax" | "trade" | "harvest" | "forage" | "rally" | "muster" | "production" | "plunder" | "deeds"
   | "food" | "retinue" | "spoilage" | "seed" | "construction" | "upkeep" | "materials"
-  | "rations" | "wages" | "recruitment" | "desertion" | "disgrace";
+  | "rations" | "wages" | "recruitment" | "desertion" | "disgrace"
+  // K3a: exploration events and special upgrades (content/story/).
+  | "finds" | "boons" | "offerings";
 
 export type LedgerCategoryDef = {
   readonly id: LedgerCategoryId;
   readonly dir: "source" | "sink";
   /** The phase whose rules use it; K3 for the ones live now. */
-  readonly phase: "K3" | "K4" | "K5" | "K6" | "K7";
+  readonly phase: "K3" | "K3a" | "K4" | "K5" | "K6" | "K7";
   /** For the ledger screen and the resources bar's breakdown. */
   readonly label: string;
 };
@@ -84,6 +86,10 @@ export const LEDGER_CATEGORIES: readonly LedgerCategoryDef[] = [
   { id: "recruitment", dir: "sink", phase: "K4", label: "recruitment" },
   { id: "desertion", dir: "sink", phase: "K4", label: "desertion" },
   { id: "disgrace", dir: "sink", phase: "K6", label: "disgrace" },
+  // K3a, appended (save v3 re-lays old ledger pages for the new width).
+  { id: "finds", dir: "source", phase: "K3a", label: "finds and gifts" },
+  { id: "boons", dir: "source", phase: "K3a", label: "special upgrades" },
+  { id: "offerings", dir: "sink", phase: "K3a", label: "gifts and offerings" },
 ];
 
 /** Hash and save order of the categories. Append only. */

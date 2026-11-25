@@ -28,7 +28,7 @@ import {
   KingdomWorld, kingdomHash, calendar, saveToJson, loadFromJson, replayLog, migrate, deserialize, mapFingerprint,
   TICKS_PER_DAY, DAYS_PER_SEASON, KINGDOM_SAVE_VERSION,
   credit, debit, netOf, flowOf, adjustLegitimacy, storageOf, famineDeaths, taxPerDay, checkEconomyOrder,
-  changeLegitimacy, dailyNeed,
+  changeLegitimacy, dailyNeed, MIGRATIONS, K3_MAP,
   type KingdomEvent, type KingdomOrderBody, type Holding, type LedgerDay,
 } from "../src/sim/kingdom/index.ts";
 import {
@@ -589,7 +589,7 @@ section("determinism");
   const p2 = JSON.parse(json);
   p2.snapshot.holdings[0].buildings[0] = "castle-in-the-air";
   check("a save with an unknown building is refused", !deserialize(p2).ok);
-  check("the save is version " + KINGDOM_SAVE_VERSION, parsed.version === 2);
+  check("the save is version " + KINGDOM_SAVE_VERSION, parsed.version === KINGDOM_SAVE_VERSION && KINGDOM_SAVE_VERSION === 3);
 }
 
 section("migration");
@@ -600,19 +600,23 @@ section("migration");
   const v1 = JSON.parse(text);
   check("the fixture is a version-1 save", v1.version === 1);
   const m = migrate(v1);
-  check("it migrates to version 2", m.ok && m.value.version === 2);
+  const m2 = migrate(v1, MIGRATIONS, 2);
+  check("it migrates to version 2 (K3)", m2.ok && m2.value.version === 2);
+  check("and on to version 3 (K3a)", m.ok && m.value.version === 3);
   const loaded = loadFromJson(text);
   check("and loads", loaded.ok, loaded.ok ? "" : loaded.error);
   if (loaded.ok) {
     const w = loaded.value;
-    check("on the same map", mapFingerprint(w) === v1.mapFingerprint);
+    // K3a doubled the map: the save was made on the frozen K3 map and is now on its successor.
+    check("made on the K3 map, now on K3a's", v1.mapFingerprint === K3_MAP.fingerprint &&
+      mapFingerprint(w) === mapFingerprint(new KingdomWorld({ seed: v1.seed })));
     check("the king keeps his place and his day", w.now === v1.snapshot.now && w.king.mover.node === v1.snapshot.king.mover.node);
     check("with the exile's starting stores", STOCK_IDS.every((s) => kingE(w).stocks[s] === KING_START[s]));
     let ok = true;
     try { runDays(w, 120); } catch { ok = false; }
     check("and plays on through a winter", ok && day(w) > 120);
     const again = loadFromJson(saveToJson(w));
-    check("and saves again as version 2", again.ok && kingdomHash(again.value) === kingdomHash(w));
+    check("and saves again as version 3", again.ok && kingdomHash(again.value) === kingdomHash(w));
   }
 }
 

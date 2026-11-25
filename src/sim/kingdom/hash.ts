@@ -26,6 +26,7 @@ import { STOCK_IDS, TAX_RATE_IDS } from "../../content/kingdom/economy.ts";
 import { KINGDOM_ORDER_KINDS, type KingdomOrder } from "./orders.ts";
 import { KING_TASKS, PLOT_STAGES, type Mover } from "./state.ts";
 import type { LedgerDay } from "./ledger.ts";
+import { UPGRADE_IDS } from "../../content/story/upgrades.ts";
 import { KINGDOM_STREAMS, type KingdomWorld } from "./world.ts";
 
 function mixStr(h: number, s: string | null): number {
@@ -66,6 +67,7 @@ export function mixOrder(h: number, o: KingdomOrder): number {
     case "build": return mixU32(mixU32(h, o.holding), BUILDING_IDS.indexOf(o.building));
     case "sow": return mixU32(mixU32(h, o.plot), CROP_IDS.indexOf(o.crop));
     case "harvest": return mixU32(h, o.plot);
+    case "resolveEvent": return mixU32(mixU32(h, o.site), o.choice);
   }
 }
 
@@ -147,6 +149,25 @@ export function kingdomHash(world: KingdomWorld): string {
     h = mixLedgerDay(h, world.books[f].open);
     h = mixLedgerDay(h, world.books[f].closed);
   });
+
+  // K3a: every faction's map knowledge, finds and special upgrades.
+  h = mixU32(h, world.explore.length);
+  for (const ex of world.explore) {
+    h = mixU32(h, ex.holdings.length);
+    for (const k of ex.holdings) h = mixU32(h, k);
+    h = mixU32(h, ex.roads.length);
+    for (const k of ex.roads) h = mixU32(h, k);
+    h = mixU32(h, ex.finds.length);
+    for (const f of ex.finds) {
+      h = mixU32(h, f.site);
+      h = mixU32(h, f.event);
+      h = mixU32(h, f.day);
+      h = mixU32(h, f.choice);
+      h = mixU32(h, f.failed ? 1 : 0);
+    }
+    h = mixU32(h, ex.upgrades.length);
+    for (const u of ex.upgrades) h = mixU32(h, UPGRADE_IDS.indexOf(u));
+  }
 
   const queued = world.orders.queued();
   h = mixU32(h, queued.length);

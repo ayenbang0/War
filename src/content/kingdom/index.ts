@@ -12,3 +12,4 @@ export * from "./validate.ts";
 export * from "./economy.ts";
 export * from "./buildings.ts";
 export * from "./crops.ts";
+export * from "./exploration.ts";

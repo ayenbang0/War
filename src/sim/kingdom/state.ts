@@ -15,6 +15,8 @@ import type { FactionId } from "../../content/kingdom/factions.ts";
 import type { BiomeId, HoldingKind, RoadTerrainId } from "../../content/kingdom/terrain.ts";
 import type { ProvinceId } from "../../content/kingdom/map.ts";
 import type { FarmEventId, StockId, TaxRateId } from "../../content/kingdom/economy.ts";
+import type { Knowledge } from "../../content/kingdom/exploration.ts";
+import type { UpgradeId } from "../../content/story/upgrades.ts";
 
 /** The life of a field plot (PLAN.md §B.3; the transitions are in content/kingdom/crops.ts). */
 export type PlotStage = "empty" | "sown" | "growing" | "ripe" | "harvested" | "spoiled";
@@ -161,6 +163,38 @@ export type KingToken = {
 };
 
 /**
+ * What a faction found at an exploration site (K3a): the event drawn for it,
+ * and what was chosen. One per site per faction, ever -- that is what makes
+ * "the first visit triggers its event" exact.
+ */
+export type Find = {
+  /** Holding id of the site. */
+  readonly site: number;
+  /** Index in content/story STORY_EVENTS; -1 if every fitting event was already drawn. */
+  readonly event: number;
+  /** Calendar day it was found. */
+  readonly day: number;
+  /** Index of the choice made; -1 while the letter waits. */
+  choice: number;
+  /** A gamble's roll went against it (false when there was no gamble). */
+  failed: boolean;
+};
+
+/**
+ * One faction's map knowledge and finds (K3a; content/kingdom/exploration.ts).
+ * `holdings[i]` is the knowledge of world.holdings[i], `roads[i]` of
+ * world.roads[i]: both are in id order, so the index IS the canonical order.
+ */
+export type FactionExploration = {
+  readonly holdings: Knowledge[];
+  readonly roads: Knowledge[];
+  /** In the order found. */
+  readonly finds: Find[];
+  /** Special upgrades held, in the order gained (content/story/upgrades.ts). */
+  readonly upgrades: UpgradeId[];
+};
+
+/**
  * Something that happened during a tick, for the UI and the chronicle.
  * Transient: rebuilt every tick, never saved, never hashed -- everything it
  * reports is already in the state.
@@ -188,7 +222,16 @@ export type KingdomEvent =
   | { kind: "claimed"; holding: number; faction: number }
   | { kind: "harvested"; holding: number; plot: number; gains: Partial<Record<StockId, number>> }
   | { kind: "taxSet"; holding: number; rate: TaxRateId }
-  | { kind: "taskSet"; task: KingTask; holding: number };
+  | { kind: "taskSet"; task: KingTask; holding: number }
+  // -- K3a: exploration ------------------------------------------------------------
+  /** Holdings a faction knew nothing of came into sight or were told of (ids, ascending). */
+  | { kind: "sighted"; faction: number; holdings: number[] }
+  /** The party set foot in a site for the first time: its letter is waiting (event -1: nothing left to find). */
+  | { kind: "siteDiscovered"; faction: number; site: number; event: number }
+  | { kind: "eventResolved"; faction: number; site: number; event: number; choice: number; failed: boolean }
+  | { kind: "upgradeGained"; faction: number; upgrade: UpgradeId; site: number }
+  /** An event's reveal marked these many holdings known. */
+  | { kind: "revealed"; faction: number; site: number; holdings: number[] };
 
 /** Why a plot changed stage, for the feed. */
 export type PlotCause = "sown" | "sprouted" | "ripened" | "harvested" | "overripe" | "weather" | "winter" | "regrew";

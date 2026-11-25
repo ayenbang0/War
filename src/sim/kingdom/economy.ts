@@ -44,15 +44,19 @@ import {
   type FactionBook,
 } from "./ledger.ts";
 import type { KingdomWorld } from "./world.ts";
+// K3a: special upgrades bend these formulas; with none held every one is the K3 formula exactly.
+import {
+  creditDailyBoons, foragePct, musterPct, seasonalBoons, spoilagePct, taxPct, upgradeStorage, upgradeYieldPct, withPct,
+} from "./explore.ts";
 
 /** Factions whose economy runs, by id. K8 appends the captains as it gives them stewards. */
 export const ECONOMY_FACTIONS: readonly FactionId[] = ["king"];
 
 /** The economy orders (everything but the march). */
-export type EconomyOrderBody = Exclude<KingdomOrderBody, { kind: "moveKing" } | { kind: "haltKing" }>;
+export type EconomyOrderBody = Exclude<KingdomOrderBody, { kind: "moveKing" } | { kind: "haltKing" } | { kind: "resolveEvent" }>;
 
 export function isEconomyOrder(b: KingdomOrderBody): b is EconomyOrderBody {
-  return b.kind !== "moveKing" && b.kind !== "haltKing";
+  return b.kind !== "moveKing" && b.kind !== "haltKing" && b.kind !== "resolveEvent";
 }
 
 // -- construction -----------------------------------------------------------------
@@ -118,6 +122,7 @@ export function storageOf(world: KingdomWorld, faction: number): { granary: numb
     loose += CELLAR[h.kind];
     for (const s of standing(h)) granary += s.def.economy.storage ?? 0;
   }
+  granary += upgradeStorage(world, faction);
   return { granary, loose };
 }
 
@@ -160,13 +165,14 @@ export function seedCost(crop: CropDef, h: Holding): Cost {
 export function expectedYield(world: KingdomWorld, h: Holding, plot: FieldPlot): Cost {
   const crop = plot.crop ? CROPS[plot.crop as CropId] : null;
   if (!crop) return {};
-  const farm = hasStanding(h, "farm", true) ? (BUILDINGS.farm.economy.yieldPct ?? 0) : 0;
+  let farm = hasStanding(h, "farm", true) ? (BUILDINGS.farm.economy.yieldPct ?? 0) : 0;
+  const f = h.owner === null ? -1 : FACTION_IDS.indexOf(h.owner);
+  if (f >= 0) farm += upgradeYieldPct(world, f, h, crop.id);
   const out: Partial<Record<StockId, number>> = {};
   for (const s of STOCK_IDS) {
     const base = crop.yield[s] ?? 0;
     if (base) out[s] = floor((base * FIELD_SIZE[h.kind] * plot.health * (100 + farm)) / 10000);
   }
-  void world;
   return out;
 }
 
@@ -439,10 +445,12 @@ function turnSeason(world: KingdomWorld, d: CalendarDate): void {
       h.population += g >= 0 ? floor((h.population * g) / 100) : -ceil((h.population * -g) / 100);
       let pct = MUSTER_PCT;
       for (const b of standing(h)) if (!h.idle[b.slot]) pct += (MUSTER_PCT * (b.def.economy.musterPct ?? 0)) / 100;
+      pct += (MUSTER_PCT * musterPct(world, f)) / 100;
       const n = min(h.population, floor((h.population * pct) / 100));
       h.population -= n;
       credit(e, book, "levy", n, "muster");
     }
+    seasonalBoons(world, f);
   }
 }
 
@@ -486,9 +494,10 @@ function buildAndProduce(world: KingdomWorld, f: number): void {
 function collectTaxes(world: KingdomWorld, f: number): void {
   const e = world.economy[f];
   const book = world.books[f];
+  const bonus = taxPct(world, f);
   for (const h of ownedBy(world, f)) {
     if (h.famine > 0) continue;
-    const owed = h.population * TAX_RATES[TAX_RATE_IDS.indexOf(h.tax)].per100 + h.taxCarry;
+    const owed = withPct(h.population * TAX_RATES[TAX_RATE_IDS.indexOf(h.tax)].per100, bonus) + h.taxCarry;
     const coin = floor(owed / 100);
     h.taxCarry = owed - coin * 100;
     credit(e, book, "coin", coin, "tax");
@@ -506,7 +515,7 @@ function kingAtWork(world: KingdomWorld, d: CalendarDate): void {
   if (k.task === "forage") {
     const people = partySize(world, KING_PLAYER);
     const eco = BIOME_ECONOMY[h.biome];
-    const grain = floor((people * FORAGE_PER_PERSON[d.season] * eco.fertility) / 100);
+    const grain = withPct(floor((people * FORAGE_PER_PERSON[d.season] * eco.fertility) / 100), foragePct(world, KING_PLAYER));
     const timber = floor((people * eco.wood) / (100 * FORAGERS_PER_TIMBER));
     credit(e, book, "grain", grain, "forage");
     credit(e, book, "timber", timber, "forage");
@@ -585,7 +594,8 @@ function spoil(world: KingdomWorld, f: number): void {
   const inGranary = min(g, granary);
   const inLoose = min(g - inGranary, loose);
   const heap = g - inGranary - inLoose;
-  const lost = floor((inGranary * SPOIL_PERMILLE.granary) / 1000) + floor((inLoose * SPOIL_PERMILLE.loose) / 1000) +
+  const looseRate = (SPOIL_PERMILLE.loose * (100 + spoilagePct(world, f))) / 100;
+  const lost = floor((inGranary * SPOIL_PERMILLE.granary) / 1000) + floor((inLoose * looseRate) / 1000) +
     ceil((heap * SPOIL_PERMILLE.heap) / 1000);
   debitUpTo(e, world.books[f], "grain", lost, "spoilage");
 }
@@ -614,6 +624,7 @@ export function runEconomyDay(world: KingdomWorld): void {
     if (!economyActive(f)) continue;
     buildAndProduce(world, f);
     collectTaxes(world, f);
+    creditDailyBoons(world, f);
     if (f === KING_PLAYER) kingAtWork(world, d);
     eat(world, f, d.season);
     spoil(world, f);
