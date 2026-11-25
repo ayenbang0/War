@@ -27,7 +27,12 @@ import { confirmScreen, type ConfirmSpec } from "../ui/dialog.ts";
 import { ScreenStack, type FocusHost, type Focusable, type Screen } from "../ui/screen-stack.ts";
 import { KeyRouter, attachKeyRouter, classifyFocus } from "../ui/keys.ts";
 import { BattleLayer, PLAYER, type BattleEnv } from "./battle-layer.ts";
-import { lessonConfig, type BattleConfig } from "./battle-config.ts";
+import { battleFromSpec, lessonConfig, type BattleConfig } from "./battle-config.ts";
+import type { Contact } from "../sim/kingdom/state.ts";
+import type { BattleResult, BattleSpec } from "../sim/layers.ts";
+import { buildBattleSpec, contactPoint, resultFromBattle } from "../sim/kingdom/descent.ts";
+import { DESCENT } from "../content/kingdom/descent-strings.ts";
+import { consequenceLines } from "../ui/kingdom/consequences.ts";
 import type { Layer } from "./layers.ts";
 import { KingdomWorld } from "../sim/kingdom/world.ts";
 import { K, dateLine } from "../content/kingdom/ui-strings.ts";
@@ -48,12 +53,27 @@ export type AppEnv = {
  *
  * "lesson" is Home's Learn the gestures (until K9 folds it into the story's
  * opening). "test" is the e2e and ui-check launch (TestHook.launchBattle): a
- * normal battle with no story behind it, which goes back to Home. K5 adds the
- * story's own origin, which goes back to the kingdom map.
+ * normal battle with no story behind it, which goes back to Home. "story"
+ * (K5) is a contact on the kingdom map fought as a battle: its end applies
+ * the result to the realm and goes back to the map, at the point the armies
+ * met.
  */
 export type BattleOrigin =
   | { readonly kind: "lesson" }
-  | { readonly kind: "test" };
+  | { readonly kind: "test" }
+  | StoryOrigin;
+
+/** K5: a battle descended into from the kingdom map. */
+export type StoryOrigin = {
+  readonly kind: "story";
+  readonly realm: KingdomLayer;
+  readonly contact: Contact;
+  readonly spec: BattleSpec;
+  /** Where on the map the armies met: the camera comes back here. */
+  readonly at: MapPoint;
+  /** The result taken back to the realm, once it has been. */
+  result: BattleResult | null;
+};
 
 /** The page elements the app draws into. All exist in index.html and e2e.html. */
 type Elements = {
@@ -110,6 +130,8 @@ export class App {
   live: Layer | null = null;
   /** Where the current battle came from. Null while no battle is live. */
   origin: BattleOrigin | null = null;
+  /** K5: the realm suspended under a story battle, or null. */
+  descended: KingdomLayer | null = null;
 
   private readonly env: AppEnv;
   private readonly els: Elements;
@@ -151,6 +173,7 @@ export class App {
     setVisible: (v) => {
       if (this.live?.kind === "kingdom") this.live.setShown(v);
       else if (this.live?.kind === "city") this.live.realm.setShown(v);
+      else if (this.descended) this.descended.setShown(v);
     },
   };
 
@@ -244,6 +267,7 @@ export class App {
       pushScreen: (s) => this.stack.push(s),
       popScreen: (s) => { if (this.stack.top === s) this.stack.pop(); },
       enterCity: (holding, from) => this.enterCity(layer, holding, from),
+      descend: () => { this.descend(layer); },
     }, opening, notice);
     this.enterLayer(layer);
     return layer;
@@ -282,6 +306,37 @@ export class App {
     this.router.setLayer(realm);
     realm.resume(city.holding, city.leftWith);
     // The stack's change (this pop) hands the realm its input contexts.
+  }
+
+  // -- the descent (K5) -----------------------------------------------------------
+
+  /**
+   * Down a layer from the map into the battle the waiting contact is fought
+   * as (PLAN.md §B.9). The realm is suspended, not torn down, as under a
+   * city; it is held anyway (the sim does not move while a contact waits).
+   * The army arrives pre-built from the kingdom, so deployment is only the
+   * zone and the confirm (Enter), never a purse.
+   */
+  descend(realm: KingdomLayer): BattleLayer | null {
+    const c = realm.world.contact;
+    if (!c || this.live !== realm || realm.phase !== "live") return null;
+    if (this.stack.has(this.realm) && this.stack.top !== this.realm) this.stack.popTo(this.realm);
+    const spec = buildBattleSpec(realm.world, c);
+    const at = contactPoint(realm.world, c);
+    realm.suspend("battle");
+    this.live = null;
+    this.router.setLayer(null);
+    this.descended = realm;
+    return this.launch(battleFromSpec(spec), { kind: "story", realm, contact: c, spec, at, result: null });
+  }
+
+  /** Take a story battle's result back to the realm, once. */
+  private settleStory(origin: StoryOrigin, battle: BattleLayer, leftBy: number | null): string[] {
+    if (origin.result) return [];
+    const result = resultFromBattle(origin.spec, battle.world, battle.fielded, leftBy);
+    origin.result = result;
+    const events = origin.realm.settleBattle(result);
+    return consequenceLines(origin.realm.world, origin.spec, result, events);
   }
 
   /**
@@ -349,12 +404,22 @@ export class App {
   private leaveLayer(): void {
     const layer = this.live;
     if (!layer) return;
+    const origin = this.origin;
     this.live = null;
     this.origin = null;
     this.router.setLayer(null);
     switch (layer.kind) {
       case "battle":
         layer.teardown();
+        // K5: back up to the map, at the point the armies met.
+        if (origin?.kind === "story" && this.descended === origin.realm) {
+          const realm = origin.realm;
+          this.descended = null;
+          if (realm.phase !== "live") return;
+          this.live = realm;
+          this.router.setLayer(realm);
+          realm.resumeAt(origin.at);
+        }
         return;
       case "kingdom":
         layer.teardown();
@@ -373,9 +438,19 @@ export class App {
     const origin = this.origin;
     const battle = this.live;
     if (!origin || !battle || battle.kind !== "battle") return;
-    // AA-01: the label names where the button goes, and it goes there. Both
-    // origins go back to the front screen (K5's story battles will go back to
-    // the kingdom map, and write the chronicle as they do).
+    if (origin.kind === "story") {
+      // K5: the result goes back to the realm now (and is saved), and the
+      // report says what it meant there before the button takes you back.
+      const lines = this.settleStory(origin, battle, null);
+      this.stack.push(afterActionScreen(this.els.report, battle.world, PLAYER, {
+        again: DESCENT.backToMap,
+        onAgain: () => this.returnFromBattle(),
+        realm: { heading: DESCENT.heading, lines },
+      }));
+      return;
+    }
+    // AA-01: the label names where the button goes, and it goes there. The
+    // lesson and the test launch go back to the front screen.
     const again = origin.kind === "lesson" ? "Leave the lesson" : "Back to the front screen";
     this.stack.push(afterActionScreen(this.els.report, battle.world, PLAYER, {
       again,
@@ -387,6 +462,17 @@ export class App {
   private requestLeave(): void {
     const origin = this.origin;
     if (!origin) return;
+    if (origin.kind === "story") {
+      // K5: leaving a story battle mid-fight is a withdrawal under fire
+      // (docs/PROVISIONAL.md K5.6): the losses so far stand, the rearguard
+      // is paid, the army falls back -- or is taken, cut off.
+      this.confirm({ title: DESCENT.leaveTitle, body: DESCENT.leaveBody, yes: DESCENT.leaveYes, no: DESCENT.leaveNo }, () => {
+        const battle = this.live;
+        if (battle?.kind === "battle") this.settleStory(origin, battle, 0);
+        this.returnFromBattle();
+      });
+      return;
+    }
     const spec: ConfirmSpec = origin.kind === "lesson"
       ? {
         title: "Leave the lesson?",
@@ -401,10 +487,11 @@ export class App {
     this.confirm(spec, () => this.returnFromBattle());
   }
 
-  /** Back down the stack from a battle, finished or left: to the front screen. */
+  /** Back down the stack from a battle, finished or left: to the front screen, or (K5) to the map. */
   private returnFromBattle(): void {
     if (!this.origin) return;
-    this.stack.popTo(this.home);
+    if (this.origin.kind === "story") this.stack.popTo(this.realm);
+    else this.stack.popTo(this.home);
   }
 }
 
@@ -414,7 +501,8 @@ export class App {
  * a continued game is the same game (docs/PROVISIONAL.md K2.7).
  */
 function freshRealm(): KingdomWorld {
-  return new KingdomWorld({ seed: (Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) | 0 });
+  // K5: a new campaign opens with its first enemy in the field (content/kingdom/descent.ts OPENING_HOSTS).
+  return new KingdomWorld({ seed: (Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) | 0, hosts: true });
 }
 
 /** Boot the game on a page. main.ts and the e2e harness both call this. */

@@ -23,14 +23,15 @@ import { ROAD_TERRAIN_IDS, WEATHER_IDS } from "../../content/kingdom/terrain.ts"
 import { BUILDING_IDS } from "../../content/kingdom/buildings.ts";
 import { CROP_IDS } from "../../content/kingdom/crops.ts";
 import { STOCK_IDS, TAX_RATE_IDS } from "../../content/kingdom/economy.ts";
-import { KINGDOM_ORDER_KINDS, type KingdomOrder } from "./orders.ts";
+import { CONTACT_CHOICES, KINGDOM_ORDER_KINDS, type KingdomOrder } from "./orders.ts";
+import { mixBattleResult } from "../layers.ts";
 import { KING_TASKS, PLOT_STAGES, type Mover } from "./state.ts";
 import type { LedgerDay } from "./ledger.ts";
 import { UPGRADE_IDS } from "../../content/story/upgrades.ts";
 import { UNIT_TYPE_IDS } from "../../content/unit-types.ts";
 import { DOCTRINE_IDS } from "../../content/doctrines.ts";
 import { ABILITY_IDS } from "../../content/abilities.ts";
-import { ARMY_POSTURES, type Army } from "./state.ts";
+import { ARMY_POSTURES, CONTACT_KINDS, type Army } from "./state.ts";
 import { KINGDOM_STREAMS, type KingdomWorld } from "./world.ts";
 
 function mixStr(h: number, s: string | null): number {
@@ -94,6 +95,11 @@ export function mixOrder(h: number, o: KingdomOrder): number {
     case "unlockAbility": return mixU32(mixU32(h, o.army), ABILITY_IDS.indexOf(o.ability));
     case "intercept": return mixU32(mixU32(h, o.army), o.target);
     case "kingJoin": return mixU32(h, o.army);
+    case "resolveContact": {
+      h = mixU32(mixU32(h, o.contact), CONTACT_CHOICES.indexOf(o.choice));
+      h = mixU32(h, o.result ? 1 : 0);
+      return o.result ? mixBattleResult(h, o.result) : h;
+    }
   }
 }
 
@@ -205,6 +211,25 @@ export function kingdomHash(world: KingdomWorld): string {
   // K4: every army, in id order.
   h = mixU32(h, world.armies.length);
   for (const a of world.armies) h = mixArmy(h, a);
+
+  // K5: a contact waiting, and the pairs not yet parted. Mixed only when
+  // there is something to mix, so a world that has never had a meeting (every
+  // K1-K4 world, and the kingdom golden's) hashes exactly as it did before K5.
+  if (world.contact || world.disengaged.length > 0) {
+    const c = world.contact;
+    h = mixU32(h, 0x4b35);
+    h = mixU32(h, c ? c.id : 0);
+    if (c) {
+      h = mixU32(h, CONTACT_KINDS.indexOf(c.kind));
+      for (const s of c.sides) { h = mixU32(h, s.faction); h = mixU32(h, s.army); }
+      h = mixU32(h, c.attacker);
+      h = mixU32(h, c.holding);
+      h = mixU32(h, c.road);
+      h = mixU32(h, c.tick);
+    }
+    h = mixU32(h, world.disengaged.length);
+    for (const [a, b] of world.disengaged) { h = mixU32(h, a); h = mixU32(h, b); }
+  }
 
   // K3: every faction's stores, soft stats and ledger pages.
   h = mixU32(h, world.economy.length);

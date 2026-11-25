@@ -21,6 +21,11 @@ import type { TaxRateId } from "../../content/kingdom/economy.ts";
 import type { UnitTypeId } from "../../content/unit-types.ts";
 import type { DoctrineId } from "../../content/doctrines.ts";
 import type { AbilityId } from "../../content/abilities.ts";
+import type { BattleResult } from "../layers.ts";
+
+/** How a contact is settled (K5). Hash code is the index. Append only. */
+export type ContactChoice = "fight" | "withdraw" | "auto";
+export const CONTACT_CHOICES: readonly ContactChoice[] = ["fight", "withdraw", "auto"];
 
 export type KingdomOrderBody =
   /** March the king's retinue by road to a holding. Replaces any march, and ends a forage or rally. */
@@ -74,7 +79,15 @@ export type KingdomOrderBody =
   /** March to meet an army that is not yours (K8's enemies; any other side's army now). */
   | { kind: "intercept"; army: number; target: number }
   /** The king rides with `army` (both must stand in the same holding), or alone again (0). */
-  | { kind: "kingJoin"; army: number };
+  | { kind: "kingJoin"; army: number }
+  // -- K5: the descent (sim/kingdom/descent.ts) --
+  /**
+   * Settle the waiting contact: fought (with the battle's result, which the
+   * app read off the battlefield), withdrawn from, or resolved for the king
+   * by the auto-resolve. While a contact waits the realm is held, so the
+   * result applies to exactly the armies the battle was built from.
+   */
+  | { kind: "resolveContact"; contact: number; choice: ContactChoice; result: BattleResult | null };
   // K7: hire / pay.
   // Append new kinds; never renumber the existing ones.
 
@@ -86,10 +99,14 @@ export const KINGDOM_ORDER_KINDS: readonly KingdomOrderKind[] = [
   // K4
   "recruit", "disband", "marchArmy", "haltArmy", "merge", "split", "garrison", "patrol", "recover",
   "setDoctrine", "unlockAbility", "intercept", "kingJoin",
+  // K5
+  "resolveContact",
 ];
 
 /** The K4 order kinds (src/sim/kingdom/armies.ts applies them). */
-export const ARMY_ORDER_KINDS: readonly KingdomOrderKind[] = KINGDOM_ORDER_KINDS.slice(KINGDOM_ORDER_KINDS.indexOf("recruit"));
+export const ARMY_ORDER_KINDS: readonly KingdomOrderKind[] = KINGDOM_ORDER_KINDS.slice(
+  KINGDOM_ORDER_KINDS.indexOf("recruit"), KINGDOM_ORDER_KINDS.indexOf("kingJoin") + 1,
+);
 export const ARMY_ORDER_KIND_SET: ReadonlySet<KingdomOrderKind> = new Set(ARMY_ORDER_KINDS);
 
 export type KingdomOrder = KingdomOrderBody & {

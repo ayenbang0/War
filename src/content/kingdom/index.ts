@@ -15,3 +15,5 @@ export * from "./crops.ts";
 export * from "./exploration.ts";
 export * from "./armies.ts";
 export * from "./army-strings.ts";
+export * from "./descent.ts";
+export * from "./descent-strings.ts";

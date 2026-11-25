@@ -36,7 +36,7 @@ import {
 } from "./graph.ts";
 import type { Army, FactionEconomy, FactionExploration, FieldPlot, Holding, KingToken, KingdomEvent, Road } from "./state.ts";
 import {
-  applyArmyOrder, armyById, checkArmyOrder, isArmyOrder, marchArmies, planArmyRoute, runArmyDay, type ArmyOrderBody,
+  applyArmyOrder, armyById, checkArmyOrder, isArmyOrder, marchArmies, planArmyRoute, raiseArmy, runArmyDay, type ArmyOrderBody,
 } from "./armies.ts";
 import { DEFAULT_TAX } from "../../content/kingdom/economy.ts";
 import type { FactionBook } from "./ledger.ts";
@@ -49,6 +49,9 @@ import {
   applyResolve, checkResolve, discover, marchOptions, newExploration, routeOptions, targetRefusal, updateSight,
 } from "./explore.ts";
 import { EXPLORE_REFUSAL } from "../../content/story/strings.ts";
+import { OPENING_HOSTS } from "../../content/kingdom/descent.ts";
+import { applyContactOrder, checkContactOrder, detectContacts } from "./descent.ts";
+import type { Contact } from "./state.ts";
 
 /** Default name of the exiled king (docs/PROVISIONAL.md A.7.3). */
 export const DEFAULT_KING_NAME = "Aldric of Rimaros";
@@ -66,6 +69,14 @@ export type KingdomConfig = {
   /** Defaults to the campaign map. */
   readonly map?: KingdomMapDef;
   readonly kingName?: string;
+  /**
+   * K5: raise the opening hostile hosts (content/kingdom/descent.ts
+   * OPENING_HOSTS) -- the Act I skirmish the king can march into. Off by
+   * default, so the K1-K4 tests and the kingdom golden keep their bare world;
+   * a new campaign (app/kingdom-layer.ts freshRealm) turns it on, and the save
+   * remembers it (docs/PROVISIONAL.md K5.13).
+   */
+  readonly hosts?: boolean;
 };
 
 export type KingdomRng = {
@@ -108,6 +119,19 @@ export class KingdomWorld {
   readonly explore: FactionExploration[];
   /** Every army on the map, of every faction, in id order (K4; armies.ts). */
   readonly armies: Army[] = [];
+  /** Whether this world began with the opening hosts (KingdomConfig.hosts). Set by the constructor, or by a load. */
+  hosts: boolean;
+  /**
+   * K5: the contact the king's side is in and has not yet settled, or null.
+   * While one waits the realm holds (tick): orders apply, nothing else moves.
+   */
+  contact: Contact | null = null;
+  /**
+   * K5: pairs that settled a contact and have not yet stood apart, [lower id,
+   * higher id] (or [army, -holding id] for walls), sorted. They do not meet
+   * again until they part (descent.ts detectContacts).
+   */
+  readonly disengaged: [number, number][] = [];
 
   readonly rng: KingdomRng;
   readonly orders = new KingdomOrderQueue();
@@ -209,7 +233,16 @@ export class KingdomWorld {
     // K3a: what each faction knows on day one, then what it can see from there.
     this.explore = FACTION_IDS.map((_, f) => newExploration(this, f));
     for (let f = 0; f < FACTION_IDS.length; f++) updateSight(this, f);
-    // Day one's sightings are the start, not news.
+    // K5: the opening hosts, after the start's ids so a bare world's ids are K4's.
+    this.hosts = config.hosts === true;
+    if (this.hosts) {
+      for (const host of OPENING_HOSTS) {
+        const at = this.byKey.get(host.at);
+        const f = FACTION_IDS.indexOf(host.faction);
+        if (at && f >= 0) raiseArmy(this, f, at.id, host.units, host.doctrine);
+      }
+    }
+    // Day one's sightings and musters are the start, not news.
     this.events = [];
   }
 
@@ -243,6 +276,23 @@ export class KingdomWorld {
     for (const o of orders) this.submit(o);
     this.events = [];
 
+    // K5: while a contact of the king's side waits, the realm holds. The
+    // orders due apply, in canonical order, until one settles the contact;
+    // the rest wait for the next tick, which runs as normal. The clock does
+    // not move, so the day the battle was fought is the day it was met, and
+    // a replay of the log (which submits every order up front) holds and
+    // resumes at exactly the same orders.
+    if (this.contact) {
+      const due = this.orders.drain(this.now);
+      let i = 0;
+      for (; i < due.length && this.contact; i++) {
+        this.log.push(due[i]);
+        this.applyOrder(due[i]);
+      }
+      for (; i < due.length; i++) this.orders.push(due[i], this.now);
+      return this.events;
+    }
+
     if (isDayStart(this.now)) {
       this.beginDay();
       // K3: the economy's day -- farm weather, seasons, plots, buildings,
@@ -263,8 +313,11 @@ export class KingdomWorld {
     // The king's retinue marches on its own only while he rides with no army.
     if (this.king.army === 0) this.marchKing();
     // K4: armies march (the same advanceMover), then meetings, in army-id order.
+    const marching = new Set<number>();
+    for (const a of this.armies) if (a.mover.route.length > 0 || a.target !== 0) marching.add(a.id);
     marchArmies(this);
-    // K5: contact check, in army-id order.
+    // K5: contact, in army-id order (descent.ts). One of the king's side holds the realm from the next tick.
+    detectContacts(this, marching);
     // K6: morale and unrest.  K7: contracts and wages.
     this.now++;
     return this.events;
@@ -301,6 +354,11 @@ export class KingdomWorld {
   private applyOrder(order: KingdomOrder): void {
     // While the king rides with an army, marching or halting the king is
     // marching or halting that army (docs/PROVISIONAL.md K4.1).
+    if (order.kind === "resolveContact") {
+      const why = applyContactOrder(this, order);
+      if (why) this.reject(order, why);
+      return;
+    }
     if ((order.kind === "moveKing" || order.kind === "haltKing") && order.player === KING_PLAYER && this.king.army !== 0) {
       const body: ArmyOrderBody = order.kind === "moveKing"
         ? { kind: "marchArmy", army: this.king.army, to: order.to }
@@ -360,6 +418,7 @@ export class KingdomWorld {
    */
   check(body: KingdomOrderBody, player: number = KING_PLAYER): string | null {
     if (body.kind === "resolveEvent") return checkResolve(this, player, body.site, body.choice);
+    if (body.kind === "resolveContact") return checkContactOrder(this, body, player);
     if (body.kind === "moveKing") {
       if (this.king.army !== 0) return checkArmyOrder(this, { kind: "marchArmy", army: this.king.army, to: body.to }, player);
       return targetRefusal(this, KING_PLAYER, body.to);

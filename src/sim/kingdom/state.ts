@@ -246,7 +246,40 @@ export type Army = {
 };
 
 /** Why an army left the map. */
-export type ArmyGoneReason = "starved" | "deserted" | "disbanded";
+export type ArmyGoneReason = "starved" | "deserted" | "disbanded" | "fell" | "captured";
+
+/**
+ * K5: two hostile armies have met (or an army has come to the walls of a
+ * hostile holding), and a battle, a withdrawal or an auto-resolve has to
+ * settle it (PLAN.md §B.9; sim/kingdom/descent.ts).
+ *
+ * `sides[0]` is the king's side whenever the king's side is in it, so the
+ * battle's player 0 -- the seat a person takes -- is always sides[0]. An
+ * assault has no army on the defending side: `sides[1].army` is 0 and the
+ * holding's townsmen man its walls.
+ */
+export type ContactKind = "field" | "assault";
+export const CONTACT_KINDS: readonly ContactKind[] = ["field", "assault"];
+export type ContactSide = {
+  /** Faction index. */
+  readonly faction: number;
+  /** Army id, or 0 for a holding's townsmen behind its walls. */
+  readonly army: number;
+};
+export type Contact = {
+  /** From the world's one counter. */
+  readonly id: number;
+  readonly kind: ContactKind;
+  readonly sides: readonly [ContactSide, ContactSide];
+  /** Which side moved into the other: 0 or 1. */
+  readonly attacker: number;
+  /** The holding the battle is fought at (the nearer end of the road, for a meeting on one). */
+  readonly holding: number;
+  /** The road it happened on, or 0 at a holding. */
+  readonly road: number;
+  /** Kingdom tick it happened on. */
+  readonly tick: number;
+};
 
 /** One army's day, for the feed and the tests. */
 export type ArmyDayReport = {
@@ -362,7 +395,16 @@ export type KingdomEvent =
   /** Wages fell behind (days === 1) or were paid up (days === 0). */
   | { kind: "wagesLate"; army: number; days: number }
   /** The king's unformed followers walked home from a hungry party. */
-  | { kind: "followersDeserted"; faction: number; n: number };
+  | { kind: "followersDeserted"; faction: number; n: number }
+  // -- K5: the descent ---------------------------------------------------------------
+  /** Two hostile armies met, or an army came to hostile walls. A contact of the king's side holds the realm until settled. */
+  | { kind: "contact"; contact: number; player: boolean }
+  /** A contact was settled: by a battle fought (or auto-resolved), or by a withdrawal. */
+  | { kind: "contactResolved"; contact: number; how: "fight" | "withdraw" | "auto"; winner: number }
+  /** An army fell back from a contact or a lost battle, toward `to` (0: it stands where it is). */
+  | { kind: "fellBack"; army: number; to: number }
+  /** A holding changed hands by assault. */
+  | { kind: "stormed"; holding: number; faction: number };
 
 /** Why a plot changed stage, for the feed. */
 export type PlotCause = "sown" | "sprouted" | "ripened" | "harvested" | "overripe" | "weather" | "winter" | "regrew" | "foraged";

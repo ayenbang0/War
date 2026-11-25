@@ -145,7 +145,14 @@ export const AC = {
   recruitButton: "Raise squads…",
   armyRaised: (name: string, at: string) => "The " + name + " is raised at " + at + ".",
   recruited: (p: { unit: string; men: number; army: string }) => p.unit + ", " + p.men + " men, join the " + p.army + ".",
-  armyGone: { starved: (n: string) => "The " + n + " has starved away.", deserted: (n: string) => "The " + n + " has melted away.", disbanded: (n: string) => "The " + n + " is stood down." },
+  armyGone: {
+    starved: (n: string) => "The " + n + " has starved away.",
+    deserted: (n: string) => "The " + n + " has melted away.",
+    disbanded: (n: string) => "The " + n + " is stood down.",
+    // K5: lost in battle, or cut off and taken.
+    fell: (n: string) => "The " + n + " is gone: none of it came off the field.",
+    captured: (n: string) => "The " + n + " was cut off and taken.",
+  },
   mergedNews: (p: { army: string; into: string }) => "The " + p.army + " joins the " + p.into + ".",
   splitNews: (p: { army: string; into: string }) => "The " + p.into + " parts from the " + p.army + ".",
   intercepted: (p: { army: string; target: string }) => "The " + p.army + " meets the " + p.target + ".",

@@ -89,7 +89,9 @@ scenario("k4-armies", "from a new game: raise the first army, march it by pen, s
   t.boot();
   const k = await openPaused(t);
   const w = k.world;
-  t.expect(w.armies.length === 0, "a new exile has no army");
+  // K5: a new campaign has the Hare's host in the field; these are the king's own.
+  const own = (): typeof w.armies => w.armies.filter((x) => x.owner === 0);
+  t.expect(own().length === 0, "a new exile has no army");
 
   // -- rally followers, and raise them where the king stands --------------------
   await openKingCard(t, k);
@@ -101,8 +103,8 @@ scenario("k4-armies", "from a new game: raise the first army, march it by pen, s
   stepDays(t, 6);
   const followers = w.kingStocks.stocks.levy;
   await raiseFollowers(t, k, "line");
-  t.expect(w.armies.length === 1, "the followers form the first army (" + w.armies.length + ")");
-  const army = w.armies[0];
+  t.expect(own().length === 1, "the followers form the first army (" + own().length + ")");
+  const army = own()[0];
   t.expect(army.name === "First Army" && army.squads[0].men === followers && army.squads[0].levy,
     "the First Army: one levy squad of the " + followers + " followers");
   t.expect(w.king.army === army.id, "the king rides with it");
@@ -136,7 +138,7 @@ scenario("k4-armies", "from a new game: raise the first army, march it by pen, s
   t.clickButton(E.rally);
   stepUntil(t, () => w.kingStocks.stocks.levy >= LEVY_MIN_MEN, 12, "rallying at Greyshaw brings more followers");
   await raiseFollowers(t, k, "slinger");
-  t.expect(w.armies.length === 1 && army.squads.length === 2, "the slings join the king's army (" + army.squads.length + " squads)");
+  t.expect(own().length === 1 && army.squads.length === 2, "the slings join the king's army (" + army.squads.length + " squads)");
   t.key("Escape");
   await t.frames(2);
 
@@ -145,8 +147,8 @@ scenario("k4-armies", "from a new game: raise the first army, march it by pen, s
   t.stroke(t.line({ x: c.x - 50, y: c.y - 4 }, { x: c.x + 50, y: c.y + 4 }));
   t.expect(k.committed?.order?.kind === "split", "a line across the army orders a split (" + (k.committed?.gesture.kind ?? "") + ")");
   stepDays(t, 1);
-  t.expect(w.armies.length === 2, "the army splits in two (" + w.armies.length + ")");
-  const second = w.armies[1];
+  t.expect(own().length === 2, "the army splits in two (" + own().length + ")");
+  const second = own()[1];
   t.expect(second.name === "Second Army" && second.squads.length === 1 && army.squads.length === 1, "the Second Army takes the rear squad");
   t.expect(w.king.army === army.id, "the king stays with the First");
   t.expect(k.committed?.message === PEN.splitDone({ army: army.name, n: 1 }), "the result line said what the stroke did");
@@ -159,7 +161,7 @@ scenario("k4-armies", "from a new game: raise the first army, march it by pen, s
   t.stroke(t.line(armyOnScreen(t, k, second.id), armyOnScreen(t, k, army.id), 3));
   t.expect(k.committed?.order?.kind === "merge", "a stroke between the two orders a merge (" + (k.committed?.gesture.kind ?? "") + ")");
   stepDays(t, 1);
-  t.expect(w.armies.length === 1 && armyById(w, second.id) === undefined, "the Second folds into the First");
+  t.expect(own().length === 1 && armyById(w, second.id) === undefined, "the Second folds into the First");
   t.expect(armyMen(army) <= menBefore && army.squads.length === 2, "with its squad (" + armyMen(army) + " of " + menBefore + " men)");
   await t.frames(2);
 
@@ -188,7 +190,7 @@ scenario("k4-armies", "from a new game: raise the first army, march it by pen, s
   // Keyboard parity: the card's Split does what the pen did.
   t.clickButton(AC.split);
   stepDays(t, 1);
-  t.expect(w.armies.length === 2, "the card's Split parts the army too");
+  t.expect(own().length === 2, "the card's Split parts the army too");
   t.key("Escape");
   t.expect(t.hook.top() === "kingdom", "Esc closes the card");
 });

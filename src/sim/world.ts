@@ -537,7 +537,13 @@ export class World {
    * structure. A soldier stands where it is put, alone, until the player draws
    * a group around it.
    */
-  spawnSoldier(player: number, type: UnitTypeId, x: number, y: number, facing: number): number {
+  /**
+   * Set one soldier down. `nerve` (0..1] is the morale he starts with: 1, a
+   * fresh man, for every battle until K5; a kingdom army brings its own
+   * (content/kingdom/descent.ts nerveFromMorale). The default leaves every
+   * earlier battle exactly as it was.
+   */
+  spawnSoldier(player: number, type: UnitTypeId, x: number, y: number, facing: number, nerve = 1): number {
     const s = this.soldiers;
     if (s.count >= s.capacity) {
       // Writing past a Float64Array is a silent no-op rather than a throw, so an
@@ -552,7 +558,7 @@ export class World {
     s.facing[id] = facing;
     s.hp[id] = stats.hp;
     s.maxHp[id] = stats.hp;
-    s.morale[id] = 1;
+    s.morale[id] = nerve;
     s.cooldown[id] = 0;
     s.incoming[id] = 0;
     s.struckBy[id] = -1;

@@ -32,10 +32,11 @@ import {
   DEFAULT_TAX, KING_START, KING_START_LEGITIMACY, LEDGER_CATEGORY_IDS, LEDGER_STOCK_IDS, LEGITIMACY_MAX, STOCK_IDS,
   TAX_RATE_IDS, type StockId, type TaxRateId,
 } from "../../content/kingdom/economy.ts";
-import { KINGDOM_ORDER_KINDS, type KingdomOrder } from "./orders.ts";
+import { CONTACT_CHOICES, KINGDOM_ORDER_KINDS, type KingdomOrder } from "./orders.ts";
+import type { BattleResult, ResultSquad } from "../layers.ts";
 import {
-  ARMY_POSTURES, KING_TASKS, PLOT_STAGES, type Army, type ArmyPosture, type FactionExploration, type Find, type KingTask,
-  type Mover, type PlotStage,
+  ARMY_POSTURES, CONTACT_KINDS, KING_TASKS, PLOT_STAGES, type Army, type ArmyPosture, type Contact, type FactionExploration,
+  type Find, type KingTask, type Mover, type PlotStage,
 } from "./state.ts";
 import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "../../content/unit-types.ts";
 import { DOCTRINE_IDS, type DoctrineId } from "../../content/doctrines.ts";
@@ -52,7 +53,7 @@ import { roadBetween } from "./graph.ts";
 import { KINGDOM_STREAMS, KingdomWorld } from "./world.ts";
 
 export const KINGDOM_SAVE_FORMAT = "war.kingdom";
-export const KINGDOM_SAVE_VERSION = 4;
+export const KINGDOM_SAVE_VERSION = 5;
 
 export type SavedPlot = { id: number; crop: string | null; stage: PlotStage; progress: number; days: number; health: number };
 export type SavedHolding = {
@@ -115,7 +116,14 @@ export type SavedExploration = {
 };
 
 /**
- * Version 4 (K4): armies -- every army on the map with its squads' strength,
+ * Version 5 (K5): the descent -- the contact the realm is held on, if any
+ * (so a meeting left undecided reappears on continue), the pairs that have
+ * settled a contact and not yet parted, and whether the world began with the
+ * opening hosts (KingdomConfig.hosts), which a replay of the log needs. A
+ * battle being fought when the game was left is not saved: the save is made
+ * as the realm halts, so continuing asks "fight or withdraw?" again.
+ *
+ * (Version 4 (K4): armies -- every army on the map with its squads' strength,
  * supply, wages and orders; the army the king rides with; each holding's
  * days foraged this season; three new ledger categories (provisions,
  * disbanded, favours).
@@ -128,14 +136,15 @@ export type SavedExploration = {
  * ledger pages, and the new fields on holdings (works, idle, tax and its
  * remainders, famine), plots (days, health) and the king (task).)
  */
-export type KingdomSaveV4 = {
+export type KingdomSaveV5 = {
   format: typeof KINGDOM_SAVE_FORMAT;
-  version: 4;
+  version: 5;
   map: string;
   /** Fingerprint of the static map; see mapFingerprint. */
   mapFingerprint: string;
   seed: number;
   kingName: string;
+  hosts: boolean;
   snapshot: {
     now: number;
     nextId: number;
@@ -148,12 +157,14 @@ export type KingdomSaveV4 = {
     economy: SavedEconomy[];
     explore: SavedExploration[];
     armies: SavedArmy[];
+    contact: Contact | null;
+    disengaged: [number, number][];
   };
   log: KingdomOrder[];
 };
 
 /** The current save shape. */
-export type KingdomSave = KingdomSaveV4;
+export type KingdomSave = KingdomSaveV5;
 
 export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
 
@@ -331,7 +342,21 @@ export const MIGRATIONS: Readonly<Record<number, (save: Record<string, unknown>)
   1: migrate1to2,
   2: migrate2to3,
   3: migrate3to4,
+  4: migrate4to5,
 };
+
+/**
+ * Version 4 (K4) -> 5 (K5). Before K5 no army had met another: no contact
+ * waits and no pair is disengaged. The world did not begin with the opening
+ * hosts (K4 had none), and it is not given them now: a host conjured into an
+ * old campaign would take ids its own log never handed out, and the log
+ * would no longer replay to the snapshot. A new campaign has them
+ * (docs/PROVISIONAL.md K5.13). Nothing else moves.
+ */
+function migrate4to5(save: Record<string, unknown>): Record<string, unknown> {
+  const snap = { ...(save.snapshot as Record<string, unknown>), contact: null, disengaged: [] };
+  return { ...save, version: 5, hosts: false, snapshot: snap };
+}
 
 /**
  * Version 3 (K3a) -> 4 (K4). Before K4 nobody had an army: the snapshot gets
@@ -423,11 +448,12 @@ export function serialize(world: KingdomWorld): KingdomSave {
   const page = (d: LedgerDay | null): LedgerDay | null => (d === null ? null : { day: d.day, start: [...d.start], flow: [...d.flow] });
   return {
     format: KINGDOM_SAVE_FORMAT,
-    version: 4,
+    version: 5,
     map: world.map.id,
     mapFingerprint: mapFingerprint(world),
     seed: world.seed,
     kingName: world.king.name,
+    hosts: world.hosts,
     snapshot: {
       now: world.now,
       nextId: world.nextId,
@@ -479,6 +505,8 @@ export function serialize(world: KingdomWorld): KingdomSave {
         patrol: [...a.patrol], patrolIndex: a.patrolIndex, target: a.target, mergeInto: a.mergeInto,
         desertCarry: a.desertCarry, dieCarry: a.dieCarry, sickCarry: a.sickCarry,
       })),
+      contact: world.contact ? { ...world.contact, sides: [{ ...world.contact.sides[0] }, { ...world.contact.sides[1] }] } : null,
+      disengaged: world.disengaged.map(([a, b]) => [a, b] as [number, number]),
     },
     log: world.log.map((o) => ({ ...o, ...("squads" in o ? { squads: [...o.squads] } : {}), ...("holdings" in o ? { holdings: [...o.holdings] } : {}) })),
   };
@@ -587,9 +615,97 @@ function readOrder(v: unknown, what: string): KingdomOrder {
       return { kind, army: int(o.army, what + ".army"), target: int(o.target, what + ".target"), tick, player, seq };
     case "kingJoin":
       return { kind, army: int(o.army, what + ".army"), tick, player, seq };
+    // K5. The contact may name nothing (the sim refuses it); a result must be
+    // well-formed (its numbers are hashed), and the sim checks it fits.
+    case "resolveContact":
+      return {
+        kind, contact: int(o.contact, what + ".contact"), choice: oneOf(o.choice, CONTACT_CHOICES, what + ".choice"),
+        result: o.result === null ? null : readResult(o.result, what + ".result"), tick, player, seq,
+      };
     default:
       return { kind: "harvest", plot: int(o.plot, what + ".plot"), tick, player, seq };
   }
+}
+
+function readResult(v: unknown, what: string): BattleResult {
+  const o = obj(v, what);
+  const pair = <T>(x: unknown, w: string, f: (y: unknown, w: string) => T): [T, T] => {
+    const a = arr(x, w);
+    if (a.length !== 2) throw new Bad(w + " is not a pair");
+    return [f(a[0], w + "[0]"), f(a[1], w + "[1]")];
+  };
+  const squad = (x: unknown, w: string): ResultSquad => {
+    const q = obj(x, w);
+    return { squad: int(q.squad, w + ".squad"), men: int(q.men, w + ".men"), wounded: int(q.wounded, w + ".wounded") };
+  };
+  const winner = int(o.winner, what + ".winner", -1);
+  if (winner > 1) throw new Bad(what + ".winner is not a side");
+  const d = obj(o.damage, what + ".damage");
+  return {
+    contact: int(o.contact, what + ".contact"),
+    winner,
+    squads: pair(o.squads, what + ".squads", (x, w) => arr(x, w).map((q, i) => squad(q, w + "[" + i + "]"))),
+    morale: pair(o.morale, what + ".morale", (x, w) => int(x, w)),
+    fled: pair(o.fled, what + ".fled", bool),
+    left: pair(o.left, what + ".left", bool),
+    damage: { crops: int(d.crops, what + ".damage.crops"), buildings: int(d.buildings, what + ".damage.buildings") },
+    legitimacy: int(o.legitimacy, what + ".legitimacy", -1000000),
+  };
+}
+
+/** The waiting contact: of the king's side (only those wait), between real sides, at a real place. */
+function readContact(v: unknown, world: KingdomWorld, armies: readonly Army[], nextId: number): Contact | null {
+  if (v === null) return null;
+  const what = "snapshot.contact";
+  const o = obj(v, what);
+  const id = int(o.id, what + ".id", 1);
+  if (id < world.nextId || id >= nextId) throw new Bad(what + " has an id outside the counter's range");
+  if (armies.some((a) => a.id === id || a.squads.some((q) => q.id === id))) throw new Bad(what + " reuses id " + id);
+  const kind = oneOf(o.kind, CONTACT_KINDS, what + ".kind");
+  const sv = arr(o.sides, what + ".sides");
+  if (sv.length !== 2) throw new Bad(what + ".sides is not a pair");
+  const sides = sv.map((x, i) => {
+    const so = obj(x, what + ".sides[" + i + "]");
+    const faction = int(so.faction, what + ".sides[" + i + "].faction");
+    if (faction >= FACTION_IDS.length) throw new Bad(what + ".sides[" + i + "] has an unknown faction");
+    const army = int(so.army, what + ".sides[" + i + "].army");
+    if (army !== 0 && !armies.some((a) => a.id === army && a.owner === faction)) {
+      throw new Bad(what + ".sides[" + i + "] names an army not on the map, or not that side's");
+    }
+    return { faction, army };
+  }) as [Contact["sides"][0], Contact["sides"][1]];
+  if (sides[0].faction !== 0) throw new Bad(what + " is not the king's: only the king's contacts wait");
+  if (sides[0].army === 0 && sides[1].army === 0) throw new Bad(what + " has no army on either side");
+  if (sides[0].army === sides[1].army) throw new Bad(what + " meets an army with itself");
+  if (FACTIONS[FACTION_IDS[sides[0].faction]].crown === FACTIONS[FACTION_IDS[sides[1].faction]].crown) {
+    throw new Bad(what + " is between two sides that are not enemies");
+  }
+  const attacker = int(o.attacker, what + ".attacker");
+  if (attacker > 1) throw new Bad(what + ".attacker is not a side");
+  const holding = int(o.holding, what + ".holding", 1);
+  if (!world.holding(holding)) throw new Bad(what + " is at an unknown holding");
+  const road = int(o.road, what + ".road");
+  if (road !== 0 && !world.graph.roads.get(road)) throw new Bad(what + " is on an unknown road");
+  if (kind === "assault" && sides[1 - attacker].army !== 0) throw new Bad(what + " is an assault with an army defending");
+  if (kind === "field" && (sides[0].army === 0 || sides[1].army === 0)) throw new Bad(what + " is a field fight without two armies");
+  return { id, kind, sides, attacker, holding, road, tick: int(o.tick, what + ".tick") };
+}
+
+function readDisengaged(v: unknown, world: KingdomWorld, armies: readonly Army[]): [number, number][] {
+  const out: [number, number][] = [];
+  arr(v, "snapshot.disengaged").forEach((x, i) => {
+    const what = "snapshot.disengaged[" + i + "]";
+    const p = arr(x, what);
+    if (p.length !== 2) throw new Bad(what + " is not a pair");
+    const a = int(p[0], what + "[0]", 1);
+    const b = int(p[1], what + "[1]", -1000000);
+    if (!armies.some((y) => y.id === a)) throw new Bad(what + " names an army not on the map");
+    if (b < 0 ? !world.holding(-b) : b <= a) throw new Bad(what + " is not an army and a later army, or an army and a holding");
+    const prev = out[out.length - 1];
+    if (prev && (prev[0] > a || (prev[0] === a && prev[1] >= b))) throw new Bad(what + " is out of order");
+    out.push([a, b]);
+  });
+  return out;
 }
 
 function oneOf<T extends string>(v: unknown, ids: readonly T[], what: string): T {
@@ -886,6 +1002,9 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
   const explore = ex.map((v, i) => readExploration(v, "explore[" + i + "]", world, i));
 
   const armies = readArmies(s.armies, world, nextId);
+  const contact = readContact(s.contact, world, armies, nextId);
+  const disengaged = readDisengaged(s.disengaged, world, armies);
+  const hosts = bool(save.hosts, "hosts");
   if (kingArmy !== 0) {
     const a = armies.find((x) => x.id === kingArmy);
     if (!a || a.owner !== 0) throw new Bad("snapshot.king.army is not one of the king's armies");
@@ -940,6 +1059,9 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
   world.king.taskDays = taskDays;
   world.king.army = kingArmy;
   world.armies.push(...armies);
+  world.contact = contact;
+  world.disengaged.push(...disengaged);
+  world.hosts = hosts;
   economy.forEach((e, i) => {
     const live = world.economy[i];
     for (const st of STOCK_IDS) live.stocks[st] = e.stocks[st];
@@ -989,10 +1111,14 @@ export function loadFromJson(text: string): Result<KingdomWorld> {
  */
 export function replayLog(
   seed: number, log: readonly KingdomOrder[], until: number,
-  config: { map?: KingdomWorld["map"]; kingName?: string } = {},
+  config: { map?: KingdomWorld["map"]; kingName?: string; hosts?: boolean } = {},
 ): KingdomWorld {
   const w = new KingdomWorld({ seed, ...config });
   for (const o of log) w.submit(o);
   while (w.now < until) w.tick();
+  // K5: a contact settled on the snapshot's own tick was settled by a held
+  // tick, which does not move the clock: run those too, while logged orders
+  // are still waiting and the realm is still held.
+  while (w.contact && w.log.length < log.length && w.orders.queued().some((o) => o.tick <= w.now)) w.tick();
   return w;
 }

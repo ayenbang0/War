@@ -31,6 +31,9 @@ import type { DifficultyId } from "../content/difficulty.ts";
 import type { DoctrineId } from "../content/doctrines.ts";
 import { LEVELS, levelById } from "../content/levels/index.ts";
 import type { UnitTypeId } from "../content/unit-types.ts";
+import { layerHash } from "../sim/layers.ts";
+import { kingdomHash } from "../sim/kingdom/hash.ts";
+import { hashWorld } from "../sim/hash.ts";
 
 /**
  * What a test battle is fought with. Everything is optional: the defaults are
@@ -76,8 +79,13 @@ export type TestHook = {
   kingdom(): KingdomLayer | null;
   /** K3b: the live city view, or null. */
   city(): CityLayer | null;
-  /** K3b: the realm, live on the map or suspended under a city; null with neither. */
+  /** K3b: the realm, live on the map or suspended under a city (or, K5, a story battle); null with none. */
   realm(): KingdomLayer | null;
+  /**
+   * K5: the combined layer hash (sim/layers.ts): the realm's, with the live
+   * battle's folded in while one is being fought. Null with no realm.
+   */
+  layerHash(): string | null;
   /** End the live battle now with this winner (0 is the player). */
   forceOutcome(winner: number): void;
   /**
@@ -98,7 +106,13 @@ export function testHook(app: App): TestHook {
     battle,
     kingdom: () => (app.live && app.live.kind === "kingdom" ? app.live : null),
     city: () => (app.live && app.live.kind === "city" ? app.live : null),
-    realm: () => (app.live?.kind === "kingdom" ? app.live : app.live?.kind === "city" ? app.live.realm : null),
+    realm: () => (app.live?.kind === "kingdom" ? app.live : app.live?.kind === "city" ? app.live.realm : app.descended),
+    layerHash: () => {
+      const r = app.live?.kind === "kingdom" ? app.live : app.live?.kind === "city" ? app.live.realm : app.descended;
+      if (!r) return null;
+      const b = battle();
+      return layerHash(kingdomHash(r.world), b ? hashWorld(b.world) : undefined);
+    },
     forceOutcome: (winner) => {
       const b = battle();
       if (!b) throw new Error("no battle is live");

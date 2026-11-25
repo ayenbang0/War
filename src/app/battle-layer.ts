@@ -18,9 +18,7 @@
 import { World, TICK_DT, TICK_RATE } from "../sim/world.ts";
 import type { Outcome } from "../sim/victory.ts";
 import { hashWorld } from "../sim/hash.ts";
-import { PI } from "../sim/math.ts";
 import { TILE_SIZE } from "../sim/terrain.ts";
-import { DIFFICULTIES } from "../content/difficulty.ts";
 import { UNIT_TYPES } from "../content/unit-types.ts";
 import type { AbilityId } from "../content/abilities.ts";
 import { Camera } from "../render/camera.ts";
@@ -36,7 +34,8 @@ import { AbilityBar } from "../ui/ability-bar.ts";
 import { Tutorial } from "../ui/tutorial.ts";
 import { abilitySlotForCode, type LayerKeys } from "../ui/keys.ts";
 import type { InputContext, KeyInput, KeyVerdict } from "../ui/screen-stack.ts";
-import { distinctAbilities, LESSON_DURATION_SECONDS, type BattleConfig } from "./battle-config.ts";
+import { battleWorld, distinctAbilities, type BattleConfig } from "./battle-config.ts";
+import type { FieldedSquad } from "../sim/layers.ts";
 
 /** The seat the local player always takes. */
 export const PLAYER = 0;
@@ -88,6 +87,8 @@ export class BattleLayer implements LayerKeys {
   readonly kind = "battle" as const;
   readonly config: BattleConfig;
   readonly world: World;
+  /** Where each squad's men were set down, per side (K5 reads survivors back from this). */
+  readonly fielded: readonly (readonly FieldedSquad[])[];
   readonly cam: Camera;
   readonly commander: Commander;
   readonly pen: Pen;
@@ -141,59 +142,15 @@ export class BattleLayer implements LayerKeys {
     this.env = env;
     this.hooks = hooks;
     const level = config.level;
-    const diff = DIFFICULTIES[config.difficulty];
     const lesson = config.mode === "lesson";
 
-    this.world = new World({
-      seed: level.seed,
-      tilesWide: level.tilesWide,
-      tilesHigh: level.tilesHigh,
-      // BS-05: the lesson has no clock and no enemy commander, so neither the
-      // level's timer nor an attack can end it mid-step. The far side stands
-      // where it was set out until the player goes to it.
-      duration: lesson ? LESSON_DURATION_SECONDS : level.duration,
-      soldierCapacity: 4096,
-      aiPlayers: lesson ? [] : [1],
-      aiTuning: { think: diff.thinkInterval, commit: diff.commitTicks, focus: diff.focus },
-      commander: config.commander,
-      victory: level.victory,
-      controlPoints: level.controlPoints,
-      reinforcements: level.reinforcements,
-      sightScale: level.night,
-      floodAtSeconds: level.floodAtSeconds,
-      siege: level.siege,
-    });
-    const world = this.world;
-    world.doctrine[0] = config.armies[0].doctrine;
-    world.doctrine[1] = config.armies[1].doctrine;
+    // The world and its men, set out from the config (battle-config.ts: the
+    // headless suites build battles the same way).
+    const built = battleWorld(config);
+    this.world = built.world;
+    this.fielded = built.fielded;
     this.abilityKeys = distinctAbilities(config.abilities[PLAYER]);
-    world.armAbilities(0, config.abilities[0]);
-    world.armAbilities(1, config.abilities[1]);
-
-    // Deploy INDIVIDUAL soldiers. No groups are created here, by design: a
-    // group is something the player draws with the pen, not something the game
-    // hands them.
-    for (const zone of level.deployment) {
-      const list = config.armies[zone.player];
-      let n = 0;
-      for (const type of list.squads) {
-        const spec = UNIT_TYPES[type];
-        const blockX = (zone.x + 3 + (n % 4) * 5) * TILE_SIZE;
-        const blockY = (zone.y + 4 + ((n / 4) | 0) * 9) * TILE_SIZE;
-        for (let i = 0; i < spec.soldiers; i++) {
-          world.spawnSoldier(
-            zone.player, type,
-            blockX + (i % 5) * 14, blockY + ((i / 5) | 0) * 14,
-            zone.player === 0 ? 0 : PI,
-          );
-        }
-        n++;
-      }
-    }
-
-    // The board is set out but the battle has not begun -- except in the
-    // lesson, which is about the pen, not about setting an army out.
-    world.deploying = !lesson;
+    const world = this.world;
     this.myZone = level.deployment.find((z) => z.player === PLAYER);
 
     this.cam = new Camera(world.terrain.worldWidth, world.terrain.worldHeight);

@@ -58,7 +58,8 @@ const BOAR = FACTION_IDS.indexOf("boar");
 
 function runDays(w: KingdomWorld, n: number, each?: (w: KingdomWorld, ev: KingdomEvent[]) => void): void {
   const until = w.now + n * TICKS_PER_DAY;
-  while (w.now < until) {
+  // K5: a contact of the king's holds the realm (the clock stops), so stop with it.
+  while (w.now < until && !w.contact) {
     const ev = w.tick();
     each?.(w, ev);
   }
@@ -549,7 +550,8 @@ section("replay and save/load");
     bad3.snapshot.king.army = 9999;
     check("the king riding with no such army is refused", !deserialize(bad3).ok);
   }
-  check("the save is version " + KINGDOM_SAVE_VERSION, JSON.parse(json).version === 4 && KINGDOM_SAVE_VERSION === 4);
+  // K5 moved the version on to 5 (tools/kingdom-descent.ts tests that step).
+  check("the save is version " + KINGDOM_SAVE_VERSION, JSON.parse(json).version === KINGDOM_SAVE_VERSION && KINGDOM_SAVE_VERSION >= 4);
 }
 
 section("migration v3 -> v4");
@@ -558,7 +560,7 @@ section("migration v3 -> v4");
   const text = readFileSync(here + "fixtures/kingdom-save-v3.json", "utf8");
   const v3 = JSON.parse(text);
   check("the fixture is a real version-3 save", v3.version === 3 && !("armies" in v3.snapshot));
-  const m = migrate(JSON.parse(text));
+  const m = migrate(JSON.parse(text), MIGRATIONS, 4);
   check("it migrates to version 4", m.ok && m.value.version === 4);
   const m3 = migrate(JSON.parse(text), MIGRATIONS, 3);
   check("a version-3 save is already at 3", m3.ok && m3.value.version === 3);
@@ -670,6 +672,8 @@ section("garrison, patrol, doctrine, abilities, intercept");
   let met = false;
   runDays(w, 20, (_x, evs) => { for (const e of evs) if (e.kind === "intercepted" && e.army === a.id) met = true; });
   check("an intercept marches to meet it, and stops on contact", met && inContact(w, a, near) && a.target === 0);
+  // K5: and the meeting of two enemies is a contact that holds the realm (tools/kingdom-descent.ts).
+  check("which is a contact, waiting on the king", w.contact !== null && w.contact.sides[0].army === a.id && w.contact.sides[1].army === near.id);
 }
 
 // -- 13. fog and foraging ----------------------------------------------------------------------------

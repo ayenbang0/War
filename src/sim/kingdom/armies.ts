@@ -66,6 +66,8 @@ import { adjustLegitimacy, credit, debit, debitUpTo, snapshotStocks } from "./le
 import { dailyNeed, economyActive, hasStanding, setTask } from "./economy.ts";
 import { discover, holdingKnowledge, marchOptions, roadKnowledge, routeOptions, targetRefusal, updateSight } from "./explore.ts";
 import type { KingdomWorld } from "./world.ts";
+import { DESCENT_REFUSAL } from "../../content/kingdom/descent-strings.ts";
+import { walledHostile } from "./descent.ts";
 
 /** The army orders. */
 export type ArmyOrderBody = Extract<KingdomOrderBody, {
@@ -334,7 +336,7 @@ function clearTarget(a: Army): void {
 }
 
 /** Take an army off the map: out of its garrison, out from under the king, off every chaser. */
-function removeArmy(world: KingdomWorld, a: Army, reason: ArmyGoneReason | null): void {
+export function removeArmy(world: KingdomWorld, a: Army, reason: ArmyGoneReason | null): void {
   leaveGarrison(world, a);
   const i = world.armies.indexOf(a);
   if (i >= 0) world.armies.splice(i, 1);
@@ -414,7 +416,7 @@ function doMerge(world: KingdomWorld, a: Army, into: Army): void {
  * (ties: lowest id). `wounded`: take the wounded first (the dying), else the
  * fit (deserters walk). Returns how many were taken.
  */
-function takeMen(a: Army, n: number, pick: (s: ArmySquad) => boolean, wounded: boolean): number {
+export function takeMen(a: Army, n: number, pick: (s: ArmySquad) => boolean, wounded: boolean): number {
   let taken = 0;
   while (taken < n) {
     let best: ArmySquad | null = null;
@@ -458,6 +460,18 @@ function ownArmy(world: KingdomWorld, id: number, player: number): Army | string
  */
 export function checkArmyOrder(world: KingdomWorld, body: ArmyOrderBody, player: number): string | null {
   if (player < 0 || player >= FACTION_IDS.length) return REFUSAL.noSuchFaction;
+  // K5: an army in a contact that waits answers to the contact alone (fight,
+  // withdraw or resolve) -- nothing may march it off, split it or fold it away
+  // while the battle it is in is being decided.
+  if (world.contact) {
+    const c = world.contact;
+    const named = [body.army];
+    if (body.kind === "merge") named.push(body.into);
+    if (body.kind === "intercept") named.push(body.target);
+    for (const id of named) {
+      if (id !== 0 && (c.sides[0].army === id || c.sides[1].army === id)) return DESCENT_REFUSAL.inContact;
+    }
+  }
   const e = world.economy[player];
   if (body.kind === "recruit") {
     const u = UNIT_TYPES[body.unit];
@@ -760,7 +774,11 @@ export function marchArmies(world: KingdomWorld): void {
     if (m.route.length === 0) continue;
     const leaving = m.road === 0 ? m.node : 0;
     const heading = m.route[0];
-    const reached = advanceMover(world.graph, m, armyEffortPerTick(a), travel, marchOptions(world, a.owner));
+    // K5: a march halts at hostile walls, as the party halts at a site it is finding, and the
+    // townsmen come out to meet it there (descent.ts detectContacts).
+    const base = marchOptions(world, a.owner);
+    const opts = { ...base, stopAt: (h: number) => (base.stopAt ? base.stopAt(h) : false) || walledHostile(world, a.owner, h) };
+    const reached = advanceMover(world.graph, m, armyEffortPerTick(a), travel, opts);
     const king = world.king.army === a.id;
     if (leaving !== 0) {
       world.events.push({ kind: "armyDeparted", army: a.id, from: leaving, to: heading });

@@ -27,3 +27,8 @@
 @media (max-width: 700px) {
   .k-finds { position: fixed; left: 0.5rem; right: 0.5rem; width: auto; top: auto; bottom: 0.5rem; }
 }
+
+/* K5: the contact interstitial borrows the letter's panel; the two sides as a short list. */
+.k-contact-sides { margin: 0 0 0.75rem; color: #3a3124; }
+.k-contact-sides dt { font-weight: 700; margin-top: 0.25rem; }
+.k-contact-sides dd { margin: 0 0 0 1rem; }

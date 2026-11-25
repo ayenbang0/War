@@ -13,3 +13,5 @@ export * from "./ledger.ts";
 export * from "./economy.ts";
 export * from "./explore.ts";
 export * from "./armies.ts";
+export * from "./descent.ts";
+export * from "./autoresolve.ts";

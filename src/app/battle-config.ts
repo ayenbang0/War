@@ -16,9 +16,14 @@ import { cost, validate, type ArmyList } from "../content/army.ts";
 import type { AbilityId } from "../content/abilities.ts";
 import type { Commander as Captain } from "../content/commanders.ts";
 import { COMMANDERS } from "../content/commanders.ts";
-import type { DifficultyId } from "../content/difficulty.ts";
-import { LEVELS, type LevelDef } from "../content/levels/index.ts";
-import type { UnitTypeId } from "../content/unit-types.ts";
+import { DIFFICULTIES, type DifficultyId } from "../content/difficulty.ts";
+import { LEVELS, levelById, type LevelDef } from "../content/levels/index.ts";
+import { UNIT_TYPES, type UnitTypeId } from "../content/unit-types.ts";
+import { nerveFromMorale } from "../content/kingdom/descent.ts";
+import { World } from "../sim/world.ts";
+import { PI } from "../sim/math.ts";
+import { TILE_SIZE } from "../sim/terrain.ts";
+import type { BattleSpec, FieldedSquad } from "../sim/layers.ts";
 
 /**
  * A battle as a player would choose one: ground, how hard, an army and its
@@ -53,7 +58,133 @@ export type BattleConfig = {
   readonly difficulty: DifficultyId;
   /** Abilities bought per side, copies included (a copy is a deeper magazine). */
   readonly abilities: readonly [readonly AbilityId[], readonly AbilityId[]];
+  /**
+   * K5: an army that comes from the kingdom, not from a point-buy -- each
+   * squad's fit men (`armies[p].squads[j]` is its kind) and each side's nerve
+   * (kingdom morale as starting morale). Absent: every squad full, every man
+   * fresh, as every battle before K5.
+   */
+  readonly field?: {
+    readonly men: readonly [readonly number[], readonly number[]];
+    readonly nerve: readonly [number, number];
+  };
 };
+
+/**
+ * K5: the battle a kingdom contact is fought as (PLAN.md §B.9). The spec says
+ * everything; this only turns it into what the BattleLayer takes. The ground
+ * is the holding's country (its level's size, zones and night) generated from
+ * the holding's own seed; how it is won is the spec's (rout in the field, the
+ * defender holding out behind walls); nothing marches on and no river rises
+ * (docs/PROVISIONAL.md K5.9). Only the fit take the field.
+ */
+export function battleFromSpec(spec: BattleSpec): BattleConfig {
+  const base = levelById(spec.terrain.level) ?? LEVELS[0];
+  const level: LevelDef = {
+    ...base,
+    seed: spec.seed,
+    duration: spec.duration,
+    victory: spec.victory,
+    controlPoints: [],
+    reinforcements: undefined,
+    floodAtSeconds: undefined,
+    siege: undefined,
+    night: spec.sightScale === 1 ? undefined : spec.sightScale,
+  };
+  const [a, b] = spec.sides;
+  // The machine's side is commanded with its faction's battle habits; a side
+  // with no commander of its own (the king's, when two machines meet headless) borrows the Badger's.
+  const commander = COMMANDERS[b.commander ?? a.commander ?? "badger"];
+  return {
+    mode: "battle",
+    level,
+    armies: [
+      { doctrine: a.doctrine, squads: a.squads.map((q) => q.unit) },
+      { doctrine: b.doctrine, squads: b.squads.map((q) => q.unit) },
+    ],
+    commander,
+    difficulty: b.difficulty,
+    abilities: [a.abilities, b.abilities],
+    field: {
+      men: [a.squads.map((q) => q.men - q.wounded), b.squads.map((q) => q.men - q.wounded)],
+      nerve: [nerveFromMorale(a.morale), nerveFromMorale(b.morale)],
+    },
+  };
+}
+
+/**
+ * Build the battle World a config describes and set its men down: the one
+ * place this happens, for the BattleLayer and for the headless suites
+ * (tools/kingdom-descent.ts fights a real battle with it). Returns where each
+ * squad's men stand (FieldedSquad, per side in squad order), which is how a
+ * kingdom battle's survivors are read back.
+ *
+ * Men are set down LOOSE -- no groups, by design: a group is something the
+ * player draws with the pen, not something the game hands them.
+ */
+export function battleWorld(
+  config: BattleConfig, opts: { aiPlayers?: readonly number[]; duration?: number } = {},
+): { world: World; fielded: [FieldedSquad[], FieldedSquad[]] } {
+  const level = config.level;
+  const diff = DIFFICULTIES[config.difficulty];
+  const lesson = config.mode === "lesson";
+  const world = new World({
+    seed: level.seed,
+    tilesWide: level.tilesWide,
+    tilesHigh: level.tilesHigh,
+    // BS-05: the lesson has no clock and no enemy commander, so neither the
+    // level's timer nor an attack can end it mid-step. The far side stands
+    // where it was set out until the player goes to it.
+    duration: opts.duration ?? (lesson ? LESSON_DURATION_SECONDS : level.duration),
+    soldierCapacity: 4096,
+    aiPlayers: opts.aiPlayers ?? (lesson ? [] : [1]),
+    aiTuning: { think: diff.thinkInterval, commit: diff.commitTicks, focus: diff.focus },
+    commander: config.commander,
+    victory: level.victory,
+    controlPoints: level.controlPoints,
+    reinforcements: level.reinforcements,
+    sightScale: level.night,
+    floodAtSeconds: level.floodAtSeconds,
+    siege: level.siege,
+  });
+  world.doctrine[0] = config.armies[0].doctrine;
+  world.doctrine[1] = config.armies[1].doctrine;
+  world.armAbilities(0, config.abilities[0]);
+  world.armAbilities(1, config.abilities[1]);
+  const fielded: [FieldedSquad[], FieldedSquad[]] = [[], []];
+  for (const zone of level.deployment) {
+    const list = config.armies[zone.player];
+    const field = config.field;
+    let n = 0;
+    list.squads.forEach((type, j) => {
+      const spec = UNIT_TYPES[type];
+      const men = field ? field.men[zone.player][j] ?? 0 : spec.soldiers;
+      const nerve = field ? field.nerve[zone.player] : 1;
+      const first = world.soldiers.count;
+      if (men <= 0) {
+        // Nobody fit: the squad waits with the baggage, and takes no place in the line.
+        fielded[zone.player][j] = { first, count: 0 };
+        return;
+      }
+      const blockX = (zone.x + 3 + (n % 4) * 5) * TILE_SIZE;
+      const blockY = (zone.y + 4 + ((n / 4) | 0) * 9) * TILE_SIZE;
+      for (let i = 0; i < men; i++) {
+        world.spawnSoldier(
+          zone.player, type,
+          blockX + (i % 5) * 14, blockY + ((i / 5) | 0) * 14,
+          zone.player === 0 ? 0 : PI,
+          nerve,
+        );
+      }
+      fielded[zone.player][j] = { first, count: men };
+      n++;
+    });
+  }
+  // The board is set out but the battle has not begun -- except in the
+  // lesson, which is about the pen, not about setting an army out.
+  world.deploying = !lesson;
+  return { world, fielded };
+}
 
 /**
  * How long a lesson's world runs before its clock would end it: six hours.

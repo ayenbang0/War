@@ -45,6 +45,7 @@ function stat(label: string, value: string): HTMLElement {
 export function showAfterAction(
   root: HTMLElement, world: World, viewer: number, onAgain: () => void,
   again: string, chronicle?: { entry: string; note?: string },
+  realm?: { heading: string; lines: readonly string[] },
 ): HTMLButtonElement | null {
   const outcome = world.outcome;
   if (!outcome) return null;
@@ -61,6 +62,14 @@ export function showAfterAction(
   const foeAi = world.ai.find((a) => a.player === foe);
   panel.appendChild(el("p", "aa-detail",
     (foeAi ? "Against the " + foeAi.who.name + ", " + foeAi.who.epithet + ".  " : "") + outcome.detail));
+  // K5: a story battle says first what it meant for the kingdom -- that is
+  // what the player decides the next march by.
+  if (realm && realm.lines.length > 0) {
+    panel.appendChild(el("h2", undefined, realm.heading));
+    const list = el("ul", "aa-realm");
+    for (const line of realm.lines) list.appendChild(el("li", undefined, line));
+    panel.appendChild(list);
+  }
   if (chronicle) {
     panel.appendChild(el("h2", undefined, "From the chronicle"));
     panel.appendChild(el("p", "aa-chronicle", chronicle.entry));
@@ -147,7 +156,10 @@ export function showAfterAction(
  */
 export function afterActionScreen(
   root: HTMLElement, world: World, viewer: number,
-  opts: { again: string; onAgain: () => void; chronicle?: { entry: string; note?: string } },
+  opts: {
+    again: string; onAgain: () => void; chronicle?: { entry: string; note?: string };
+    realm?: { heading: string; lines: readonly string[] };
+  },
 ): Screen {
   let button: HTMLButtonElement | null = null;
   return domScreen({
@@ -158,7 +170,7 @@ export function afterActionScreen(
     firstFocus: () => button,
     build: () => {
       root.className = "after-action";
-      button = showAfterAction(root, world, viewer, opts.onAgain, opts.again, opts.chronicle);
+      button = showAfterAction(root, world, viewer, opts.onAgain, opts.again, opts.chronicle, opts.realm);
     },
     // Esc does not dismiss the report: the button names where it goes, and an
     // Esc meant for the battle a moment ago should not skip the account of it.

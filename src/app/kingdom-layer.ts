@@ -53,6 +53,11 @@ import { ZoomThrough } from "../input/zoom-through.ts";
 import { holdingAt } from "../input/kingdom-gestures.ts";
 import { C } from "../content/kingdom/city-strings.ts";
 import { saveKingdom, type SaveOutcome, type StorageLike } from "./kingdom-save.ts";
+import { contactDialog } from "../ui/kingdom/contact-dialog.ts";
+import type { ContactChoice } from "../sim/kingdom/orders.ts";
+import type { Contact } from "../sim/kingdom/state.ts";
+import type { BattleResult } from "../sim/layers.ts";
+import { CONTACT_FEED } from "../content/kingdom/descent-strings.ts";
 
 /** Where the kingdom layer is in its life; mirrors BattlePhase. */
 export type KingdomPhase = "built" | "live" | "torn-down";
@@ -87,6 +92,12 @@ export type KingdomHooks = {
    * `from` is where the holding is on screen, for the transition.
    */
   enterCity?(holding: number, from: MapPoint): void;
+  /**
+   * K5: the king chose to fight the contact that waits: go down a layer into
+   * its battle. Without it (a harness with no battle layer) Fight resolves
+   * the meeting as "resolve for me" does.
+   */
+  descend?(contact: Contact): void;
 };
 
 /** How the realm was opened, for the first line in the feed. */
@@ -169,6 +180,13 @@ export class KingdomLayer implements LayerKeys {
   /** K3b: the last tap on a holding, for a double tap. */
   private lastTap: { holding: number; at: number } | null = null;
   private readonly zoomIn: ZoomThrough;
+  /** K5: the "fight or withdraw?" interstitial, while it is up. */
+  private contactScreen: Screen | null = null;
+  private readonly contactRoot: HTMLElement;
+  /** K5: the contact last opened, for the feed's word on how it ended. */
+  private lastContact: Contact | null = null;
+  /** K5: the events of the last runTicks batch, for whoever settled a contact. */
+  private batchEvents: KingdomEvent[] = [];
 
   constructor(world: KingdomWorld, env: KingdomEnv, hooks: KingdomHooks, opening: KingdomOpening, notice: string | null = null) {
     this.world = world;
@@ -197,6 +215,10 @@ export class KingdomLayer implements LayerKeys {
       issue: (body, said) => this.issueFromUi(body, said),
     });
     this.explore.attach(this.hud.root);
+    this.contactRoot = env.doc.createElement("div");
+    this.contactRoot.className = "k-menu-backdrop k-event-backdrop";
+    this.contactRoot.style.display = "none";
+    this.hud.root.appendChild(this.contactRoot);
 
     this.renderer = new KingdomRenderer(env.ctx, world, env.doc);
     const sink: KingdomStrokeSink = {
@@ -251,6 +273,8 @@ export class KingdomLayer implements LayerKeys {
     this.pen.setEnabled(true);
     this.controls.setEnabled(true);
     this.raf = win.requestAnimationFrame(this.frame);
+    // K5: a meeting left undecided when the realm was saved asks again.
+    if (this.world.contact) this.openContact();
   }
 
   teardown(): KingdomReport {
@@ -387,11 +411,15 @@ export class KingdomLayer implements LayerKeys {
   private runTicks(n: number): void {
     let dayTurned = false;
     this.storesDirty = false;
+    this.batchEvents = [];
     for (let i = 0; i < n; i++) {
       this.prevKing = this.world.kingPosition();
       this.prevArmies = armyPointsOf(this.world);
       const events = this.world.tick();
+      this.batchEvents.push(...events);
       for (const e of events) if (this.onEvent(e)) dayTurned = true;
+      // K5: a contact holds the realm; the rest of the batch would do nothing.
+      if (this.world.contact) break;
     }
     // The resources bar is written once per batch of ticks, and only when an
     // event said the stocks (or what they mean) changed -- never per frame.
@@ -404,6 +432,72 @@ export class KingdomLayer implements LayerKeys {
       this.card?.refresh();
     }
     if (dayTurned) this.save();
+    // K5: the realm has halted on a meeting: pause, save, and ask.
+    if (this.world.contact && !this.contactScreen && !this.suspended && this.phase === "live") this.openContact();
+  }
+
+  // -- K5: contact --------------------------------------------------------------------
+
+  /** Is the "fight or withdraw?" interstitial up? */
+  get contactOpen(): boolean {
+    return this.contactScreen !== null;
+  }
+
+  /**
+   * The realm has halted on a meeting of the king's side: pause the clock
+   * (it stays paused after: docs/PROVISIONAL.md K5.8), save -- so leaving now
+   * and continuing asks again -- and put the question.
+   */
+  openContact(): void {
+    const c = this.world.contact;
+    if (!c || this.contactScreen || this.phase !== "live") return;
+    if (this.clock.run !== "paused") this.togglePause();
+    this.pen.cancelStroke();
+    this.intent = null;
+    this.stroke = null;
+    this.closeCard();
+    this.lastContact = c;
+    this.save();
+    const view = contactDialog(this.contactRoot, this.env.doc, this.world, {
+      choose: (choice) => this.chooseContact(choice),
+      close: (sc) => this.hooks.popScreen(sc),
+      closed: () => { if (this.contactScreen === view) this.contactScreen = null; },
+    });
+    this.contactScreen = view;
+    // The camera stays where the player left it: it never moves on its own (findKing's rule).
+    this.hooks.pushScreen(view);
+  }
+
+  private chooseContact(choice: ContactChoice): void {
+    const c = this.world.contact;
+    if (!c) return;
+    if (choice === "fight" && this.hooks.descend) {
+      this.hooks.descend(c);
+      return;
+    }
+    this.settle({ kind: "resolveContact", contact: c.id, choice: choice === "fight" ? "auto" : choice, result: null });
+  }
+
+  /**
+   * Settle the waiting contact with this order, now: the held tick applies
+   * it without moving the clock (sim/kingdom/world.ts). Saves, and returns
+   * what the tick did, for the after-action report.
+   */
+  settle(body: Extract<KingdomOrderBody, { kind: "resolveContact" }>): KingdomEvent[] {
+    this.world.issue(body);
+    this.runTicks(1);
+    const events = this.batchEvents;
+    this.storesDirty = true;
+    this.hud.resources.update(this.world);
+    this.save();
+    return events;
+  }
+
+  /** K5: a battle fought below has come back with its result. */
+  settleBattle(result: BattleResult): KingdomEvent[] {
+    const c = this.world.contact;
+    if (!c || c.id !== result.contact) return [];
+    return this.settle({ kind: "resolveContact", contact: c.id, choice: "fight", result });
   }
 
   /** Returns true for a day boundary. */
@@ -563,6 +657,33 @@ export class KingdomLayer implements LayerKeys {
         return false;
       case "kingJoined":
         this.hud.alert(day, e.army ? AC.kingRidesWith(army(e.army)) : AC.kingAlone);
+        return false;
+      // -- K5 ----------------------------------------------------------------------
+      case "contact": {
+        const c = w.contact;
+        if (!e.player || !c) return false;
+        const ours = army(c.sides[0].army);
+        const t = armyById(w, c.sides[1].army);
+        this.hud.alert(day, c.kind === "assault" ? CONTACT_FEED.walls({ ours, place: name(c.holding) })
+          : CONTACT_FEED.met({ ours, theirs: t ? armyTitle(t) : "?" }));
+        return false;
+      }
+      case "contactResolved": {
+        const c = this.lastContact;
+        if (!c || c.id !== e.contact) return false;
+        const ours = armyById(w, c.sides[0].army)?.name ?? "army";
+        this.storesDirty = true;
+        this.hud.alert(day, e.how === "withdraw" ? CONTACT_FEED.withdrew(ours)
+          : e.winner === 0 ? CONTACT_FEED.won(ours) : e.winner === 1 ? CONTACT_FEED.lost(ours) : CONTACT_FEED.drawn(ours));
+        this.lastContact = null;
+        return false;
+      }
+      case "fellBack":
+        if (mine(e.army)) this.hud.alert(day, CONTACT_FEED.fellBack({ army: army(e.army), to: name(e.to) }));
+        return false;
+      case "stormed":
+        this.storesDirty = true;
+        this.hud.alert(day, CONTACT_FEED.stormed({ name: name(e.holding), by: FACTIONS[FACTION_IDS[e.faction]]?.name ?? "?" }));
         return false;
       case "armyDeparted":
       case "armyPosture":
@@ -776,7 +897,7 @@ export class KingdomLayer implements LayerKeys {
    * the realm (its clock runs on through `advance`, called by the city), the
    * HUD, the autosave and the page listeners.
    */
-  suspend(): void {
+  suspend(below: "city" | "battle" = "city"): void {
     if (this.phase !== "live" || this.suspended) return;
     this.suspended = true;
     this.env.win.cancelAnimationFrame(this.raf);
@@ -788,7 +909,8 @@ export class KingdomLayer implements LayerKeys {
     this.stroke = null;
     this.lastTap = null;
     this.zoomBefore = this.cam.zoom;
-    this.hud.root.classList.add("in-city");
+    // Under a city the kingdom HUD stays over the town; under a battle the stack hides it.
+    if (below === "city") this.hud.root.classList.add("in-city");
   }
 
   /**
@@ -797,21 +919,35 @@ export class KingdomLayer implements LayerKeys {
    * or cut there under reduced motion.
    */
   resume(holding: number, said: string | null = null): void {
+    const h = this.world.holding(holding);
+    this.resumeAt(h ? { x: h.x, y: h.y } : null, h ? said ?? C.left(h.name) : null);
+  }
+
+  /**
+   * Back up from a layer below -- a city (resume), or K5's battle, which
+   * comes back to the point the armies met: the map again, its camera eased
+   * out from that point at the closest zoom (camera-systems: framing between
+   * layers), or cut there under reduced motion.
+   */
+  resumeAt(at: MapPoint | null, said: string | null = null): void {
     if (this.phase !== "live" || !this.suspended) return;
     this.suspended = false;
     this.hud.root.classList.remove("in-city");
-    const h = this.world.holding(holding);
-    if (h) {
+    if (at) {
       const out = Math.min(this.zoomBefore || this.cam.zoom, this.cam.zoomForSpan(RETURN_MILES));
-      if (this.reduced) this.cam.cut(h.x, h.y, out);
+      if (this.reduced) this.cam.cut(at.x, at.y, out);
       else {
-        this.cam.cut(h.x, h.y, this.cam.maxZoom);
-        this.cam.flyTo(h.x, h.y, out, LAYER_SECONDS);
+        this.cam.cut(at.x, at.y, this.cam.maxZoom);
+        this.cam.flyTo(at.x, at.y, out, LAYER_SECONDS);
       }
-      this.hud.result(said ?? C.left(h.name));
     }
+    if (said) this.hud.result(said);
+    this.hud.resources.update(this.world);
+    this.hud.setRun(this.clock.run, this.clock.speed);
     this.lastFrame = null;
     this.raf = this.env.win.requestAnimationFrame(this.frame);
+    // A meeting still waiting (the battle was left without a result) asks again.
+    if (this.world.contact) this.openContact();
   }
 
   // -- camera -----------------------------------------------------------------

@@ -769,3 +769,142 @@ and grain on the resources bar. Audit: docs/audit/u2-army-panels.md.
 
 Battles when armies meet (K5: `intercepted` is the hook); morale rules and
 unrest from foraging (K6); captains' armies moving on their own (K8).
+
+## K5 — descent: armies meet, and a battle is fought
+
+When two hostile armies meet on the map, the realm stops and the king is asked
+what to do; a battle fought below comes back up as a result the kingdom
+applies (PLAN.md §B.9). Every number is provisional (docs/PROVISIONAL.md
+K5.1–K5.18).
+
+### Files
+
+| File | What |
+|---|---|
+| `src/content/kingdom/descent.ts` | the numbers: engagement radius, withdrawal cost, militia, nerve mapping, `AUTORESOLVE`, commanders and difficulty by faction, `OPENING_HOSTS` |
+| `src/content/kingdom/descent-strings.ts` | the sim's refusals (`DESCENT_REFUSAL`), the interstitial (`CONTACT`), the report's realm lines and the leave confirm (`DESCENT`), the feed (`CONTACT_FEED`) |
+| `src/sim/layers.ts` | `BattleSpec`, `BattleResult` and their hashes; `layerHash` |
+| `src/sim/kingdom/descent.ts` | contact detection, `buildBattleSpec`, `resultFromBattle`, `applyBattleResult`, withdrawal and fall-back, the `resolveContact` order |
+| `src/sim/kingdom/autoresolve.ts` | "Resolve for me" |
+| `src/app/battle-config.ts` | `battleFromSpec` (the battle a spec is fought as), `battleWorld` (spawning, shared with the battle layer) |
+| `src/ui/kingdom/contact-dialog.ts`, `consequences.ts` | the interstitial; the report's "What it means for the realm" |
+| `tools/kingdom-descent.ts` | the K5 suite and the proof (in `npm test`) |
+| `src/e2e/scenarios-k5.ts` | `k5-descent-fight`, `k5-descent-withdraw`, `k5-descent-resolve` |
+
+### Contact
+
+After the armies march each tick, `detectContacts` looks at every pair of
+hostile armies (K5.1) in id order. A pair is **engaged** when they stand at
+one holding; are on one road within `ENGAGE_RADIUS` miles of each other;
+are on two roads meeting at a holding with their distances to it summing to
+no more than that; or one is intercepting the other and they are in contact.
+An army that reaches a hostile **walled** holding with none of the owner's
+armies there stops at the gate and **assaults** it: the townsmen defend
+(K5.5). Both armies halt. A contact names its holding (K5.3), the road
+(0 at a holding), the attacker (the one that marched into the other) and
+both sides `{faction, army}`, the king's side first.
+
+A contact with the king's side **holds the realm**: `world.contact` is set and
+from the next tick `tick()` does nothing but apply due orders, in canonical
+order, until one settles it; `now` does not advance, so no grain is eaten and
+no army moves while the king decides. There is at most one (K5.15). Orders
+naming an army in contact are refused (`inContact`), the king's own march
+included when he rides with it (K5.18). A contact between two armies of the
+crown's (none yet, K5.1) is resolved on the spot, on the `autoresolve` stream.
+A pair that has settled a contact is kept in `world.disengaged` until they
+stand apart, so they do not meet again on the next tick.
+
+### The order: `resolveContact {contact, choice, result}`
+
+| Choice | What happens |
+|---|---|
+| `fight` | `result` must be the `BattleResult` of the battle fought for this contact's spec; refused otherwise (`resultRefusal`: wrong contact, more survivors than went in, a squad that was not there, a winner that is not a side) |
+| `withdraw` | the king's army leaves a rearguard and loses morale (K5.7) and falls back; refused when cut off, and when the king's side is townsmen behind their own walls |
+| `auto` | the battle is resolved without the player (below) |
+
+### The handoff
+
+`buildBattleSpec(world, contact)` is pure: the same world and contact build
+the same spec, which `hashBattleSpec` covers whole. It carries the ground
+(level, biome, holding, road, fortification), the seed (the holding's, K5.3),
+both sides (name, commander and difficulty, doctrine, per-squad men and
+wounded, morale), the deployment (who attacks; whether the defender is dug
+in), the victory rule (rout in the field; the defender survives behind
+walls), duration, weather, season, night and reinforcements (none, K5.9).
+
+The battle side takes a spec through `battleFromSpec`: a derived level with
+no control points, flood or siege, and each squad spawned with its fit men
+only (a squad of 0 fields nobody) at the nerve its morale gives (K5.4);
+`battleWorld` returns which soldiers each squad became (`FieldedSquad`).
+`resultFromBattle(spec, world, fielded, leftBy)` counts them back: the
+living, the wounded (below half health), the winner, and whether a side left
+the field. `applyBattleResult` then writes survivors back squad by squad
+(never more than went in; the wounded among them kept), sets morale, moves
+legitimacy (+2 a win, −1 a loss), sends the side that fled back along a road
+away from the enemy, or has it **captured** if there is none; an army with no
+one left **fell**. Walls stormed change hands. Zero survivors and full
+survivors are both tested boundaries.
+
+`layerHash(kingdomHash, battleHash?)` is the one hash of the whole game: the
+kingdom alone on the map, the kingdom and the battle together while one is
+fought, so a drift is caught in whichever layer it started
+(`driftedLayer`).
+
+### Resolve for me
+
+`autoResolve(spec, rng, forPlayer)` draws exactly two numbers from the
+`autoresolve` stream, whatever the spec, so a resolve never shifts another
+draw. The definition of **strictly worse in expectation** (K5.11): on the same
+two draws, the resolve for the king's side (under a sergeant) is never better
+than the even-handed resolve of the same battle, in winner or in fit men
+brought home, and over many seeds it wins less often and brings fewer men
+home. The suite checks all three over 400 seeds.
+
+### Player experience
+
+1. The army meets the enemy; the clock pauses (and stays paused after,
+   K5.8); the interstitial opens: "Riders on the Harrowfield road", both
+   sides in words (men, fit, morale, walls, dug in), and three choices, each
+   saying what it costs. Withdraw, when cut off, says why and stays in the
+   Tab ring. Esc does nothing (K5.14).
+2. **Fight** goes down a layer into the battle the spec builds. The army is
+   already deployed; deployment is a confirm. Leaving mid-fight asks first
+   and counts as a withdrawal under fire (K5.6).
+3. **Withdraw** and **Resolve for me** settle at once; the feed says how.
+4. After a battle, the after-action report adds "What it means for the
+   realm" (survivors, an army lost, a fall-back, walls taken, legitimacy,
+   morale), and "Back to the map" comes up to the realm, its camera eased
+   out from where the armies met (a cut under reduced motion).
+
+A contact met while the player is in a city opens when they come back up
+(K5.16). The game is saved as the interstitial opens, so a reload asks again.
+
+### Save format version 5
+
+Adds `hosts` (K5.13), the waiting `contact` and `disengaged`. Every contact
+field is validated on load (id below the counter, both sides' armies there
+and hostile, the king's side first, kind and army consistent). `migrate4to5`
+sets no contact, no pairs and `hosts: false`, adding no army, so a v4 log
+replays exactly. `replayLog` keeps applying held ticks while a contact waits
+and orders remain.
+
+### Determinism and the golden
+
+No golden moved. The contact and the disengaged pairs are mixed into
+`kingdomHash` only when not empty, and headless worlds have no hosts unless
+asked (`hosts: true`), so the K1–K4 decade and every battle tier hash as
+before. `spawnSoldier` takes a nerve that defaults to 1.
+
+### The proof (tools/kingdom-descent.ts)
+
+"march → contact → battle → survivors home": the king's army marches from
+Rookstead on Harrowfield, meets the Hare's riders, the battle its spec
+builds is fought out headless with both sides under the AI, the result is
+applied and the realm runs a day. Run twice, the spec hash, the result hash
+and the layer hashes before and after all agree.
+
+### What K5 does not do
+
+Captains' armies that move and choose battles (K8); reinforcements from
+nearby armies (K5.9); damage to crops and buildings (K5.17); morale rules
+beyond a battle's (K6).

@@ -121,6 +121,11 @@ canvas.panning { cursor: grabbing; }
 .aa-fate { color: var(--ink-2); }
 .aa-log { display: grid; gap: 2px; }
 .aa-log-line { color: var(--ink-1); }
+/* K5: what a story battle meant for the realm, first under the verdict. */
+.aa-realm {
+  margin: 0; padding: 8px 10px 8px 1.6rem; background: var(--panel-2);
+  border-left: 3px solid var(--friend); color: var(--ink-1); line-height: 1.5;
+}
 .aa-again { margin-top: 20px; padding: 8px 18px; font: inherit; cursor: pointer; }
 /* -- home screen --------------------------------------------------------- */
 .home {
