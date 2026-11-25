@@ -101,13 +101,15 @@ export const AUTORESOLVE = {
 export const FACTION_BATTLE_COMMANDER: Readonly<Record<FactionId, CommanderId>> = {
   king: "badger", usurper: "owl", margrave: "boar",
   boar: "boar", fox: "fox", badger: "badger", hare: "hare", wolf: "wolf", owl: "owl", stag: "stag", crow: "crow",
+  // K8: an angry town fights the way the Boar does: straight at you.
+  commons: "boar",
 };
 
 /** How well a faction's armies are commanded in battle. The Act I captain is met at the easiest. */
 export const FACTION_BATTLE_DIFFICULTY: Readonly<Record<FactionId, DifficultyId>> = {
   king: "recruit", usurper: "captain", margrave: "captain",
   boar: "sergeant", fox: "sergeant", badger: "sergeant", hare: "recruit", wolf: "sergeant", owl: "sergeant",
-  stag: "sergeant", crow: "sergeant",
+  stag: "sergeant", crow: "sergeant", commons: "recruit",
 };
 
 // -- the crown's opening hosts ------------------------------------------------------------------

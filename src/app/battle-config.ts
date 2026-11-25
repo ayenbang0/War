@@ -20,8 +20,9 @@ import { DIFFICULTIES, type DifficultyId } from "../content/difficulty.ts";
 import { LEVELS, levelById, type LevelDef } from "../content/levels/index.ts";
 import { UNIT_TYPES, type UnitTypeId } from "../content/unit-types.ts";
 import { nerveFromMorale } from "../content/kingdom/descent.ts";
+import { AMBUSHED_NERVE, WALL_NERVE } from "../content/kingdom/invasions.ts";
 import { World } from "../sim/world.ts";
-import { PI } from "../sim/math.ts";
+import { PI, min } from "../sim/math.ts";
 import { TILE_SIZE } from "../sim/terrain.ts";
 import type { BattleSpec, FieldedSquad } from "../sim/layers.ts";
 
@@ -107,9 +108,23 @@ export function battleFromSpec(spec: BattleSpec): BattleConfig {
     abilities: [a.abilities, b.abilities],
     field: {
       men: [a.squads.map((q) => q.men - q.wounded), b.squads.map((q) => q.men - q.wounded)],
-      nerve: [nerveFromMorale(a.morale), nerveFromMorale(b.morale)],
+      nerve: fieldNerve(spec),
     },
   };
+}
+
+/**
+ * Each side's starting nerve: its kingdom morale, and (K8, PLAN §B.8) the
+ * ground it chose. A defender behind walls starts steadier (WALL_NERVE); an
+ * army that walked into a defender lying in wait or dug in starts shaken
+ * (AMBUSHED_NERVE) -- the deployment advantage an ambush is.
+ */
+export function fieldNerve(spec: BattleSpec): [number, number] {
+  const nerve: [number, number] = [nerveFromMorale(spec.sides[0].morale), nerveFromMorale(spec.sides[1].morale)];
+  const d = 1 - spec.deployment.attacker;
+  nerve[d] = min(1, nerve[d] + WALL_NERVE[spec.terrain.fortification]);
+  if (spec.deployment.ambush) nerve[spec.deployment.attacker] *= AMBUSHED_NERVE;
+  return nerve;
 }
 
 /**

@@ -16,7 +16,11 @@
  * the meeting is settled, and leaving the map is one Esc further only after
  * it is (docs/PROVISIONAL.md K5.14).
  *
- * Text comes from content/kingdom/descent-strings.ts.
+ * K8 adds the defender's two choices at its own walls (KD-05) when the
+ * king's side is the townsmen alone: open the gates, or retreat to the keep
+ * (refused, with the reason, where there is no keep or stone wall).
+ *
+ * Text comes from content/kingdom/descent-strings.ts and invasion-strings.ts.
  */
 
 import { domScreen } from "../dom-screen.ts";
@@ -29,6 +33,8 @@ import { buildBattleSpec, withdrawalCost } from "../../sim/kingdom/descent.ts";
 import { CONTACT } from "../../content/kingdom/descent-strings.ts";
 import { WITHDRAW_MORALE } from "../../content/kingdom/descent.ts";
 import { FACTIONS, FACTION_IDS } from "../../content/kingdom/factions.ts";
+import { DEFEND, RUMOUR } from "../../content/kingdom/invasion-strings.ts";
+import { YIELD_LEGITIMACY } from "../../content/kingdom/invasions.ts";
 
 export type ContactDialogHooks = {
   /** The player chose. The dialog has already asked to be popped. */
@@ -149,6 +155,13 @@ export function contactDialog(root: HTMLElement, doc: Document, world: KingdomWo
       add("withdraw", CONTACT.withdraw, cost > 0 ? CONTACT.withdrawHint(cost, WITHDRAW_MORALE) : "",
         noWithdraw ? CONTACT.withdrawNo(noWithdraw) : null);
       add("auto", CONTACT.auto, CONTACT.autoHint, null);
+      // K8 (KD-05): townsmen alone behind their own walls may also open the gates, or fall back to the keep.
+      if (c.kind === "assault" && c.sides[0].army === 0) {
+        const noYield = world.check({ kind: "resolveContact", contact: c.id, choice: "yield", result: null });
+        add("yield", DEFEND.yield, DEFEND.yieldHint(YIELD_LEGITIMACY), noYield ? RUMOUR.no(noYield) : null);
+        const noKeep = world.check({ kind: "resolveContact", contact: c.id, choice: "keep", result: null });
+        add("keep", DEFEND.keep, DEFEND.keepHint, noKeep ? RUMOUR.no(noKeep) : null);
+      }
       panel.appendChild(list);
       status = make(doc, "p", "k-menu-status");
       status.setAttribute("role", "status");

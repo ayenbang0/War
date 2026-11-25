@@ -31,7 +31,7 @@
  */
 
 import { floor, max, min } from "../math.ts";
-import { FACTION_IDS, KING_PLAYER, type FactionId } from "../../content/kingdom/factions.ts";
+import { FACTIONS, FACTION_IDS, KING_PLAYER, type FactionId } from "../../content/kingdom/factions.ts";
 import { BUILDINGS } from "../../content/kingdom/buildings.ts";
 import { MAX_ARMIES_PER_SIDE, LEVY_TYPES } from "../../content/kingdom/armies.ts";
 import {
@@ -61,9 +61,9 @@ export type MoraleOrderBody = Extract<KingdomOrderBody, { kind: "setJustice" | "
 export type UnrestCause = { readonly cause: UnrestCauseId; readonly permille: number };
 
 /** Is this holding's unrest reckoned: does its lord's economy run (the king's, until K8)? */
-export function unrestReckoned(h: Holding): boolean {
+export function unrestReckoned(world: KingdomWorld, h: Holding): boolean {
   if (h.owner === null) return false;
-  return economyActive(FACTION_IDS.indexOf(h.owner));
+  return economyActive(world, FACTION_IDS.indexOf(h.owner));
 }
 
 /** Past the lesser threshold: the holding pays half its taxes (economy.ts collectTaxes). */
@@ -97,7 +97,7 @@ export function courtsSit(world: KingdomWorld, h: Holding): boolean {
  * applies its sum, the politics card shows its rows.
  */
 export function unrestCauses(world: KingdomWorld, h: Holding, courts: boolean = courtsSit(world, h)): UnrestCause[] {
-  if (!unrestReckoned(h)) return [];
+  if (!unrestReckoned(world, h)) return [];
   const f = FACTION_IDS.indexOf(h.owner as FactionId);
   const e = world.economy[f];
   const out: UnrestCause[] = [];
@@ -154,7 +154,7 @@ export function armyRestMorale(world: KingdomWorld, a: Army): number {
 
 /** Move a holding's unrest by `delta` permille, kept in 0..UNREST_MAX; says when it changes band. */
 export function addUnrest(world: KingdomWorld, h: Holding, delta: number): void {
-  if (unrestReckoned(h)) moveUnrest(world, h, delta);
+  if (unrestReckoned(world, h)) moveUnrest(world, h, delta);
 }
 
 /** THE entry point for Mercy/Terror (the levers here; K9's story choices). Returns the change made after clamping. */
@@ -196,7 +196,7 @@ export function checkMoraleOrder(world: KingdomWorld, body: MoraleOrderBody, pla
   const h = world.holding(body.holding);
   if (!h) return REFUSAL.noSuchHolding;
   if (h.owner !== FACTION_IDS[player]) return REFUSAL.notYours;
-  if (!economyActive(player)) return REFUSAL.onlyKing;
+  if (!economyActive(world, player)) return REFUSAL.onlyKing;
   const e = world.economy[player];
   switch (body.kind) {
     case "setJustice":
@@ -248,6 +248,9 @@ export function applyMoraleOrder(world: KingdomWorld, order: KingdomOrder & Mora
 
 /** Whose banner a town that throws off the king raises: its old lord's from the map, else the Chancellor's. */
 export function rebelFaction(world: KingdomWorld, h: Holding): number {
+  // K8: a crown town that throws off its captain rises for no lord: its
+  // commons (factions.ts), whom the captain must come and put down.
+  if (world.captains && h.owner !== null && FACTIONS[h.owner].crown) return FACTION_IDS.indexOf("commons");
   const def = world.map.holdings.find((d) => d.key === h.key);
   const old = def?.owner ?? null;
   return FACTION_IDS.indexOf(old !== null && old !== "king" ? old : "usurper");
@@ -322,7 +325,7 @@ export function runMoraleDay(world: KingdomWorld): void {
   const d = calendar(world.now);
   const turn = d.dayOfSeason === 0 && d.day > 0;
   for (let f = 0; f < FACTION_IDS.length; f++) {
-    if (!economyActive(f)) continue;
+    if (!economyActive(world, f)) continue;
     const e = world.economy[f];
     const book = world.books[f];
     const before = snapshotStocks(e).join();

@@ -221,6 +221,10 @@ export function armyPosition(world: KingdomWorld, a: Army): { x: number; y: numb
 export function armyVisible(world: KingdomWorld, faction: number, a: Army): boolean {
   if (a.owner === faction) return true;
   const m = a.mover;
+  // K8: an army lying in wait is hidden from everyone but those standing on top of it.
+  if (a.posture === "ambush" && !world.armies.some((b) => b.owner === faction && b.mover.road === 0 && b.mover.node === m.node && m.road === 0)) {
+    return false;
+  }
   if (m.road === 0) return holdingKnowledge(world, faction, m.node) === KNOW_SEEN;
   return roadKnowledge(world, faction, m.road) === KNOW_SEEN;
 }
@@ -328,7 +332,7 @@ function leaveGarrison(world: KingdomWorld, a: Army): void {
   }
 }
 
-function setPosture(world: KingdomWorld, a: Army, p: ArmyPosture): void {
+export function setPosture(world: KingdomWorld, a: Army, p: ArmyPosture): void {
   if (p !== "hold") leaveGarrison(world, a);
   if (p !== "patrol") { a.patrol = []; a.patrolIndex = 0; }
   if (a.posture === p) return;
@@ -741,7 +745,7 @@ export function applyArmyOrder(world: KingdomWorld, order: KingdomOrder & ArmyOr
       }
       // At home the men rejoin the followers and the grain the stores; out
       // in the country they simply go home, and the grain with them.
-      if (at && at.owner === FACTION_IDS[f] && economyActive(f)) {
+      if (at && at.owner === FACTION_IDS[f] && economyActive(world, f)) {
         credit(e, book, "levy", armyMen(a), "disbanded");
         credit(e, book, "grain", a.supply, "disbanded");
         world.events.push({ kind: "stocksChanged", faction: f });
@@ -767,6 +771,10 @@ function chase(world: KingdomWorld, a: Army): void {
   const t = armyById(world, a.target);
   if (!t) { clearTarget(a); return; }
   if (inContact(world, a, t)) { a.mover.route = []; return; }
+  // K8: in a realm with captains a chase follows only what the chaser can see
+  // (PLAN §B.8, the same fog for every side): a quarry lost from sight is
+  // given up, and the chaser goes on to where it last saw it heading.
+  if (world.captains && !armyVisible(world, a.owner, t)) { clearTarget(a); return; }
   const dest = t.mover.road === 0 ? t.mover.node : t.mover.to;
   const end = a.mover.route.length > 0 ? a.mover.route[a.mover.route.length - 1] : standsIn(a.mover);
   if (end === dest) return;
@@ -861,12 +869,12 @@ export function runArmyDay(world: KingdomWorld): void {
   const before = world.economy.map((e) => snapshotStocks(e).join());
   // A new season: the fields an army stripped last season have had time to forgive it.
   if (d.dayOfSeason === 0) for (const h of world.holdings) h.foraged = 0;
-  for (let f = 0; f < world.economy.length; f++) if (economyActive(f)) followersDesert(world, f);
+  for (let f = 0; f < world.economy.length; f++) if (economyActive(world, f)) followersDesert(world, f);
   const gone: { a: Army; reason: ArmyGoneReason }[] = [];
   for (const a of world.armies) {
     const f = a.owner;
     a.postureDays++;
-    if (!economyActive(f)) continue;
+    if (!economyActive(world, f)) continue;
     const e = world.economy[f];
     const book = world.books[f];
 
@@ -883,7 +891,8 @@ export function runArmyDay(world: KingdomWorld): void {
     // where the king's own stores ride with it), then from the land.
     const at = world.holding(standsIn(a.mover));
     const home = !!at && at.owner === FACTION_IDS[f];
-    const stores = home || world.king.army === a.id;
+    // K8: a captain's stores ride with the army he leads (ai.ts AiMind.rides), as the king's with his.
+    const stores = home || world.king.army === a.id || (world.captains && world.minds[f]?.rides === a.id);
     const ration = armyRation(a);
     let need = ration;
     const fromWagons = min(a.supply, need);
@@ -895,14 +904,15 @@ export function runArmyDay(world: KingdomWorld): void {
       need -= fromStores;
     }
     let foraged = 0;
-    if (need > 0 && at) {
+    // K8: burned land (invasions.ts burnFields) feeds no one.
+    if (need > 0 && at && !world.burned.some((b) => b.holding === at.id)) {
       foraged = min(need, floor((armyMen(a) * ARMY_FORAGE_PER_10[d.season] * BIOME_ECONOMY[at.biome].fertility) / 1000));
       need -= foraged;
       // Living off the land strips the fields, whoever's they are: supply
       // bought with goodwill (K6 reads `foraged` as unrest).
       at.foraged++;
       // K6: and the town remembers it, if its lord's unrest is reckoned.
-      if (at.owner !== null && economyActive(FACTION_IDS.indexOf(at.owner))) moveUnrest(world, at, FORAGED_UNREST);
+      if (at.owner !== null && economyActive(world, FACTION_IDS.indexOf(at.owner))) moveUnrest(world, at, FORAGED_UNREST);
       forageHarm(world, at);
     }
     let loaded = 0;

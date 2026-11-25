@@ -36,6 +36,8 @@ import { AC } from "../../content/kingdom/army-strings.ts";
 import { LEVY_MIN_MEN } from "../../content/kingdom/armies.ts";
 import { armyById } from "../../sim/kingdom/armies.ts";
 import { levyMenu, recruitTarget } from "./recruit-menu.ts";
+import { INVASION_FEED, RUMOUR } from "../../content/kingdom/invasion-strings.ts";
+import { levyMen } from "../../sim/kingdom/invasions.ts";
 
 export type CardHooks = {
   /** Pop this card. */
@@ -180,9 +182,32 @@ export function regionCard(root: HTMLElement, doc: Document, world: KingdomWorld
   let enter: HTMLElement | null = null;
   let heading: HTMLElement | null = null;
   let shownSummary = "";
+  // K8: the defence tools a holding of the king's offers (the rumour card offers them too).
+  const defence: { el: HTMLElement; order: KingdomOrderBody }[] = [];
+  let defenceWhy: HTMLElement | null = null;
+  let lastDefence: HTMLElement | null = null;
 
   const refresh = (): void => {
     if (!owner || !people || !fromKing || !summary || !enter) return;
+    {
+      const mine = h.owner === "king";
+      let reason = "";
+      for (const d of defence) {
+        const want = mine ? "inline-block" : "none";
+        if (d.el.style.display !== want) {
+          if (want === "none" && doc.activeElement === d.el) heading?.focus();
+          d.el.style.display = want;
+        }
+        const why = mine ? world.check(d.order) : null;
+        if (why) d.el.setAttribute("aria-disabled", "true");
+        else d.el.removeAttribute("aria-disabled");
+        if (why && d.el === lastDefence) reason = E.notNow(why);
+      }
+      if (defenceWhy) {
+        setText(defenceWhy, reason);
+        defenceWhy.style.display = reason ? "block" : "none";
+      }
+    }
     setText(owner, h.owner === null ? capital(K.unclaimed) : capital(FACTIONS[h.owner].name));
     setText(people, String(h.population));
     const m = world.king.mover;
@@ -248,6 +273,28 @@ export function regionCard(root: HTMLElement, doc: Document, world: KingdomWorld
     enter.style.display = "none";
     enter.onclick = () => hooks.enterCity?.(h.id);
     actions.appendChild(enter);
+    defenceWhy = make(doc, "p", "k-why");
+    defenceWhy.style.display = "none";
+    body.appendChild(defenceWhy);
+    const tool = (text: string, order: KingdomOrderBody, said: () => string): void => {
+      const b = make(doc, "button", "k-btn", text);
+      b.setAttribute("type", "button");
+      b.setAttribute("data-key", order.kind);
+      b.style.display = "none";
+      b.onclick = () => {
+        lastDefence = b;
+        const why = world.check(order);
+        if (why) {
+          if (defenceWhy) { defenceWhy.textContent = E.notNow(why); defenceWhy.style.display = "block"; }
+          return;
+        }
+        hooks.issue(order, said());
+      };
+      defence.push({ el: b, order });
+      actions.appendChild(b);
+    };
+    tool(RUMOUR.levy, { kind: "callLevy", holding: h.id }, () => INVASION_FEED.levied({ place: h.name, men: levyMen(h) }));
+    tool(RUMOUR.burn, { kind: "burnFields", holding: h.id }, () => INVASION_FEED.burned(h.name));
   }, refresh);
   return { screen, kind: "region", holding: holdingId, refresh };
 }

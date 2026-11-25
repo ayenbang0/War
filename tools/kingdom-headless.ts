@@ -179,8 +179,8 @@ section("content");
   check("the Margrave holds every settlement of the Red March",
     RIMAROS.holdings.filter((h) => h.province === "red-march" && h.site === undefined).every((h) => h.owner === "margrave") &&
     RIMAROS.holdings.filter((h) => h.province === "red-march" && h.site !== undefined).every((h) => h.owner === null));
-  check("every faction has a persona except the human seat",
-    FACTION_IDS.every((f) => (f === "king") === (FACTIONS[f].persona === null)));
+  check("every faction has a persona except the human seat and (K8) the commons, who have no steward",
+    FACTION_IDS.every((f) => (f === "king" || f === "commons") === (FACTIONS[f].persona === null)));
   check("the king is order player 0", FACTION_IDS[0] === "king");
 
   // From nothing (PLAN.md §A.5 amendment).

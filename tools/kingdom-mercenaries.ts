@@ -509,7 +509,7 @@ section("save v7: companies round-trip, v6 migrates, tampering refused");
   hire(w, HARKER);
   hire(w, HALLOWAY);
   days(w, 20);
-  check("the current version is 7", KINGDOM_SAVE_VERSION === 7);
+  check("the current version is 7 or later (K8: 8)", KINGDOM_SAVE_VERSION >= 7);
   const json = saveToJson(w);
   const l = loadFromJson(json);
   check("a world with companies in service round-trips", l.ok && kingdomHash(l.value) === kingdomHash(w), l.ok ? "" : l.error);
@@ -548,7 +548,7 @@ section("save v7: companies round-trip, v6 migrates, tampering refused");
   for (const a of v6.snapshot.armies) delete a.company;
   for (const e of v6.snapshot.economy) { e.open = shrink(e.open); e.closed = shrink(e.closed); }
   const m = migrate(JSON.parse(JSON.stringify(v6)));
-  check("a version-6 save migrates to 7", m.ok && m.value.version === 7, m.ok ? "" : m.error);
+  check("a version-6 save migrates to 7 and on to " + KINGDOM_SAVE_VERSION, m.ok && m.value.version === KINGDOM_SAVE_VERSION, m.ok ? "" : m.error);
   const lv = deserialize(JSON.parse(JSON.stringify(v6)));
   check("and loads, every company waiting", lv.ok && lv.value.companies.every((c) => c.state === "waiting"), lv.ok ? "" : lv.error);
   if (lv.ok) {

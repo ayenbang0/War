@@ -502,7 +502,8 @@ export class App {
  */
 function freshRealm(): KingdomWorld {
   // K5: a new campaign opens with its first enemy in the field (content/kingdom/descent.ts OPENING_HOSTS).
-  return new KingdomWorld({ seed: (Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) | 0, hosts: true });
+  // K8: and the rival lords are captains, who play the realm as the king does (sim/kingdom/ai.ts).
+  return new KingdomWorld({ seed: (Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) | 0, hosts: true, captains: true });
 }
 
 /** Boot the game on a page. main.ts and the e2e harness both call this. */

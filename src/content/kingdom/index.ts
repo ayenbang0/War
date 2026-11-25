@@ -21,3 +21,5 @@ export * from "./morale.ts";
 export * from "./morale-strings.ts";
 export * from "./mercenaries.ts";
 export * from "./mercenary-strings.ts";
+export * from "./invasions.ts";
+export * from "./invasion-strings.ts";

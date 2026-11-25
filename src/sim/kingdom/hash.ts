@@ -32,7 +32,7 @@ import { UPGRADE_IDS } from "../../content/story/upgrades.ts";
 import { UNIT_TYPE_IDS } from "../../content/unit-types.ts";
 import { DOCTRINE_IDS } from "../../content/doctrines.ts";
 import { ABILITY_IDS } from "../../content/abilities.ts";
-import { ARMY_POSTURES, CONTACT_KINDS, type Army } from "./state.ts";
+import { AI_GOALS, ARMY_POSTURES, CONTACT_KINDS, type Army } from "./state.ts";
 import { COMPANY_STATES } from "../../content/kingdom/mercenaries.ts";
 import { KINGDOM_STREAMS, type KingdomWorld } from "./world.ts";
 
@@ -108,6 +108,9 @@ export function mixOrder(h: number, o: KingdomOrder): number {
     case "hireCompany": return mixU32(mixU32(h, o.company), o.at);
     case "renewContract": return mixU32(h, o.company);
     case "matchBid": return mixU32(h, o.company);
+    case "callLevy": return mixU32(h, o.holding);
+    case "burnFields": return mixU32(h, o.holding);
+    case "ambush": return mixU32(h, o.army);
   }
 }
 
@@ -255,6 +258,41 @@ export function kingdomHash(world: KingdomWorld): string {
     }
     h = mixU32(h, world.disengaged.length);
     for (const [a, b] of world.disengaged) { h = mixU32(h, a); h = mixU32(h, b); }
+  }
+
+  // K8: the captains' minds and memories, the waves, rumours, burned land and
+  // levy calls. Mixed only in a realm with captains or once a defence tool has
+  // been used, so a K7 realm hashes as it did (but for K8's commons faction,
+  // which every realm now has: docs/kingdom.md, K8).
+  if (world.captains || world.rumours.length > 0 || world.burned.length > 0 || world.levied.length > 0) {
+    h = mixU32(h, 0x4b38);
+    h = mixU32(h, world.captains ? 1 : 0);
+    h = mixU32(h, world.minds.length);
+    for (const m of world.minds) {
+      h = mixU32(h, AI_GOALS.indexOf(m.goal));
+      h = mixU32(h, m.target);
+      h = mixU32(h, m.since);
+      h = mixU32(h, m.wave + 1);
+      h = mixU32(h, m.rides);
+    }
+    h = mixU32(h, world.intel.length);
+    for (const x of world.intel) {
+      h = mixU32(h, x.owner.length);
+      for (let i = 0; i < x.owner.length; i++) {
+        h = mixU32(h, x.owner[i] + 1);
+        h = mixU32(h, x.men[i]);
+        h = mixU32(h, x.walls[i]);
+        h = mixU32(h, x.seen[i] + 1);
+      }
+    }
+    h = mixU32(h, world.wavesRode.length);
+    for (const w of world.wavesRode) h = mixU32(h, w ? 1 : 0);
+    h = mixU32(h, world.rumours.length);
+    for (const r of world.rumours) { h = mixU32(h, r.army); h = mixU32(h, r.target); h = mixU32(h, r.from); h = mixU32(h, r.days); h = mixU32(h, r.day); }
+    h = mixU32(h, world.burned.length);
+    for (const b of world.burned) { h = mixU32(h, b.holding); h = mixU32(h, b.days); }
+    h = mixU32(h, world.levied.length);
+    for (const l of world.levied) { h = mixU32(h, l.holding); h = mixU32(h, l.day); }
   }
 
   // K3: every faction's stores, soft stats and ledger pages.

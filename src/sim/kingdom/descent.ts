@@ -48,16 +48,19 @@ import {
   WITHDRAW_REARGUARD_PERMILLE, WOUNDED_HP_FRACTION, type Fortification,
 } from "../../content/kingdom/descent.ts";
 import { DESCENT_REFUSAL } from "../../content/kingdom/descent-strings.ts";
+import { INVASION_REFUSAL } from "../../content/kingdom/invasion-strings.ts";
+import { KEEP_RETREAT, YIELD_LEGITIMACY } from "../../content/kingdom/invasions.ts";
+import { moveUnrest } from "./unrest.ts";
 import type { BattleResult, BattleSide, BattleSpec, FieldedSquad, SpecSquad } from "../layers.ts";
 import type { World } from "../world.ts";
 import { calendar } from "./clock.ts";
 import { findRoute, setRoute, type Route } from "./graph.ts";
 import type { KingdomOrder, KingdomOrderBody } from "./orders.ts";
-import type { Army, Contact, ContactSide, Holding, Mover } from "./state.ts";
+import type { Army, Contact, ContactHow, ContactSide, Holding, Mover } from "./state.ts";
 import { armyById, armyMen, inContact, removeArmy, standsIn, takeMen } from "./armies.ts";
 import { adjustLegitimacy } from "./ledger.ts";
 import { battleLostUnrest } from "./morale.ts";
-import { ARMY_MORALE, STORMED_UNREST } from "../../content/kingdom/morale.ts";
+import { ARMY_MORALE, CLAIM_UNREST, STORMED_UNREST } from "../../content/kingdom/morale.ts";
 import { hasStanding } from "./economy.ts";
 import { routeOptions, updateSight } from "./explore.ts";
 import { autoResolve } from "./autoresolve.ts";
@@ -331,9 +334,13 @@ export function buildBattleSpec(world: KingdomWorld, c: Contact): BattleSpec {
   const h = world.holding(c.holding) as Holding;
   const biome = BIOMES[h.biome];
   const level = levelById(biome.level);
-  const fort: Fortification = c.kind === "assault" ? fortificationOf(h) : "none";
   const defender = 1 - c.attacker;
   const dArmy = armyById(world, c.sides[defender].army);
+  // K8: walls are a battle effect for an army too, when it defends a walled
+  // holding of its own lord's from inside it (PLAN §B.8). A K5-K7 realm keeps
+  // K5's rule (walls only for the townsmen), so its battles are unchanged.
+  const atHome = !!dArmy && world.captains && c.road === 0 && standsIn(dArmy.mover) === h.id && h.owner === FACTION_IDS[dArmy.owner];
+  const fort: Fortification = c.kind === "assault" || atHome ? fortificationOf(h) : "none";
   const night = level?.night;
   return {
     contact: c.id,
@@ -343,7 +350,8 @@ export function buildBattleSpec(world: KingdomWorld, c: Contact): BattleSpec {
     sides: [sideOf(world, c.sides[0], h, fort), sideOf(world, c.sides[1], h, fort)],
     deployment: {
       attacker: c.attacker,
-      ambush: !!dArmy && dArmy.posture === "hold" && dArmy.postureDays >= HOLD_DIG_IN_DAYS,
+      // Dug in (K5), or lying in wait (K8's ambush): either way it chose the ground and is ready.
+      ambush: !!dArmy && ((dArmy.posture === "hold" && dArmy.postureDays >= HOLD_DIG_IN_DAYS) || dArmy.posture === "ambush"),
     },
     // Behind walls the defender wins by holding out; in the field, by breaking the other.
     victory: c.kind === "assault" ? { mode: "survive", defender } : { mode: "rout" },
@@ -526,7 +534,7 @@ function pairOf(c: Contact): [number, number] {
  * deterministic; every loop in contact-side order, then squad-id order.
  */
 export function applyBattleResult(
-  world: KingdomWorld, c: Contact, spec: BattleSpec, r: BattleResult, how: "fight" | "auto",
+  world: KingdomWorld, c: Contact, spec: BattleSpec, r: BattleResult, how: "fight" | "auto" | "keep",
 ): void {
   const h = world.holding(c.holding) as Holding;
   for (let i = 0; i < 2; i++) {
@@ -606,7 +614,7 @@ export function applyBattleResult(
   settled(world, c, how, r.winner);
 }
 
-function settled(world: KingdomWorld, c: Contact, how: "fight" | "withdraw" | "auto", winner: number): void {
+function settled(world: KingdomWorld, c: Contact, how: ContactHow, winner: number): void {
   const [x, y] = pairOf(c);
   if (armyById(world, x)) disengage(world, x, y);
   if (world.contact && world.contact.id === c.id) world.contact = null;
@@ -628,6 +636,13 @@ export function checkContactOrder(world: KingdomWorld, body: ResolveOrder, playe
     return resultRefusal(buildBattleSpec(world, c), body.result);
   }
   if (body.result) return DESCENT_REFUSAL.resultOnlyFought;
+  // K8, the defender's choices at its own walls (KD-05): townsmen alone behind them may open the gates or fall back to the keep.
+  if (body.choice === "yield" || body.choice === "keep") {
+    if (c.kind !== "assault" || c.sides[0].army !== 0) return INVASION_REFUSAL.yieldOnlyWalls;
+    const h = world.holding(c.holding) as Holding;
+    if (body.choice === "keep" && !KEEP_RETREAT.needs.includes(fortificationOf(h))) return INVASION_REFUSAL.noKeep(h.name);
+    return null;
+  }
   if (body.choice === "withdraw") {
     const a = armyById(world, c.sides[0].army);
     if (!a) return DESCENT_REFUSAL.townsmenStay;
@@ -651,6 +666,14 @@ export function applyContactOrder(world: KingdomWorld, order: KingdomOrder & Res
     settled(world, c, "withdraw", -1);
     return null;
   }
+  if (order.choice === "yield") {
+    yieldHolding(world, c);
+    return null;
+  }
+  if (order.choice === "keep") {
+    keepSiege(world, c);
+    return null;
+  }
   const spec = buildBattleSpec(world, c);
   if (order.choice === "fight") {
     applyBattleResult(world, c, spec, order.result as BattleResult, "fight");
@@ -659,6 +682,48 @@ export function applyContactOrder(world: KingdomWorld, order: KingdomOrder & Res
   // "Resolve for me": a sergeant fights it, worse than the king would (autoresolve.ts).
   applyBattleResult(world, c, spec, autoResolve(spec, world.rng.autoresolve, true), "auto");
   return null;
+}
+
+/**
+ * The townsmen open the gates: the holding is the attacker's, no one dies,
+ * and the king's name suffers for a town given up without a fight.
+ */
+function yieldHolding(world: KingdomWorld, c: Contact): void {
+  const h = world.holding(c.holding) as Holding;
+  const by = c.sides[c.attacker].faction;
+  h.owner = FACTION_IDS[by];
+  h.garrison = [];
+  h.unrest = CLAIM_UNREST;
+  h.festival = 0;
+  const e = world.economy[KING_PLAYER];
+  adjustLegitimacy(e, world.books[KING_PLAYER], -YIELD_LEGITIMACY, "disgrace");
+  world.events.push({ kind: "stocksChanged", faction: KING_PLAYER });
+  world.events.push({ kind: "yielded", holding: h.id, faction: by });
+  world.events.push({ kind: "claimed", holding: h.id, faction: by });
+  settled(world, c, "yield", c.attacker);
+}
+
+/**
+ * Retreat to the keep: the town outside is given up and sacked (its crops
+ * lost, its people restless) and the keep is besieged. Real sieges are
+ * K10's (docs/PROVISIONAL.md K8.9): until then the siege is auto-resolved as
+ * a fight behind a keep's walls, the defenders fighting for themselves (not
+ * "resolve for me"). If the keep falls, the holding is the attacker's, as by storm.
+ */
+function keepSiege(world: KingdomWorld, c: Contact): void {
+  const h = world.holding(c.holding) as Holding;
+  for (const p of h.plots) {
+    if (p.stage !== "sown" && p.stage !== "growing" && p.stage !== "ripe") continue;
+    p.stage = "spoiled";
+    p.days = 0;
+    world.events.push({ kind: "plotStage", holding: h.id, plot: p.id, stage: "spoiled", cause: "burned" });
+  }
+  moveUnrest(world, h, KEEP_RETREAT.unrest);
+  const base = buildBattleSpec(world, c);
+  const spec: BattleSpec = { ...base, terrain: { ...base.terrain, fortification: "keep" } };
+  const r = autoResolve(spec, world.rng.autoresolve, false);
+  world.events.push({ kind: "siege", holding: h.id, held: r.winner !== c.attacker });
+  applyBattleResult(world, c, spec, r, "keep");
 }
 
 /** For the interstitial: the men a withdrawal would cost now, or -1 if the army is cut off (or is townsmen). */

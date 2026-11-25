@@ -19,7 +19,7 @@
 import { COMMANDERS, type CommanderId } from "../commanders.ts";
 import type { Playstyle } from "../../sim/ai.ts";
 
-export type FactionId = "king" | "usurper" | "margrave" | CommanderId;
+export type FactionId = "king" | "usurper" | "margrave" | CommanderId | "commons";
 
 /** The leanings the strategic AI (K8) weighs. Same shape as a Commander's. */
 export type Persona = {
@@ -93,12 +93,28 @@ export const FACTIONS: Record<FactionId, FactionDef> = {
   owl: captain("owl"),
   stag: captain("stag"),
   crow: captain("crow"),
+  // K8: the people of a crown town that threw off its captain. They serve no
+  // one -- not the crown, and not (yet) the king, whom they have never seen --
+  // so they are hostile to the crown's armies and to no one else. A revolt in
+  // a captain's town raises them (morale.ts rebelFaction); a captain marching
+  // to take it back is the first meeting of two machine sides, settled by the
+  // auto-resolve (docs/PROVISIONAL.md K8.6). They keep no stores and no AI.
+  commons: {
+    id: "commons",
+    name: "the commons",
+    title: "the commons in arms",
+    commander: null,
+    persona: null,
+    crown: false,
+  },
 };
 
 /** Index = order `player` number = hash code. Append only. */
 export const FACTION_IDS: readonly FactionId[] = [
   "king", "usurper", "margrave",
   "boar", "fox", "badger", "hare", "wolf", "owl", "stag", "crow",
+  // K8, appended.
+  "commons",
 ];
 
 /** The human seat's order `player` number. */

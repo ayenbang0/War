@@ -25,6 +25,7 @@ import { UNIT_TYPES } from "../../content/unit-types.ts";
 import { DOCTRINES, DOCTRINE_IDS } from "../../content/doctrines.ts";
 import { ABILITIES, ABILITY_IDS } from "../../content/abilities.ts";
 import { E, etaWords } from "../../content/kingdom/ui-strings.ts";
+import { INVASION_FEED, RUMOUR } from "../../content/kingdom/invasion-strings.ts";
 import { AC } from "../../content/kingdom/army-strings.ts";
 import { MERCENARIES, RENEW_WINDOW } from "../../content/kingdom/mercenaries.ts";
 import { CONTRACT, REPUTATION_WORD } from "../../content/kingdom/mercenary-strings.ts";
@@ -266,6 +267,8 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
       },
     }), standing);
     add(actions, AC.recover, () => ({ kind: "recover", army: id }), () => "The " + name() + " rests to mend.", standing);
+    // K8: lie in wait where it stands (hidden from all but those who come to the same place; it strikes first).
+    add(actions, RUMOUR.ambush, () => ({ kind: "ambush", army: id }), () => INVASION_FEED.ambush(name()), standing);
     const ownRanks = (): boolean => !isCompany;
     if (isCompany) {
       const ci = a0.company - 1;

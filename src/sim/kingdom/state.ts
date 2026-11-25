@@ -200,8 +200,9 @@ export type KingToken = {
 };
 
 /** What an army is doing where it stands (K4). Hash code is the index. Append only. */
-export type ArmyPosture = "none" | "hold" | "patrol" | "recover";
-export const ARMY_POSTURES: readonly ArmyPosture[] = ["none", "hold", "patrol", "recover"];
+export type ArmyPosture = "none" | "hold" | "patrol" | "recover" | "ambush";
+/** Append only (the hash and the save use the index). K8 appends `ambush`: lying in wait, hidden, at a holding. */
+export const ARMY_POSTURES: readonly ArmyPosture[] = ["none", "hold", "patrol", "recover", "ambush"];
 
 /**
  * One squad of a campaign army: a battle squad (content/unit-types.ts) that
@@ -315,6 +316,8 @@ export type Company = {
  * holding's townsmen man its walls.
  */
 export type ContactKind = "field" | "assault";
+/** How a contact was settled. K8 adds the defender's `yield` (gates opened) and `keep` (the siege of the keep). */
+export type ContactHow = "fight" | "withdraw" | "auto" | "yield" | "keep";
 export const CONTACT_KINDS: readonly ContactKind[] = ["field", "assault"];
 export type ContactSide = {
   /** Faction index. */
@@ -456,7 +459,7 @@ export type KingdomEvent =
   /** Two hostile armies met, or an army came to hostile walls. A contact of the king's side holds the realm until settled. */
   | { kind: "contact"; contact: number; player: boolean }
   /** A contact was settled: by a battle fought (or auto-resolved), or by a withdrawal. */
-  | { kind: "contactResolved"; contact: number; how: "fight" | "withdraw" | "auto"; winner: number }
+  | { kind: "contactResolved"; contact: number; how: ContactHow; winner: number }
   /** An army fell back from a contact or a lost battle, toward `to` (0: it stands where it is). */
   | { kind: "fellBack"; army: number; to: number }
   /** A holding changed hands by assault. */
@@ -485,7 +488,80 @@ export type KingdomEvent =
   | { kind: "companyBid"; company: number; bid: number }
   | { kind: "bidMatched"; company: number; bid: number }
   /** A company left the king's service; `army` is its army (gone, or gone over to the crown). */
-  | { kind: "companyLeft"; company: number; army: number; how: CompanyLeaving };
+  | { kind: "companyLeft"; company: number; army: number; how: CompanyLeaving }
+  // -- K8: the captains' AI and invasions ------------------------------------------------
+  /** The king hears of a host riding at one of his holdings, `days` out (the rumour card). */
+  | { kind: "rumour"; army: number; owner: number; target: number; from: number; days: number }
+  /** A story wave rode out: this faction's goal is the king. */
+  | { kind: "waveRode"; faction: number; wave: number }
+  /** A holding with no one to hold it was taken by an army standing in it. */
+  | { kind: "seized"; holding: number; faction: number; from: number }
+  /** The townsmen opened the gates (the defender's "yield"). */
+  | { kind: "yielded"; holding: number; faction: number }
+  /** A retreat to the keep was besieged (auto-resolved until K10): did the keep hold? */
+  | { kind: "siege"; holding: number; held: boolean }
+  | { kind: "levyCalled"; holding: number; army: number; men: number }
+  | { kind: "fieldsBurned"; holding: number }
+  /** Commons standing in a holding the king came to claim go home to it. */
+  | { kind: "commonsDispersed"; army: number; holding: number };
 
 /** Why a plot changed stage, for the feed. */
-export type PlotCause = "sown" | "sprouted" | "ripened" | "harvested" | "overripe" | "weather" | "winter" | "regrew" | "foraged";
+export type PlotCause = "sown" | "sprouted" | "ripened" | "harvested" | "overripe" | "weather" | "winter" | "regrew" | "foraged" | "burned";
+
+// -- K8: the captains' AI and invasions (sim/kingdom/ai.ts, invasions.ts) ------------------
+
+/** A captain's goal (PLAN §B.8): raid, besiege, consolidate or snipe the weakest; and exploring. */
+export type AiGoal = "consolidate" | "raid" | "besiege" | "snipe" | "explore";
+/** Append only (hash and save use the index). */
+export const AI_GOALS: readonly AiGoal[] = ["consolidate", "raid", "besiege", "snipe", "explore"];
+
+/** What one faction's strategic AI has in mind. Saved and hashed: it is sim state. */
+export type AiMind = {
+  goal: AiGoal;
+  /** A holding (raid, besiege, explore, consolidate's retaking) or an army (snipe); 0: none. */
+  target: number;
+  /** Calendar day the goal was taken up. */
+  since: number;
+  /** INVASION_WAVES index this goal is serving, or -1 (an ordinary goal). */
+  wave: number;
+  /**
+   * The army the faction's lord rides with, or 0. Its stores ride with it,
+   * as the king's ride with his (armies.ts runArmyDay): a captain leading a
+   * host far from home is fed from his granaries, which is how a wave can
+   * reach the Farthest Reach at all (docs/PROVISIONAL.md K8.5).
+   */
+  rides: number;
+};
+
+/**
+ * What a faction remembers of every holding, in holding order: who held it,
+ * how many men stood in it and what walls it had, as of the last day it was
+ * SEEN (explore.ts). The AI weighs a holding by this and never by the world:
+ * this is the kingdom-layer fog (PLAN §B.8, "may only act on what it has seen").
+ */
+export type FactionIntel = {
+  /** Faction index, or -1 for unclaimed. */
+  readonly owner: number[];
+  /** Men standing there (garrison and every army), as seen. */
+  readonly men: number[];
+  /** FORTIFICATIONS index, as seen. */
+  readonly walls: number[];
+  /** Calendar day last seen; -1: only told of (the start's owners, from common knowledge). */
+  readonly seen: number[];
+};
+
+/** A rumour the king has heard and not yet seen out: one host riding at one holding. */
+export type Rumour = {
+  readonly army: number;
+  readonly target: number;
+  /** The holding the road it was seen on is named for. */
+  readonly from: number;
+  /** Days out, when heard. */
+  readonly days: number;
+  readonly day: number;
+};
+
+/** Holdings whose fields were burned, and days left before an army can live off them again. */
+export type Burned = { readonly holding: number; days: number };
+/** Holdings whose people were called out, and the day. */
+export type Levied = { readonly holding: number; readonly day: number };

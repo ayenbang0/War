@@ -24,7 +24,7 @@
  */
 
 import { ceil, floor, max, min } from "../math.ts";
-import { FACTION_IDS, KING_PLAYER, type FactionId } from "../../content/kingdom/factions.ts";
+import { FACTIONS, FACTION_IDS, KING_PLAYER, type FactionId } from "../../content/kingdom/factions.ts";
 import { HOLDING_KINDS, type Season } from "../../content/kingdom/terrain.ts";
 import {
   AUTUMN_FROST_FROM_DAY, BIOME_ECONOMY, CARRY_PER_PERSON, CELLAR, CLAIM_MIN_LEVY, DEFAULT_TAX, DOLE_PER_100,
@@ -36,6 +36,7 @@ import {
 import { BUILDINGS, type BuildingDef, type BuildingId, type Cost } from "../../content/kingdom/buildings.ts";
 import { CROPS, type CropDef, type CropId } from "../../content/kingdom/crops.ts";
 import { REFUSAL } from "../../content/kingdom/ui-strings.ts";
+import { CAPTAIN_START, CAPTAIN_START_LEGITIMACY, CROWN_TITHE_PER_100 } from "../../content/kingdom/invasions.ts";
 import { moveUnrest } from "./unrest.ts";
 import { CLAIM_UNREST, MERCY_START, MUSTER_UNREST, RESTLESS_AT } from "../../content/kingdom/morale.ts";
 import { calendar, type CalendarDate } from "./clock.ts";
@@ -67,11 +68,14 @@ export function isEconomyOrder(b: KingdomOrderBody): b is EconomyOrderBody {
 
 // -- construction -----------------------------------------------------------------
 
-export function newFactionEconomy(id: FactionId): FactionEconomy {
+export function newFactionEconomy(id: FactionId, captains = false): FactionEconomy {
   const king = id === "king";
+  // K8: in a realm with captains every faction with a persona starts with a steward's stores.
+  const captain = !king && captains && FACTIONS[id].persona !== null;
   const stocks = {} as Record<StockId, number>;
-  for (const s of STOCK_IDS) stocks[s] = king ? KING_START[s] : 0;
-  return { stocks, legitimacy: king ? KING_START_LEGITIMACY : 0, hunger: 0, defaultTax: DEFAULT_TAX, mercy: MERCY_START };
+  for (const s of STOCK_IDS) stocks[s] = king ? KING_START[s] : captain ? CAPTAIN_START[s] : 0;
+  const legitimacy = king ? KING_START_LEGITIMACY : captain ? CAPTAIN_START_LEGITIMACY : 0;
+  return { stocks, legitimacy, hunger: 0, defaultTax: DEFAULT_TAX, mercy: MERCY_START };
 }
 
 export function newBook(e: FactionEconomy): FactionBook {
@@ -84,8 +88,23 @@ export function factionIndex(id: FactionId): number {
   return FACTION_IDS.indexOf(id);
 }
 
-export function economyActive(faction: number): boolean {
-  return ECONOMY_FACTIONS.includes(FACTION_IDS[faction]);
+export function economyActive(world: KingdomWorld, faction: number): boolean {
+  if (ECONOMY_FACTIONS.includes(FACTION_IDS[faction])) return true;
+  // K8: in a realm with captains (KingdomConfig.captains) every faction with a
+  // persona has a steward (sim/kingdom/ai.ts): its stores move, its towns pay
+  // and grumble, its armies are paid and fed -- the player's constraints. The
+  // commons have no steward and stand still, as every captain did before K8.
+  return world.captains && FACTIONS[FACTION_IDS[faction]]?.persona != null;
+}
+
+/**
+ * Does this faction's dole feed its towns from its stores? The king's does.
+ * A crown town feeds itself (docs/PROVISIONAL.md K8.3): the authored cities
+ * cannot live off their own few plots, and a steward who let Rimaros starve
+ * in the first winter would end the story before Act II. K11 balances it.
+ */
+export function drawsDole(faction: number): boolean {
+  return faction === KING_PLAYER;
 }
 
 /** Holdings a faction owns, in id order. */
@@ -142,7 +161,7 @@ function doleDue(h: Holding, season: Season): { draw: number; carry: number } {
 /** What a faction must find in grain each day at today's season: the party and the towns. */
 export function dailyNeed(world: KingdomWorld, faction: number, season: Season = world.date.season): number {
   let n = partySize(world, faction) * PARTY_RATION;
-  for (const h of ownedBy(world, faction)) n += doleDue(h, season).draw;
+  if (drawsDole(faction)) for (const h of ownedBy(world, faction)) n += doleDue(h, season).draw;
   return n;
 }
 
@@ -456,7 +475,7 @@ function turnSeason(world: KingdomWorld, d: CalendarDate): void {
     }
   }
   for (let f = 0; f < FACTION_IDS.length; f++) {
-    if (!economyActive(f)) continue;
+    if (!economyActive(world, f)) continue;
     const e = world.economy[f];
     const book = world.books[f];
     for (const h of ownedBy(world, f)) {
@@ -525,6 +544,10 @@ function collectTaxes(world: KingdomWorld, f: number): void {
     const coin = floor(owed / 100);
     h.taxCarry = owed - coin * 100;
     credit(e, book, "coin", coin, "tax");
+    // K8: a crown town feeds itself (drawsDole) and pays its lord a tithe in
+    // grain besides the coin -- the steward's armies' bread. Booked as tax:
+    // it is one, paid in kind (docs/PROVISIONAL.md K8.3).
+    if (!drawsDole(f)) credit(e, book, "grain", floor((h.population * CROWN_TITHE_PER_100) / half / 100), "tax");
   }
 }
 
@@ -584,7 +607,7 @@ function eat(world: KingdomWorld, f: number, season: Season): void {
   const book = world.books[f];
   const holdings = ownedBy(world, f);
   const party = partySize(world, f) * PARTY_RATION;
-  const draws = holdings.map((h) => doleDue(h, season));
+  const draws = holdings.map((h) => (drawsDole(f) ? doleDue(h, season) : { draw: 0, carry: 0 }));
   let total = party;
   for (const d of draws) total += d.draw;
   const grain = e.stocks.grain;
@@ -630,7 +653,7 @@ function spoil(world: KingdomWorld, f: number): void {
  */
 export function runEconomyDay(world: KingdomWorld): void {
   const d = calendar(world.now);
-  const before = world.economy.map((e, f) => (economyActive(f) ? snapshotStocks(e).join() : ""));
+  const before = world.economy.map((e, f) => (economyActive(world, f) ? snapshotStocks(e).join() : ""));
   for (let f = 0; f < FACTION_IDS.length; f++) {
     const book = world.books[f];
     if (book.open.day !== d.day) turnPage(book, d.day, world.economy[f]);
@@ -645,7 +668,7 @@ export function runEconomyDay(world: KingdomWorld): void {
   growPlots(world, d);
 
   for (let f = 0; f < FACTION_IDS.length; f++) {
-    if (!economyActive(f)) continue;
+    if (!economyActive(world, f)) continue;
     buildAndProduce(world, f);
     collectTaxes(world, f);
     creditDailyBoons(world, f);
@@ -654,7 +677,7 @@ export function runEconomyDay(world: KingdomWorld): void {
     spoil(world, f);
   }
   world.economy.forEach((e, f) => {
-    if (economyActive(f) && snapshotStocks(e).join() !== before[f]) world.events.push({ kind: "stocksChanged", faction: f });
+    if (economyActive(world, f) && snapshotStocks(e).join() !== before[f]) world.events.push({ kind: "stocksChanged", faction: f });
   });
 }
 

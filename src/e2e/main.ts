@@ -14,6 +14,7 @@ import "./scenarios-k4.ts";
 import "./scenarios-k5.ts";
 import "./scenarios-k6.ts";
 import "./scenarios-k7.ts";
+import "./scenarios-k8.ts";
 
 const out = document.getElementById("e2e-results") as HTMLElement;
 document.title = "E2E RUNNING";

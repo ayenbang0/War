@@ -97,7 +97,7 @@ export const AC = {
   /** K6: the army's spirit, and where pay, bread and the king are taking it (MORALE_WORDS). */
   moraleLine: (p: { morale: number; rest: number; falling: boolean }) => MORALE_WORDS.line(p) + (p.morale < ARMY_MORALE.desertBelow ? ". " + MORALE_WORDS.breaking : ""),
   doing: "Doing",
-  posture: { none: "standing", hold: "holding, dug in", patrol: "patrolling", recover: "resting to mend" } as const,
+  posture: { none: "standing", hold: "holding, dug in", patrol: "patrolling", recover: "resting to mend", ambush: "lying in wait" } as const,
   marching: (name: string) => "marching to " + name,
   chasing: (name: string) => "marching to meet the " + name,
   abilities: "Abilities",

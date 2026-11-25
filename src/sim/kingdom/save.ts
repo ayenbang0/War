@@ -35,9 +35,12 @@ import {
 import { CONTACT_CHOICES, KINGDOM_ORDER_KINDS, type KingdomOrder } from "./orders.ts";
 import type { BattleResult, ResultSquad } from "../layers.ts";
 import {
-  ARMY_POSTURES, CONTACT_KINDS, KING_TASKS, PLOT_STAGES, type Army, type ArmyPosture, type Contact, type FactionExploration,
-  type Company, type Find, type KingTask, type Mover, type PlotStage,
+  AI_GOALS, ARMY_POSTURES, CONTACT_KINDS, KING_TASKS, PLOT_STAGES, type AiMind, type Army, type ArmyPosture, type Burned,
+  type Contact, type FactionExploration, type FactionIntel, type Company, type Find, type KingTask, type Levied, type Mover,
+  type PlotStage, type Rumour,
 } from "./state.ts";
+import { INVASION_WAVES } from "../../content/kingdom/invasions.ts";
+import { FORTIFICATIONS } from "../../content/kingdom/descent.ts";
 import { COMPANY_STATES, LOYALTY, MERCENARIES, type CompanyState } from "../../content/kingdom/mercenaries.ts";
 import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "../../content/unit-types.ts";
 import { DOCTRINE_IDS, type DoctrineId } from "../../content/doctrines.ts";
@@ -57,7 +60,7 @@ import { roadBetween } from "./graph.ts";
 import { KINGDOM_STREAMS, KingdomWorld } from "./world.ts";
 
 export const KINGDOM_SAVE_FORMAT = "war.kingdom";
-export const KINGDOM_SAVE_VERSION = 7;
+export const KINGDOM_SAVE_VERSION = 8;
 
 export type SavedPlot = { id: number; crop: string | null; stage: PlotStage; progress: number; days: number; health: number };
 export type SavedHolding = {
@@ -139,7 +142,14 @@ export type SavedExploration = {
 };
 
 /**
- * Version 7 (K7): free companies -- every company of the story's table and
+ * Version 8 (K8): the captains -- whether the realm runs them
+ * (KingdomConfig.captains, which a replay of the log needs, as `hosts`), each
+ * faction's strategic AI's goal and its memory of the map, which story waves
+ * have ridden, the rumours the king has heard, burned land and levy calls;
+ * and a twelfth faction, the commons (economy and exploration entries).
+ * Every army's posture may now be `ambush`; a contact's choice `yield` or `keep`.
+ *
+ * (Version 7 (K7): free companies -- every company of the story's table and
  * where it is in its life with the king (waiting, offered at a tavern, hired
  * with its army and contract days, its loyalty and the crown's bid, away,
  * turned or broken); every army's `company`; one new ledger category
@@ -198,8 +208,24 @@ export type KingdomSaveV7 = {
   log: KingdomOrder[];
 };
 
+/** K8's sim state (see KingdomWorld). */
+export type SavedK8 = {
+  minds: AiMind[];
+  intel: FactionIntel[];
+  waves: boolean[];
+  rumours: Rumour[];
+  burned: Burned[];
+  levied: Levied[];
+};
+
+export type KingdomSaveV8 = Omit<KingdomSaveV7, "version" | "snapshot"> & {
+  version: 8;
+  captains: boolean;
+  snapshot: KingdomSaveV7["snapshot"] & { k8: SavedK8 };
+};
+
 /** The current save shape. */
-export type KingdomSave = KingdomSaveV7;
+export type KingdomSave = KingdomSaveV8;
 
 export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
 
@@ -384,7 +410,53 @@ export const MIGRATIONS: Readonly<Record<number, (save: Record<string, unknown>)
   4: migrate4to5,
   5: migrate5to6,
   6: migrate6to7,
+  7: migrate7to8,
 };
+
+/**
+ * Version 7 (K7) -> 8 (K8). A K7 realm had no captains, and is not given them
+ * now (a seat's garrison conjured into a saved game would change what the
+ * player left): `captains` false, every mind idle, no memories, no wave
+ * ridden, no rumour, no burned land, no levy called. K8 appended a faction
+ * (the commons), so the economy and exploration lists gain its entry: no
+ * stores, an empty ledger page of the save's day, the whole map known (it is
+ * their country too). No id moves; the log replays unchanged.
+ */
+function migrate7to8(save: Record<string, unknown>): Record<string, unknown> {
+  const snap = { ...(save.snapshot as Record<string, unknown>) };
+  const economy = Array.isArray(snap.economy) ? [...snap.economy] : [];
+  const explore = Array.isArray(snap.explore) ? [...snap.explore] : [];
+  // Every faction's pages turn together, so the commons' pages are the king's days, empty.
+  const kingPage = (economy[0] as Record<string, unknown> | undefined) ?? {};
+  const pageDay = (pg: unknown, fallback: number): number =>
+    pg && typeof pg === "object" && typeof (pg as Record<string, unknown>).day === "number" ? ((pg as Record<string, unknown>).day as number) : fallback;
+  const day = pageDay(kingPage.open, typeof snap.now === "number" ? calendar(snap.now).day : 0);
+  const emptyPage = (d: number) => ({ day: d, start: new Array<number>(LEDGER_STOCK_IDS.length).fill(0), flow: new Array<number>(LEDGER_STOCK_IDS.length * LEDGER_CATEGORY_IDS.length).fill(0) });
+  for (let f = economy.length; f < FACTION_IDS.length; f++) {
+    const stocks: Record<string, number> = {};
+    for (const st of STOCK_IDS) stocks[st] = 0;
+    economy.push({
+      faction: FACTION_IDS[f], stocks, legitimacy: 0, hunger: 0, defaultTax: DEFAULT_TAX, mercy: MERCY_START,
+      open: emptyPage(day),
+      closed: kingPage.closed ? emptyPage(pageDay(kingPage.closed, day - 1)) : null,
+    });
+  }
+  const king = explore[0] as Record<string, unknown> | undefined;
+  const nh = king && Array.isArray(king.holdings) ? king.holdings.length : 0;
+  const nr = king && Array.isArray(king.roads) ? king.roads.length : 0;
+  for (let f = explore.length; f < FACTION_IDS.length; f++) {
+    explore.push({ faction: FACTION_IDS[f], holdings: new Array(nh).fill(KNOW_KNOWN), roads: new Array(nr).fill(KNOW_KNOWN), finds: [], upgrades: [] });
+  }
+  snap.economy = economy;
+  snap.explore = explore;
+  snap.k8 = {
+    minds: FACTION_IDS.map(() => ({ goal: "consolidate", target: 0, since: 0, wave: -1, rides: 0 })),
+    intel: FACTION_IDS.map(() => ({ owner: [], men: [], walls: [], seen: [] })),
+    waves: INVASION_WAVES.map(() => false),
+    rumours: [], burned: [], levied: [],
+  };
+  return { ...save, version: 8, captains: false, snapshot: snap };
+}
 
 /**
  * Version 6 (K6) -> 7 (K7). Before K7 no company had come to a tavern: every
@@ -535,12 +607,13 @@ export function serialize(world: KingdomWorld): KingdomSave {
   const page = (d: LedgerDay | null): LedgerDay | null => (d === null ? null : { day: d.day, start: [...d.start], flow: [...d.flow] });
   return {
     format: KINGDOM_SAVE_FORMAT,
-    version: 7,
+    version: 8,
     map: world.map.id,
     mapFingerprint: mapFingerprint(world),
     seed: world.seed,
     kingName: world.king.name,
     hosts: world.hosts,
+    captains: world.captains,
     snapshot: {
       now: world.now,
       nextId: world.nextId,
@@ -603,6 +676,14 @@ export function serialize(world: KingdomWorld): KingdomSave {
         company: MERCENARIES[c.index].id, state: c.state, at: c.at, days: c.days, loyalty: c.loyalty,
         army: c.army, bid: c.bid, bidDays: c.bidDays,
       })),
+      k8: {
+        minds: world.minds.map((m) => ({ ...m })),
+        intel: world.intel.map((x) => ({ owner: [...x.owner], men: [...x.men], walls: [...x.walls], seen: [...x.seen] })),
+        waves: [...world.wavesRode],
+        rumours: world.rumours.map((r) => ({ ...r })),
+        burned: world.burned.map((b) => ({ ...b })),
+        levied: world.levied.map((l) => ({ ...l })),
+      },
     },
     log: world.log.map((o) => ({ ...o, ...("squads" in o ? { squads: [...o.squads] } : {}), ...("holdings" in o ? { holdings: [...o.holdings] } : {}) })),
   };
@@ -742,6 +823,12 @@ function readOrder(v: unknown, what: string): KingdomOrder {
     case "renewContract":
     case "matchBid":
       return { kind, company: int(o.company, what + ".company"), tick, player, seq };
+    // K8. The holding or army may name nothing (the sim refuses it).
+    case "callLevy":
+    case "burnFields":
+      return { kind, holding: int(o.holding, what + ".holding"), tick, player, seq };
+    case "ambush":
+      return { kind, army: int(o.army, what + ".army"), tick, player, seq };
     default:
       return { kind: "harvest", plot: int(o.plot, what + ".plot"), tick, player, seq };
   }
@@ -1016,6 +1103,68 @@ function readArmies(v: unknown, world: KingdomWorld, nextId: number): Army[] {
  * army is the king's and is that company's; no army is a hired company's but
  * its own; an offer is at a holding.
  */
+/** K8's state, every field checked. */
+function readK8(v: unknown, world: KingdomWorld, armies: readonly Army[], captains: boolean): SavedK8 {
+  const o = obj(v, "snapshot.k8");
+  const nh = world.holdings.length;
+  const holdingId = (n: unknown, what: string): number => {
+    const id = int(n, what, 1);
+    if (!world.holding(id)) throw new Bad(what + " is not a holding");
+    return id;
+  };
+  const minds = arr(o.minds, "snapshot.k8.minds").map((m, i) => {
+    const what = "snapshot.k8.minds[" + i + "]";
+    const mo = obj(m, what);
+    const wave = int(mo.wave, what + ".wave", -1);
+    if (wave >= INVASION_WAVES.length) throw new Bad(what + ".wave is not a wave");
+    const rides = int(mo.rides, what + ".rides");
+    if (rides !== 0 && !armies.some((a) => a.id === rides && a.owner === i)) throw new Bad(what + ".rides is not one of its armies");
+    return {
+      goal: oneOf(mo.goal, AI_GOALS, what + ".goal"), target: int(mo.target, what + ".target"), since: int(mo.since, what + ".since"),
+      wave, rides,
+    };
+  });
+  if (minds.length !== FACTION_IDS.length) throw new Bad("snapshot.k8.minds has the wrong number of factions");
+  const intel = arr(o.intel, "snapshot.k8.intel").map((x, f) => {
+    const what = "snapshot.k8.intel[" + f + "]";
+    const xo = obj(x, what);
+    const owner = arr(xo.owner, what + ".owner").map((n, i) => int(n, what + ".owner[" + i + "]", -1));
+    const men = arr(xo.men, what + ".men").map((n, i) => int(n, what + ".men[" + i + "]"));
+    const walls = arr(xo.walls, what + ".walls").map((n, i) => int(n, what + ".walls[" + i + "]"));
+    const seen = arr(xo.seen, what + ".seen").map((n, i) => int(n, what + ".seen[" + i + "]", -1));
+    const want = captains && FACTIONS[FACTION_IDS[f]].persona ? nh : 0;
+    for (const l of [owner, men, walls, seen]) if (l.length !== want) throw new Bad(what + " does not match the map");
+    if (owner.some((n) => n >= FACTION_IDS.length)) throw new Bad(what + ".owner names an unknown faction");
+    if (walls.some((n) => n >= FORTIFICATIONS.length)) throw new Bad(what + ".walls names unknown walls");
+    return { owner, men, walls, seen };
+  });
+  if (intel.length !== FACTION_IDS.length) throw new Bad("snapshot.k8.intel has the wrong number of factions");
+  const waves = arr(o.waves, "snapshot.k8.waves").map((b, i) => bool(b, "snapshot.k8.waves[" + i + "]"));
+  if (waves.length !== INVASION_WAVES.length) throw new Bad("snapshot.k8.waves does not match the story's waves");
+  const ids = new Set(armies.map((a) => a.id));
+  const rumours = arr(o.rumours, "snapshot.k8.rumours").map((r, i) => {
+    const what = "snapshot.k8.rumours[" + i + "]";
+    const ro = obj(r, what);
+    const army = int(ro.army, what + ".army", 1);
+    if (!ids.has(army)) throw new Bad(what + " is of an army that is not on the map");
+    return {
+      army, target: holdingId(ro.target, what + ".target"), from: holdingId(ro.from, what + ".from"),
+      days: int(ro.days, what + ".days"), day: int(ro.day, what + ".day"),
+    };
+  });
+  const burned = arr(o.burned, "snapshot.k8.burned").map((b, i) => {
+    const what = "snapshot.k8.burned[" + i + "]";
+    const bo = obj(b, what);
+    return { holding: holdingId(bo.holding, what + ".holding"), days: int(bo.days, what + ".days", 1) };
+  });
+  const levied = arr(o.levied, "snapshot.k8.levied").map((l, i) => {
+    const what = "snapshot.k8.levied[" + i + "]";
+    const lo = obj(l, what);
+    return { holding: holdingId(lo.holding, what + ".holding"), day: int(lo.day, what + ".day") };
+  });
+  return { minds, intel, waves, rumours, burned, levied };
+}
+
 function readCompanies(v: unknown, world: KingdomWorld, armies: Army[]): Company[] {
   const list = arr(v, "snapshot.companies");
   if (list.length !== MERCENARIES.length) throw new Bad("snapshot.companies does not match the story's companies");
@@ -1169,6 +1318,8 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
   const disengaged = readDisengaged(s.disengaged, world, armies);
   const companies = readCompanies(s.companies, world, armies);
   const hosts = bool(save.hosts, "hosts");
+  const captains = bool(save.captains, "captains");
+  const k8 = readK8(s.k8, world, armies, captains);
   if (kingArmy !== 0) {
     const a = armies.find((x) => x.id === kingArmy);
     if (!a || a.owner !== 0) throw new Bad("snapshot.king.army is not one of the king's armies");
@@ -1231,6 +1382,13 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
   world.disengaged.push(...disengaged);
   world.companies.splice(0, world.companies.length, ...companies);
   world.hosts = hosts;
+  world.captains = captains;
+  world.minds.splice(0, world.minds.length, ...k8.minds);
+  world.intel.splice(0, world.intel.length, ...k8.intel);
+  world.wavesRode.splice(0, world.wavesRode.length, ...k8.waves);
+  world.rumours.push(...k8.rumours);
+  world.burned.push(...k8.burned);
+  world.levied.push(...k8.levied);
   economy.forEach((e, i) => {
     const live = world.economy[i];
     for (const st of STOCK_IDS) live.stocks[st] = e.stocks[st];
@@ -1281,7 +1439,7 @@ export function loadFromJson(text: string): Result<KingdomWorld> {
  */
 export function replayLog(
   seed: number, log: readonly KingdomOrder[], until: number,
-  config: { map?: KingdomWorld["map"]; kingName?: string; hosts?: boolean } = {},
+  config: { map?: KingdomWorld["map"]; kingName?: string; hosts?: boolean; captains?: boolean } = {},
 ): KingdomWorld {
   const w = new KingdomWorld({ seed, ...config });
   for (const o of log) w.submit(o);

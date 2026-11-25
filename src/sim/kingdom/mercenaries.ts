@@ -289,7 +289,7 @@ function turnCoat(world: KingdomWorld, c: Company, a: Army, how: "defected" | "p
  */
 export function runMercenaryDay(world: KingdomWorld): void {
   const k = KING_PLAYER;
-  if (!economyActive(k)) return;
+  if (!economyActive(world, k)) return;
   const d = calendar(world.now);
   const e = world.economy[k];
   const book = world.books[k];

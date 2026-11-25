@@ -129,7 +129,7 @@ export function politicsSection(doc: Document, world: KingdomWorld, h: Holding, 
   }
 
   const refresh = (): void => {
-    const reckoned = unrestReckoned(h);
+    const reckoned = unrestReckoned(world, h);
     const band = unrestBand(h.unrest);
     setText(standingRow, reckoned
       ? P.standing({ loyalty: LOYALTY_WORD[band], band: BAND_WORD[band], points: unrestPoints(h.unrest) })

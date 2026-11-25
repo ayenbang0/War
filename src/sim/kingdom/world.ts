@@ -34,7 +34,16 @@ import {
   advanceMover, buildGraph, findRoute, moverAt, moverPosition, roadLength, setRoute,
   type RoadGraph, type Route,
 } from "./graph.ts";
-import type { Army, Company, FactionEconomy, FactionExploration, FieldPlot, Holding, KingToken, KingdomEvent, Road } from "./state.ts";
+import type {
+  AiMind, Army, Burned, Company, FactionEconomy, FactionExploration, FactionIntel, FieldPlot, Holding, KingToken, KingdomEvent,
+  Levied, Road, Rumour,
+} from "./state.ts";
+import { runAi, placesOf, remember, type Perception, type Place } from "./ai.ts";
+import {
+  aiFactions, applyInvasionOrder, checkInvasionOrder, isInvasionOrder, newIntel, runInvasionDay, seizeUndefended, setupCaptains,
+  updateRumours, type InvasionOrderBody,
+} from "./invasions.ts";
+import { INVASION_WAVES } from "../../content/kingdom/invasions.ts";
 import {
   applyArmyOrder, armyById, checkArmyOrder, isArmyOrder, marchArmies, planArmyRoute, raiseArmy, runArmyDay, type ArmyOrderBody,
 } from "./armies.ts";
@@ -82,6 +91,15 @@ export type KingdomConfig = {
    * remembers it (docs/PROVISIONAL.md K5.13).
    */
   readonly hosts?: boolean;
+  /**
+   * K8: the captains run their realms -- every faction with a persona gets
+   * stores, a seat with works, a garrison and a field host, a steward and a
+   * strategic AI (ai.ts); holdings left undefended can be taken; the king
+   * hears rumours of hosts riding at him (invasions.ts). Off by default, so
+   * the K1-K7 suites keep their realm; a new campaign turns it on and the
+   * save remembers it (docs/PROVISIONAL.md K8.2).
+   */
+  readonly captains?: boolean;
 };
 
 export type KingdomRng = {
@@ -139,6 +157,30 @@ export class KingdomWorld {
   readonly disengaged: [number, number][] = [];
   /** K7: every free company of the story's table, in its order (mercenaries.ts). */
   readonly companies: Company[] = newCompanies();
+  /** K8: whether the captains run their realms (KingdomConfig.captains). Set by the constructor, or by a load. */
+  captains: boolean;
+  /** K8: each faction's strategic AI's goal, in FACTION_IDS order (ai.ts; only AI factions' are read). */
+  readonly minds: AiMind[];
+  /** K8: each faction's memory of the map, in FACTION_IDS order (empty for factions no AI reads). */
+  readonly intel: FactionIntel[];
+  /** K8: which of the story's invasion waves have ridden, in INVASION_WAVES order. */
+  readonly wavesRode: boolean[] = INVASION_WAVES.map(() => false);
+  /** K8: the rumours the king has heard and not yet seen out, in the order heard. */
+  readonly rumours: Rumour[] = [];
+  /** K8: land burned (burnFields), in holding-id order. */
+  readonly burned: Burned[] = [];
+  /** K8: holdings called out by a levy call, and when (for its cooldown), in the order called. */
+  readonly levied: Levied[] = [];
+  /** K8: the orders the AI gave on the last tick. Transient (not saved, not hashed); the tests read it. */
+  aiOrders: KingdomOrder[] = [];
+  /**
+   * K8: an audit hook, for tests only (tools/kingdom-ai.ts): called by runAi
+   * with each AI faction's Perception and the orders it decided, before any
+   * is checked or applied. Transient: never saved or hashed, and it must not
+   * write to the world.
+   */
+  onAi: ((faction: number, seen: Perception, orders: readonly KingdomOrderBody[]) => void) | null = null;
+  private placesCache: Place[] | null = null;
 
   readonly rng: KingdomRng;
   readonly orders = new KingdomOrderQueue();
@@ -239,7 +281,8 @@ export class KingdomWorld {
     this.graph = buildGraph(this.holdings, this.roads);
     // Stores are not entities and take no ids: the id sequence above is the
     // same as K1's, which keeps old saves' fingerprints valid (save.ts v1 -> v2).
-    this.economy = FACTION_IDS.map((f) => newFactionEconomy(f));
+    this.captains = config.captains === true;
+    this.economy = FACTION_IDS.map((f) => newFactionEconomy(f, this.captains));
     this.books = this.economy.map((e) => newBook(e));
     // K3a: what each faction knows on day one, then what it can see from there.
     this.explore = FACTION_IDS.map((_, f) => newExploration(this, f));
@@ -253,6 +296,12 @@ export class KingdomWorld {
         if (at && f >= 0) raiseArmy(this, f, at.id, host.units, host.doctrine);
       }
     }
+    // K8: the captains' seats, garrisons and hosts, after K5's (so a realm without them keeps K7's ids),
+    // and what each AI faction knows and can see on day one.
+    if (this.captains) setupCaptains(this);
+    this.minds = FACTION_IDS.map(() => ({ goal: "consolidate", target: 0, since: 0, wave: -1, rides: 0 }));
+    this.intel = FACTION_IDS.map((_, f) => newIntel(this, f));
+    if (this.captains) for (const f of aiFactions()) remember(this, f);
     // Day one's sightings and musters are the start, not news.
     this.events = [];
   }
@@ -325,12 +374,18 @@ export class KingdomWorld {
       // K3a: the realm's sight as the day begins (towers built, holdings
       // claimed); the king's is also kept up as he marches, below.
       for (let f = 0; f < FACTION_IDS.length; f++) updateSight(this, f);
+      // K8: burned land recovers (invasions.ts).
+      runInvasionDay(this);
     }
-    // K8: captains' AI issues orders here, through this.orders, before draining.
+    // K8: the captains' AI issues its orders here, through this.orders, before
+    // draining (ai.ts). They are regenerated by a replay, so not logged (seq 0).
+    if (isDayStart(this.now)) runAi(this);
     for (const order of this.orders.drain(this.now)) {
-      this.log.push(order);
+      if (order.seq !== 0) this.log.push(order);
       this.applyOrder(order);
     }
+    // K8: what the king hears of hosts riding at him, after today's marches are ordered.
+    if (this.captains && isDayStart(this.now)) updateRumours(this);
     // The king's retinue marches on its own only while he rides with no army.
     if (this.king.army === 0) this.marchKing();
     // K4: armies march (the same advanceMover), then meetings, in army-id order.
@@ -339,6 +394,8 @@ export class KingdomWorld {
     marchArmies(this);
     // K5: contact, in army-id order (descent.ts). One of the king's side holds the realm from the next tick.
     detectContacts(this, marching);
+    // K8: an army standing in a holding no one holds takes it, without a battle.
+    if (this.captains) seizeUndefended(this);
     this.now++;
     return this.events;
   }
@@ -402,6 +459,11 @@ export class KingdomWorld {
       if (why) this.reject(order, why);
       return;
     }
+    if (isInvasionOrder(order)) {
+      const why = applyInvasionOrder(this, order as KingdomOrder & InvasionOrderBody);
+      if (why) this.reject(order, why);
+      return;
+    }
     switch (order.kind) {
       case "moveKing": {
         if (order.player !== KING_PLAYER) return this.reject(order, "only the king's seat commands the king");
@@ -456,6 +518,7 @@ export class KingdomWorld {
     if (isArmyOrder(body)) return checkArmyOrder(this, body, player);
     if (isMoraleOrder(body)) return checkMoraleOrder(this, body, player);
     if (isMercenaryOrder(body)) return checkMercenaryOrder(this, body, player);
+    if (isInvasionOrder(body)) return checkInvasionOrder(this, body, player);
     if (!isEconomyOrder(body)) return null;
     return checkEconomyOrder(this, body as EconomyOrderBody, player);
   }
@@ -534,6 +597,12 @@ export class KingdomWorld {
   /** The king's stores. */
   get kingStocks(): FactionEconomy {
     return this.economy[KING_PLAYER];
+  }
+
+  /** K8: the static map as the AI weighs it (ai.ts Place), built once. */
+  places(): Place[] {
+    if (!this.placesCache) this.placesCache = placesOf(this);
+    return this.placesCache;
   }
 
   /** Holdings a faction owns, in id order. `null` lists the unclaimed ones. */

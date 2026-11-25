@@ -25,8 +25,13 @@ import type { BattleResult } from "../layers.ts";
 import type { JusticeId } from "../../content/kingdom/morale.ts";
 
 /** How a contact is settled (K5). Hash code is the index. Append only. */
-export type ContactChoice = "fight" | "withdraw" | "auto";
-export const CONTACT_CHOICES: readonly ContactChoice[] = ["fight", "withdraw", "auto"];
+export type ContactChoice = "fight" | "withdraw" | "auto" | "yield" | "keep";
+/**
+ * Append only (the hash and the save use the index). K8 appends the
+ * defender's two choices at its own walls (KD-05): `yield` opens the gates,
+ * `keep` gives up the town and holds the keep (a siege; auto-resolved until K10).
+ */
+export const CONTACT_CHOICES: readonly ContactChoice[] = ["fight", "withdraw", "auto", "yield", "keep"];
 
 export type KingdomOrderBody =
   /** March the king's retinue by road to a holding. Replaces any march, and ends a forage or rally. */
@@ -102,7 +107,11 @@ export type KingdomOrderBody =
   /** Sign a hired company on again, in the contract's last days, for part of its fee. */
   | { kind: "renewContract"; company: number }
   /** Pay the crown's bid for a hired company, to keep it. */
-  | { kind: "matchBid"; company: number };
+  | { kind: "matchBid"; company: number }
+  // K8: the defence tools (sim/kingdom/invasions.ts). Garrisoning is K4's `garrison`.
+  | { kind: "callLevy"; holding: number }
+  | { kind: "burnFields"; holding: number }
+  | { kind: "ambush"; army: number };
   // Append new kinds; never renumber the existing ones.
 
 export type KingdomOrderKind = KingdomOrderBody["kind"];
@@ -118,6 +127,8 @@ export const KINGDOM_ORDER_KINDS: readonly KingdomOrderKind[] = [
   // K6
   "setJustice", "holdFestival", "pardon",
   "hireCompany", "renewContract", "matchBid",
+  // K8
+  "callLevy", "burnFields", "ambush",
 ];
 
 /** The K6 order kinds (src/sim/kingdom/morale.ts applies them). */

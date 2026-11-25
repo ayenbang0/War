@@ -1129,3 +1129,160 @@ End go unpaid and turn; the same morning the realm halts on a field contact,
 the king's army against the company it paid; the same on every run, and a
 save on the contact loads as the same realm. Save v7 and the v6 migration,
 tampering refused, the log replaying, and the ledger balancing every day.
+
+## K8 — enemy kingdom AI and invasions
+
+The rival lords play the realm (PLAN.md §B.8): one strategic mind per
+faction with a persona (the usurper, the Margrave and the eight captains),
+under the king's own rules, and invasions of the king's holdings, both
+scheduled (the story's three waves) and emergent (a thin garrison invites a
+raid), heard of as rumours as far ahead as his watchtowers and scouts
+allow, and answered with the defence tools. Every number is provisional
+(docs/PROVISIONAL.md K8.1–K8.22).
+
+```
+day start: weather, economy, armies, morale, companies, sight, invasion day
+        -> runAi (each persona faction: remember, perceive, decide -> seq-0 orders)
+        -> drain orders (the king's and the captains', one queue, one check)
+        -> updateRumours (captains realms)
+every tick: march, chase, detectContacts, seizeUndefended (captains realms)
+```
+
+### Files
+
+| File | What |
+|---|---|
+| `src/content/kingdom/invasions.ts` | the captains' start (`CAPTAIN_START`, seat works and garrison, `FIELD_HOSTS`), the AI's temperament (`AI`), `INVASION_WAVES` and `WAVE_DAYS`, `WARNING`, the defence tools (`LEVY_CALL`, `BURN_FIELDS`, `WALL_NERVE`, `AMBUSHED_NERVE`, `KEEP_RETREAT`, `YIELD_LEGITIMACY`), `SEIZED_UNREST` |
+| `src/content/kingdom/invasion-strings.ts` | refusals (`INVASION_REFUSAL`), the rumour card (`RUMOUR`), the defender's choices (`DEFEND`), the feed (`INVASION_FEED`) |
+| `src/sim/kingdom/ai.ts` | `remember`, `perceive`, `decide`, `runAi`: the strategic AI |
+| `src/sim/kingdom/invasions.ts` | the captains' setup (`setupCaptains`), warning and rumours (`warningDays`, `threatOf`, `updateRumours`), the three orders (`callLevy`, `burnFields`, `ambush`), burned land, `seizeUndefended` |
+| `src/ui/kingdom/rumour-card.ts` | the rumour card |
+| `tools/kingdom-ai.ts` | the K8 suite and the proof (in `npm test`) |
+| `src/e2e/scenarios-k8.ts` | `k8-rumour-levy` |
+
+### State
+
+`KingdomConfig.captains` (saved): off for every realm K1–K7 made and for the
+tests' bare worlds; a new game turns it on (app.ts). A captains realm gives
+each persona faction stores, a seat with barracks, palisade and granary, a
+seat garrison and a field host (`setupCaptains`), and runs its economy
+(`economyActive`: the king, and persona factions when there are captains).
+Crown towns pay the crown a grain tithe; only the king draws the dole.
+
+`world.minds` (`AiMind`: goal, target, since, wave, the army its lord rides
+with), `world.intel` (`FactionIntel`: per holding, owner, men, walls and
+the day last seen), `world.waves` (which story waves have ridden),
+`world.rumours`, `world.burned`, `world.levied`. A twelfth faction is
+appended: **the commons** (no persona, not of the crown), the banner a crown
+town raises when it throws off its captain (K6's revolt in a captains
+realm), so a captain must come and put it down -- the AI-against-AI fight.
+`ArmyPosture` appends `ambush`; `CONTACT_CHOICES` appends `yield`, `keep`.
+
+### The AI contract
+
+- **Same orders, same queue.** `decide` returns ordinary `KingdomOrderBody`s
+  (`marchArmy`, `haltArmy`, `garrison`, `recruit`, `disband`, `intercept`,
+  `claimHolding`, ...). `runAi` checks each with `world.check(body, f)` and
+  submits it to the one queue; `applyOrder` applies it as it does the king's.
+  Wages, bread, recruiting costs, hunger and the army cap bind it as they
+  bind him. A refused order is dropped.
+- **Its own stream.** Every draw is on `kingdomAi`; no other stream moves.
+- **It acts only on what it has seen.** `remember` writes to a faction's
+  `FactionIntel` only what its sight shows today (explore knowledge 2), and
+  owner-only news of its own holdings (a lord hears when a town of his
+  revolts or falls). `perceive` builds a plain-data `Perception` from that
+  memory, the hostile armies it can see now (`armyVisible`: an ambush is
+  hidden from all but an army in the same holding), its own armies, holdings
+  and stores, and the static map. `decide` is a pure function of the
+  Perception, the mind, the places and the rng: it never holds the world.
+  A chase (`intercept`) also follows only what the chaser can still see.
+- **Replay.** The AI runs inside the tick from sim state and its stream, so
+  its orders are stamped `seq` 0 and never logged; a replay of the king's
+  log regenerates them.
+- **Test hook.** `world.onAi(faction, perception, orders)` is called each
+  day for each persona faction (null outside tests): the suite audits every
+  order against what the faction saw.
+
+Goals, weighed every `AI.goalDays` with jitter and hysteresis from the
+persona's bias and boldness: **consolidate** (stay home, retake what was
+lost, recruit when fed), **raid** (an open town of the king's), **besiege**
+(a walled one), **snipe** (a weak hostile army in sight), **explore** (send
+scouts to holdings it does not know). No captain moves on the king before
+`AI.graceDays`. A wave (`INVASION_WAVES`) makes the king the goal of one
+faction from its day for `WAVE_DAYS`, against the nearest town it knows
+of that its field host can take (men against what it remembers standing
+there, with `AI.margin`); a garrison it cannot beat ends the wave
+(repelled). The lord rides with his host and its stores ride with it.
+Hungry armies go home; scouts ride only with bread for the way back.
+
+### Invasions and the defence
+
+- **Warning.** `warningDays(target)` = 1 + 2 per standing watchtower of the
+  king's within 80 miles + 1 per fit scout of his within 60, at most 7. A
+  host riding at a town of his raises a rumour the morning it falls within
+  that many days, or comes into his sight (`updateRumours`); the event is
+  `rumour`, and the card says "Riders seen on the X road, N days out".
+- **Taken without a battle.** A hostile army standing in a holding with no
+  garrison and no army of its lord's takes it (`seizeUndefended`, unrest
+  set high).
+- **Defence battle.** A garrison or walls means K5's assault contact; a
+  wall's nerve (`WALL_NERVE`) steadies the defenders (`fieldNerve`).
+- **AI against AI.** Every contact without the king's side is auto-resolved
+  by K5 on the spot.
+- **The tools.** Garrison (K4); **Call the levy** (`callLevy`: a holding's
+  people turned out as raw levy squads, one per 8 people up to 3 squads,
+  unrest, 30 days before it can be called again); **Burn the fields**
+  (`burnFields`: what is in the ground spoils, no army forages there for 30
+  days, unrest); **Lay an ambush** (`ambush`: a halted army in a holding
+  lies hidden and an attacker who walks in is caught -- K5's ambush
+  deployment and `AMBUSHED_NERVE`); walls; and at an assault on townsmen
+  alone, **Open the gates** (`yield`, legitimacy −3) or **Retreat to the
+  keep** (`keep`: needs a wall or keep; the town is sacked and the siege
+  auto-resolved -- the real siege is K10).
+
+### Player experience
+
+A rumour opens the rumour card: modal, the clock held, focus on its title;
+it names the road, days out, the faction and the town, the host's strength
+only if the king's men can see it, and how he heard. Its tools (levy, burn,
+ambush with an army standing there, march the nearest army to defend) are
+one Tab apart, each with what it does; a tool that cannot be used stays in
+the ring with the reason. "Let it come" and Esc close it. The region card
+of a town of the king's offers Call the levy and Burn the fields; the army
+card offers Lay an ambush; the contact dialog offers Open the gates and
+Retreat to the keep at the king's own walls. The feed says each rumour,
+levy, burning, seizure, yielding, siege and wave. Text lives in
+invasion-strings.ts. Audit: docs/audit/k8-ai-invasions.md.
+
+### Save format version 8
+
+Adds `captains` and `snapshot.k8` (minds, intel, waves, rumours, burned,
+levied) and the commons' economy and exploration entries; validated on load
+(minds per faction, intel per holding, a rider that is one of the faction's
+own armies, targets that exist). `migrate7to8` gives a K7 realm no captains,
+idle minds, no memory, no rumour, burned land or levy call, and the commons'
+entries: empty stores, ledger pages of the king's days, the map known.
+
+### Determinism and the golden
+
+The kingdom golden moved (`de3d690f` → `51e0098e`): every realm now has the
+commons faction, whose economy and exploration entries are hashed. The
+decade runs without captains, so its play is unchanged; the K8 block is
+mixed only with captains or once a defence tool is used. The battle tiers
+did not move (`fieldNerve` is 0 without walls).
+
+### The proof (tools/kingdom-ai.ts)
+
+The content table; the captains' start; **no cheating** -- every order of
+every persona faction over a 360-day run on two seeds is audited as it is
+decided against that day's Perception (memory changes only where it saw
+today), and a world changed only where a faction cannot see leaves its
+Perception and orders unchanged (with a control, and an ambush hidden at
+Linnet Cross); a **five-year AI-against-AI soak** on three seeds (ledger
+balanced daily, no NaN, no negative stock, no stuck army, the same hash
+twice, the log replaying, every wave ridden, the factions still fielding
+armies); a revolt put down by its captain through K5's auto-resolve; the
+**three waves**, each LOST undefended (taken without a battle) and REPELLED
+garrisoned, and a thin garrison fought; rumours against `warningDays`
+(towers, scouts, the cap, never before it is due); each defence tool; save
+v8, the v7 migration (to the same hash) and tampering refused.

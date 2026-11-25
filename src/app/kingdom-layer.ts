@@ -49,7 +49,8 @@ import { KingdomHud } from "../ui/kingdom/hud.ts";
 import { kingCard, regionCard, type CardView } from "../ui/kingdom/cards.ts";
 import { KingdomClock, type KingdomSpeed } from "./kingdom-clock.ts";
 import { ExploreUi } from "../ui/kingdom/explore-ui.ts";
-import { knowsHolding } from "../sim/kingdom/explore.ts";
+import { holdingKnowledge, knowsHolding } from "../sim/kingdom/explore.ts";
+import { KNOW_SEEN } from "../content/kingdom/exploration.ts";
 import { X } from "../content/story/strings.ts";
 import { ZoomThrough } from "../input/zoom-through.ts";
 import { holdingAt } from "../input/kingdom-gestures.ts";
@@ -62,6 +63,8 @@ import type { BattleResult } from "../sim/layers.ts";
 import { CONTACT_FEED } from "../content/kingdom/descent-strings.ts";
 import { BAND_WORD, MORALE_FEED } from "../content/kingdom/morale-strings.ts";
 import { ARMY_MORALE } from "../content/kingdom/morale.ts";
+import { rumourCard, type RumourNews } from "../ui/kingdom/rumour-card.ts";
+import { INVASION_FEED } from "../content/kingdom/invasion-strings.ts";
 
 /** Where the kingdom layer is in its life; mirrors BattlePhase. */
 export type KingdomPhase = "built" | "live" | "torn-down";
@@ -191,6 +194,10 @@ export class KingdomLayer implements LayerKeys {
   private lastContact: Contact | null = null;
   /** K5: the events of the last runTicks batch, for whoever settled a contact. */
   private batchEvents: KingdomEvent[] = [];
+  /** K8: the rumour card, while it is up, and the rumours heard and not yet put to the king. */
+  private rumourScreen: Screen | null = null;
+  private readonly rumourRoot: HTMLElement;
+  private rumoursWaiting: RumourNews[] = [];
 
   constructor(world: KingdomWorld, env: KingdomEnv, hooks: KingdomHooks, opening: KingdomOpening, notice: string | null = null) {
     this.world = world;
@@ -223,6 +230,10 @@ export class KingdomLayer implements LayerKeys {
     this.contactRoot.className = "k-menu-backdrop k-event-backdrop";
     this.contactRoot.style.display = "none";
     this.hud.root.appendChild(this.contactRoot);
+    this.rumourRoot = env.doc.createElement("div");
+    this.rumourRoot.className = "k-menu-backdrop k-event-backdrop";
+    this.rumourRoot.style.display = "none";
+    this.hud.root.appendChild(this.rumourRoot);
 
     this.renderer = new KingdomRenderer(env.ctx, world, env.doc);
     const sink: KingdomStrokeSink = {
@@ -438,6 +449,42 @@ export class KingdomLayer implements LayerKeys {
     if (dayTurned) this.save();
     // K5: the realm has halted on a meeting: pause, save, and ask.
     if (this.world.contact && !this.contactScreen && !this.suspended && this.phase === "live") this.openContact();
+    // K8: word of a host riding at the king's holdings: put it to him (a meeting first).
+    else if (!this.world.contact) this.openRumour();
+  }
+
+  // -- K8: rumours ------------------------------------------------------------------
+
+  /** Is the rumour card up? */
+  get rumourOpen(): boolean {
+    return this.rumourScreen !== null;
+  }
+
+  /**
+   * Put the next rumour heard to the king, if none is up: the card holds the
+   * clock while it is read. A rumour whose host has gone, turned aside or
+   * arrived since it was heard (sim/kingdom/invasions.ts) is dropped unseen.
+   */
+  openRumour(): void {
+    if (this.rumourScreen || this.contactScreen || this.suspended || this.phase !== "live") return;
+    this.rumoursWaiting = this.rumoursWaiting.filter((n) => this.world.rumours.some((r) => r.army === n.army && r.target === n.target));
+    const news = this.rumoursWaiting.shift();
+    if (!news) return;
+    this.pen.cancelStroke();
+    this.intent = null;
+    this.stroke = null;
+    const view = rumourCard(this.rumourRoot, this.env.doc, this.world, news, this.rumoursWaiting.length, {
+      close: (sc) => this.hooks.popScreen(sc),
+      closed: () => {
+        if (this.rumourScreen !== view) return;
+        this.rumourScreen = null;
+        // The next rumour, once the stack has settled.
+        if (this.rumoursWaiting.length > 0) queueMicrotask(() => this.openRumour());
+      },
+      issue: (body, said) => this.issueFromUi(body, said),
+    });
+    this.rumourScreen = view;
+    this.hooks.pushScreen(view);
   }
 
   // -- K5: contact --------------------------------------------------------------------
@@ -540,7 +587,8 @@ export class KingdomLayer implements LayerKeys {
         return false;
       case "claimed":
         this.storesDirty = true;
-        this.hud.alert(day, E.claimed(name(e.holding)));
+        // K8: captains take holdings too; theirs is said by its own line (seized, stormed).
+        if (e.faction === KING_PLAYER) this.hud.alert(day, E.claimed(name(e.holding)));
         return false;
       case "famine":
         this.storesDirty = true;
@@ -566,7 +614,8 @@ export class KingdomLayer implements LayerKeys {
         const plot = w.holding(e.holding)?.plots.find((p) => p.id === e.plot);
         const crop = plot?.crop ? CROPS[plot.crop as CropId].name : "";
         if (e.stage === "ripe") this.hud.alert(day, E.ripe({ crop, name: name(e.holding) }));
-        if (e.stage === "spoiled") {
+        // K8: a burned field has its own line (fieldsBurned).
+        if (e.stage === "spoiled" && e.cause !== "burned") {
           const cause = e.cause === "winter" ? E.causeWinter : e.cause === "overripe" ? E.causeOverripe : E.causeWeather;
           this.hud.alert(day, E.spoiled({ crop, name: name(e.holding), cause }));
         }
@@ -691,6 +740,8 @@ export class KingdomLayer implements LayerKeys {
         return false;
       case "stormed":
         this.storesDirty = true;
+        // K8: captains storm each other's towns too; the king hears of what his men see, or his own.
+        if (this.lastContact?.holding !== e.holding && holdingKnowledge(w, KING_PLAYER, e.holding) !== KNOW_SEEN) return false;
         this.hud.alert(day, CONTACT_FEED.stormed({ name: name(e.holding), by: FACTIONS[FACTION_IDS[e.faction]]?.name ?? "?" }));
         return false;
       case "armyDeparted":
@@ -771,6 +822,47 @@ export class KingdomLayer implements LayerKeys {
         this.storesDirty = true;
         if (e.how !== "dismissed") this.hud.alert(day, MERC_FEED.left[e.how](company(e.company)));
         if (this.card?.kind === "army" && this.card.army === e.army) this.card.refresh();
+        return false;
+      default:
+        return this.onInvasionEvent(e);
+    }
+  }
+
+  /** K8: rumours, the defence tools, and holdings taken. */
+  private onInvasionEvent(e: KingdomEvent): boolean {
+    const w = this.world;
+    const day = w.date.day;
+    const name = (id: number): string => w.holding(id)?.name ?? "?";
+    const faction = (f: number): string => FACTIONS[FACTION_IDS[f]]?.name ?? "?";
+    switch (e.kind) {
+      case "rumour":
+        this.hud.alert(day, INVASION_FEED.rumour({ theirs: faction(e.owner), target: name(e.target), days: e.days }));
+        this.rumoursWaiting.push({ army: e.army, owner: e.owner, target: e.target, from: e.from, days: e.days });
+        return false;
+      case "levyCalled":
+        this.storesDirty = true;
+        this.hud.alert(day, INVASION_FEED.levied({ place: name(e.holding), men: e.men }));
+        return false;
+      case "fieldsBurned":
+        this.hud.alert(day, INVASION_FEED.burned(name(e.holding)));
+        return false;
+      case "seized":
+        this.storesDirty = true;
+        // Said when it was the king's, or the king can see it.
+        if (e.from === KING_PLAYER || holdingKnowledge(w, KING_PLAYER, e.holding) === KNOW_SEEN) {
+          this.hud.alert(day, INVASION_FEED.seized({ place: name(e.holding), by: faction(e.faction) }));
+        }
+        return false;
+      case "yielded":
+        this.storesDirty = true;
+        this.hud.alert(day, INVASION_FEED.yielded({ place: name(e.holding), by: faction(e.faction) }));
+        return false;
+      case "siege":
+        this.storesDirty = true;
+        this.hud.alert(day, INVASION_FEED.siege({ place: name(e.holding), held: e.held }));
+        return false;
+      case "waveRode":
+        this.hud.alert(day, INVASION_FEED.wave(faction(e.faction)));
         return false;
       default:
         return false;
