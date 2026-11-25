@@ -17,7 +17,10 @@
 
 import type { DoctrineId } from "./doctrines.ts";
 
-export type AbilityId = "barrage" | "charge" | "shield" | "smoke" | "flare" | "levy";
+export type AbilityId =
+  | "barrage" | "charge" | "shield" | "smoke" | "flare" | "levy"
+  // The second store, appended: ABILITY_IDS order is part of an army list.
+  | "muster" | "caltrops" | "firepots" | "forcedMarch" | "parley" | "beacon";
 
 export type Ability = {
   readonly id: AbilityId;
@@ -104,10 +107,77 @@ export const ABILITIES: Record<AbilityId, Ability> = {
     duration: 0,
     target: "ground",
   },
+  muster: {
+    id: "muster",
+    name: "Muster the company",
+    blurb: "An officer rides along the ranks of one company. Nerve comes back at once; nothing else does.",
+    cost: 3,
+    charges: 3,
+    cooldown: 35,
+    radius: 0,
+    duration: 0,
+    target: "own",
+  },
+  caltrops: {
+    id: "caltrops",
+    name: "Scatter caltrops",
+    blurb: "Iron spikes sown on a patch of ground. Enemy companies crossing it slow to a crawl; your own know where they are.",
+    cost: 3,
+    charges: 3,
+    cooldown: 30,
+    radius: 170,
+    duration: 30,
+    target: "ground",
+  },
+  firepots: {
+    id: "firepots",
+    name: "Throw the firepots",
+    blurb: "Pitch and fire thrown onto ground you choose. Burns only the enemy, slower than a barrage, and for longer.",
+    cost: 5,
+    charges: 2,
+    cooldown: 50,
+    radius: 150,
+    duration: 9,
+    target: "ground",
+  },
+  forcedMarch: {
+    id: "forcedMarch",
+    name: "Forced march",
+    blurb: "One company marches without rest for twenty seconds. It gets there, and it arrives tired and less sure of itself.",
+    cost: 2,
+    charges: 3,
+    cooldown: 40,
+    radius: 0,
+    duration: 20,
+    target: "own",
+  },
+  parley: {
+    id: "parley",
+    name: "Sound the parley",
+    blurb: "A horn and a white cloth. Nobody on that ground strikes a blow for a few seconds: a way out of a fight, for either side.",
+    cost: 4,
+    charges: 2,
+    cooldown: 60,
+    radius: 200,
+    duration: 6,
+    target: "ground",
+  },
+  beacon: {
+    id: "beacon",
+    name: "Light the beacon",
+    blurb: "A fire on high ground your men can see from anywhere near it. Steadies every company of yours within its glow.",
+    cost: 3,
+    charges: 2,
+    cooldown: 45,
+    radius: 300,
+    duration: 25,
+    target: "ground",
+  },
 };
 
 export const ABILITY_IDS: readonly AbilityId[] =
-  ["barrage", "charge", "shield", "smoke", "flare", "levy"];
+  ["barrage", "charge", "shield", "smoke", "flare", "levy",
+    "muster", "caltrops", "firepots", "forcedMarch", "parley", "beacon"];
 
 /**
  * Doctrine price list, as a multiplier on the base cost.
@@ -117,10 +187,38 @@ export const ABILITY_IDS: readonly AbilityId[] =
  * simply the ability doctrine.
  */
 const PRICING: Record<DoctrineId, Partial<Record<AbilityId, number>>> = {
-  aggressive: { barrage: 0.6, charge: 0.7, shield: 1.6, smoke: 1.3, flare: 1.0, levy: 1.2 },
-  defensive: { shield: 0.6, levy: 0.7, barrage: 1.4, charge: 1.6, smoke: 1.0, flare: 1.1 },
-  maneuver: { smoke: 0.6, flare: 0.6, charge: 0.8, barrage: 1.3, shield: 1.4, levy: 1.3 },
-  magic: { levy: 0.6, flare: 0.8, smoke: 0.9, shield: 1.0, barrage: 1.2, charge: 1.5 },
+  aggressive: {
+    barrage: 0.6, charge: 0.7, shield: 1.6, smoke: 1.3, flare: 1.0, levy: 1.2,
+    muster: 1.2, caltrops: 1.4, firepots: 0.8, forcedMarch: 0.7, parley: 1.6, beacon: 1.2,
+  },
+  defensive: {
+    shield: 0.6, levy: 0.7, barrage: 1.4, charge: 1.6, smoke: 1.0, flare: 1.1,
+    muster: 0.8, caltrops: 0.6, firepots: 1.2, forcedMarch: 1.5, parley: 1.0, beacon: 0.8,
+  },
+  maneuver: {
+    smoke: 0.6, flare: 0.6, charge: 0.8, barrage: 1.3, shield: 1.4, levy: 1.3,
+    muster: 1.1, caltrops: 0.8, firepots: 1.3, forcedMarch: 0.5, parley: 1.0, beacon: 1.3,
+  },
+  magic: {
+    levy: 0.6, flare: 0.8, smoke: 0.9, shield: 1.0, barrage: 1.2, charge: 1.5,
+    muster: 1.0, caltrops: 1.2, firepots: 0.7, forcedMarch: 1.3, parley: 0.9, beacon: 0.7,
+  },
+  raiding: {
+    charge: 0.7, smoke: 0.7, firepots: 0.7, forcedMarch: 0.6, caltrops: 0.9,
+    shield: 1.6, levy: 1.5, beacon: 1.4, barrage: 1.2, flare: 0.9, muster: 1.1, parley: 1.2,
+  },
+  siegecraft: {
+    barrage: 0.6, caltrops: 0.7, firepots: 0.8, shield: 0.9, flare: 0.9,
+    charge: 1.6, forcedMarch: 1.5, smoke: 1.2, levy: 1.0, muster: 1.1, parley: 1.1, beacon: 1.0,
+  },
+  zealous: {
+    muster: 0.6, beacon: 0.6, charge: 0.8, levy: 0.8, parley: 1.8,
+    smoke: 1.4, caltrops: 1.3, shield: 1.1, barrage: 1.2, flare: 1.0, firepots: 1.0, forcedMarch: 1.0,
+  },
+  veteran: {
+    parley: 0.6, muster: 0.8, shield: 0.8, flare: 0.8,
+    levy: 1.6, barrage: 1.3, firepots: 1.3, charge: 1.0, smoke: 1.0, caltrops: 1.0, forcedMarch: 1.1, beacon: 1.1,
+  },
 };
 
 /** What this ability costs an army of this doctrine. Never below one point. */

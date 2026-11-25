@@ -19,6 +19,7 @@ import { RECOVER_LOCK_SECONDS, TICK_RATE } from "../sim/world.ts";
 import { UNIT_TYPE_IDS } from "../content/unit-types.ts";
 import { SIZE, bodyPath, detailPath, gait, offsetBrush, type Brush } from "./soldier-art.ts";
 import { JUMP, isMoving, presenceOf } from "./presence.ts";
+import { CADENCE_RADIUS, RALLY_RADIUS, TERROR_RADIUS } from "../content/specials.ts";
 import { Fallen } from "./fallen.ts";
 
 const GRID_TILES = 8;
@@ -662,6 +663,100 @@ export class Renderer {
         ctx.beginPath();
         ctx.arc(sx, sy, r * 0.85, 0, Math.PI * 2);
         ctx.fill();
+      } else if (f.ability === "caltrops") {
+        // Iron sown in the grass: small four-pointed stars, fixed in place.
+        ctx.globalAlpha = 0.12;
+        ctx.fillStyle = "#4b4237";
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 0.75;
+        ctx.strokeStyle = "#3f3527";
+        ctx.lineWidth = Math.max(1, 1.6 * cam.zoom);
+        const k0 = Math.max(10, Math.min(60, Math.round(r * r / 900)));
+        ctx.beginPath();
+        for (let k = 0; k < k0; k++) {
+          const seed = (k * 7919 + Math.round(f.x) * 31 + Math.round(f.y)) % 10007;
+          const a2 = (seed % 628) / 100;
+          const rad = Math.sqrt(((seed * 13) % 1000) / 1000) * r * 0.95;
+          const cx = sx + Math.cos(a2) * rad;
+          const cy = sy + Math.sin(a2) * rad;
+          const h = Math.max(2, 4 * cam.zoom);
+          ctx.moveTo(cx - h, cy - h); ctx.lineTo(cx + h, cy + h);
+          ctx.moveTo(cx - h, cy + h); ctx.lineTo(cx + h, cy - h);
+        }
+        ctx.stroke();
+      } else if (f.ability === "firepots") {
+        // Burning pitch: tongues of flame that lick up and die back.
+        ctx.globalAlpha = 0.26;
+        ctx.fillStyle = "#b8532a";
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fill();
+        for (let k = 0; k < 14; k++) {
+          const a2 = k * 2.399;
+          const rad = ((k * 37) % 100) / 100 * r * 0.85;
+          const fx = sx + Math.cos(a2) * rad;
+          const fy = sy + Math.sin(a2) * rad;
+          const lick = 0.6 + 0.4 * Math.sin(now * 11 + k * 1.7);
+          const h = Math.max(5, 18 * cam.zoom) * lick;
+          ctx.globalAlpha = 0.85;
+          ctx.fillStyle = k % 3 === 0 ? "#ffcf5a" : "#f0742c";
+          ctx.beginPath();
+          ctx.moveTo(fx - h * 0.35, fy);
+          ctx.quadraticCurveTo(fx, fy - h * 1.4, fx + h * 0.35, fy);
+          ctx.closePath();
+          ctx.fill();
+        }
+      } else if (f.ability === "parley") {
+        // A truce: a pale ring and a white cloth on a pole at its centre.
+        ctx.globalAlpha = 0.85;
+        ctx.strokeStyle = "#f4efe2";
+        ctx.lineWidth = Math.max(2, 4 * cam.zoom);
+        ctx.setLineDash([10, 8]);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const pole = Math.max(14, 36 * cam.zoom);
+        const wave = Math.sin(now * 4) * pole * 0.12;
+        ctx.strokeStyle = "#5a4a34";
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx, sy - pole);
+        ctx.stroke();
+        ctx.fillStyle = "#f8f5ec";
+        ctx.beginPath();
+        ctx.moveTo(sx, sy - pole);
+        ctx.lineTo(sx + pole * 0.6, sy - pole * 0.85 + wave);
+        ctx.lineTo(sx, sy - pole * 0.62);
+        ctx.closePath();
+        ctx.fill();
+      } else if (f.ability === "beacon") {
+        // A fire you can steer by: a warm glow, and a ring that breathes.
+        const pulse = 0.85 + 0.15 * Math.sin(now * 2.2);
+        const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, r);
+        grad.addColorStop(0, "rgba(255, 196, 92, 0.45)");
+        grad.addColorStop(1, "rgba(255, 196, 92, 0)");
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 0.6;
+        ctx.strokeStyle = "#e3a23c";
+        ctx.lineWidth = Math.max(1.5, 3 * cam.zoom);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r * pulse, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "#ffb43c";
+        const flame = Math.max(5, 12 * cam.zoom) * (0.8 + 0.2 * Math.sin(now * 13));
+        ctx.beginPath();
+        ctx.moveTo(sx - flame * 0.5, sy);
+        ctx.quadraticCurveTo(sx, sy - flame * 2, sx + flame * 0.5, sy);
+        ctx.closePath();
+        ctx.fill();
       } else if (f.ability === "flare") {
         // A hanging light with rays going out, and a ring where the light
         // stops -- the edge matters, because it is the edge of what you can see.
@@ -832,6 +927,64 @@ export class Renderer {
           ctx.lineTo(sx + px + cb * (start + len), sy + py + sb * (start + len));
           ctx.stroke();
         }
+      } else if (kind === "setPikes" || kind === "pavise") {
+        // A hedge of points, or a wall of boards, across the front.
+        const pikes = kind === "setPikes";
+        ctx.globalAlpha = 0.95;
+        ctx.strokeStyle = pikes ? "#3f3527" : "#8a6a3e";
+        ctx.lineWidth = Math.max(pikes ? 1.5 : 4, (pikes ? 2.2 : 8) * cam.zoom);
+        const n = pikes ? 11 : 7;
+        for (let k = 0; k < n; k++) {
+          const a2 = g.facing - 1.0 + (2.0 * k) / (n - 1);
+          const x0 = sx + Math.cos(a2) * r;
+          const y0 = sy + Math.sin(a2) * r;
+          const out = pikes ? r * 0.55 : r * 0.12;
+          ctx.beginPath();
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x0 + Math.cos(a2) * out, y0 + Math.sin(a2) * out);
+          ctx.stroke();
+        }
+      } else if (kind === "challenge" || kind === "lastStand") {
+        // A champion's ring, or a sworn company's: hard red edges.
+        ctx.globalAlpha = 0.9;
+        ctx.strokeStyle = kind === "challenge" ? "#d6a640" : "#7a1f1a";
+        ctx.lineWidth = Math.max(2.5, 5 * cam.zoom);
+        ctx.setLineDash(kind === "challenge" ? [3, 6] : []);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r * (kind === "challenge" ? 1.25 : 1.05), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (kind === "rally" || kind === "cadence" || kind === "terror") {
+        // Auras reach well past the company, so draw their reach, faintly,
+        // with a pulse: colours shine, drums beat, the pack's panic spreads.
+        const reach = kind === "rally" ? RALLY_RADIUS : kind === "cadence" ? CADENCE_RADIUS : TERROR_RADIUS;
+        const beat = kind === "cadence" ? (now * 1.4) % 1 : (now * 0.6) % 1;
+        ctx.strokeStyle = kind === "rally" ? "#e0b84a" : kind === "cadence" ? tint : "#9b2f24";
+        ctx.lineWidth = Math.max(1.5, 3 * cam.zoom);
+        ctx.globalAlpha = 0.5 * (1 - beat);
+        ctx.beginPath();
+        ctx.arc(sx, sy, Math.max(r, reach * cam.zoom * (0.35 + 0.65 * beat)), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 0.18;
+        ctx.setLineDash([4, 7]);
+        ctx.beginPath();
+        ctx.arc(sx, sy, reach * cam.zoom, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (kind === "laager") {
+        // Wagons chained in a ring: an angular wall, not a circle.
+        ctx.globalAlpha = 0.95;
+        ctx.strokeStyle = "#6b5636";
+        ctx.lineWidth = Math.max(3, 7 * cam.zoom);
+        ctx.beginPath();
+        for (let k = 0; k <= 8; k++) {
+          const a2 = (k / 8) * Math.PI * 2;
+          const px = sx + Math.cos(a2) * r * 1.15;
+          const py = sy + Math.sin(a2) * r * 1.15;
+          if (k === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
       }
     }
     ctx.restore();
@@ -1010,6 +1163,16 @@ export class Renderer {
           Math.floor(cam.worldToScreenX(wx)), Math.floor(cam.worldToScreenY(wy)), size, size,
         );
       }
+    }
+    if (world.sightScale < 1) {
+      // Night: a cold wash over the whole field, deeper the darker the night,
+      // so a night battle reads as one before anyone notices how little they see.
+      const dark = Math.min(0.45, (1 - world.sightScale) * 0.6);
+      ctx.fillStyle = "rgba(24, 32, 58, " + dark.toFixed(3) + ")";
+      ctx.fillRect(
+        cam.worldToScreenX(0), cam.worldToScreenY(0),
+        world.terrain.worldWidth * cam.zoom, world.terrain.worldHeight * cam.zoom,
+      );
     }
     ctx.restore();
   }

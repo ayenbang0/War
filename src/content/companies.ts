@@ -38,11 +38,22 @@ const STYLE: Record<UnitTypeId, string> = {
   siege: "Battery",
   healer: "Surgeons",
   builder: "Sappers",
+  pike: "Pike",
+  crossbow: "Crossbows",
+  lancer: "Lances",
+  slinger: "Slingers",
+  champion: "Champions",
+  banner: "Colours",
+  drummer: "Drums",
+  hounds: "Pack",
+  oathsworn: "Oath-sworn",
+  wagon: "Wagons",
 };
 
 /** Types named for a person rather than numbered. */
 const NAMED: ReadonlySet<string> = new Set([
   "horse", "guard", "mage", "siege", "scout", "healer", "builder",
+  "lancer", "champion", "banner", "hounds", "wagon", "drummer",
 ]);
 
 /**

@@ -48,6 +48,10 @@ import { ABILITIES, type AbilityId } from "../content/abilities.ts";
 import {
   BRACE_SLOWDOWN, BRACE_SOAK, DASH_HASTE, DODGE_CHANCE, ENTRENCH_SPEED, FORTIFY_SOAK,
   SPECIALS, TRIAGE_HEAL, TRIAGE_RADIUS, type SpecialId,
+  CADENCE_HASTE, CADENCE_RADIUS, CHALLENGE_RADIUS, CHALLENGE_SHOCK, CHALLENGE_STRIKE,
+  COUCH_BONUS, LAAGER_PASS, LAAGER_RADIUS, LAAGER_SHELTER, LAST_STAND_FLOOR,
+  LAST_STAND_STRIKE, PAVISE_PASS, RALLY_GAIN, RALLY_RADIUS, SET_PIKES_PASS,
+  TERROR_DRAIN, TERROR_HORSE, TERROR_RADIUS,
 } from "../content/specials.ts";
 
 /** A commander's ability standing on the field. */
@@ -223,6 +227,16 @@ const AMBUSH_TRIGGER = 150;
 const AMBUSH_BITE_SECONDS = 3;
 /** Damage a barrage does per second to everyone standing under it. */
 const BARRAGE_DAMAGE_PER_SEC = 46;
+/** Firepots burn only the enemy, at this share of a barrage, for longer. */
+const FIRE_DAMAGE_PER_SEC = BARRAGE_DAMAGE_PER_SEC * 0.45;
+/** Pace an enemy company keeps on ground sown with caltrops. */
+const CALTROP_SCALE = 0.4;
+/** Nerve a muster puts back into every man of the company, at once. */
+const MUSTER_NERVE = 0.35;
+/** Nerve a forced march costs at the outset: they arrive, and tired. */
+const MARCH_FATIGUE = 0.1;
+/** Nerve per second a beacon's glow gives the side that lit it. */
+const BEACON_GAIN = 0.05;
 /** Men in a company of militia called up mid-battle. */
 const LEVY_STRENGTH = 16;
 /** How far a fieldwork's benefit reaches from the tile it was dug on. */
@@ -286,6 +300,13 @@ export type WorldConfig = {
   readonly controlPoints?: readonly ControlPoint[];
   /** Fresh companies marching on partway through the battle. */
   readonly reinforcements?: readonly Reinforcement[];
+  /**
+   * Night: every man's sight is scaled by this. Absent means full daylight,
+   * and multiplying by exactly 1 changes nothing, so day battles are untouched.
+   */
+  readonly sightScale?: number;
+  /** The river rises at this second: every bridge goes under and ford turns to flood. */
+  readonly floodAtSeconds?: number;
 };
 
 export { statsFor, typeAt, typeIndex, STANCES } from "./entities.ts";
@@ -353,6 +374,14 @@ export class World {
     [new Map(), new Map()];
   readonly ai: ArmyAI[] = [];
   readonly fog: [FogField, FogField];
+  /**
+   * Where each standing aura is this tick: raised colours, beating drums,
+   * loosed hounds, a wagon ring. Rebuilt from group state after specials are
+   * decided, so it is derived, never hashed, and EMPTY in any battle that has
+   * none of the second roster in it -- which is what keeps every older
+   * recording and golden reproducing bit for bit.
+   */
+  private auras: { kind: SpecialId; player: number; x: number; y: number }[] = [];
   readonly reinforcements: readonly Reinforcement[];
   /**
    * Each living soldier's formation steadiness this tick: his group's cohesion,
@@ -392,6 +421,19 @@ export class World {
   readonly heldBy: Int8Array;
   /** Cumulative seconds each side has spent holding enough ground. */
   readonly holdSeconds: [number, number] = [0, 0];
+  /** Night's grip on sight, 1 by day. */
+  readonly sightScale: number;
+  /** Tick the river rises, or -1 for a battlefield with no flood. */
+  readonly floodAt: number;
+  /** Has it risen yet? */
+  flooded = false;
+  /** Breakthrough: each side's living men in the exit ground this tick. */
+  readonly through: [number, number] = [0, 0];
+  /**
+   * The standard mode's bearers, chosen from the deployed armies on the first
+   * tick. Only ever filled in that mode, so nothing else hashes or depends on it.
+   */
+  private standardBearers: [number[], number[]] | null = null;
   readonly points: [number, number] = [0, 0];
 
   private readonly hash: SpatialHash;
@@ -428,6 +470,8 @@ export class World {
     this.watchers = new Int32Array(capacity);
     this.fog = [new FogField(this.terrain), new FogField(this.terrain)];
     this.reinforcements = config.reinforcements ?? [];
+    this.sightScale = config.sightScale ?? 1;
+    this.floodAt = config.floodAtSeconds === undefined ? -1 : round(config.floodAtSeconds * TICK_RATE);
     this.steadiness = new Float64Array(this.soldiers.capacity);
     this.rng = {
       combat: Rng.create(this.seed, Stream.Combat),
@@ -795,6 +839,7 @@ export class World {
   step(): void {
     if (this.outcome) return;
     if (this.deploying) return;
+    if (this.tick === this.floodAt) this.raiseFlood();
     this.landReinforcements();
     for (const ai of this.ai) ai.update(this);
     this.applyOrders();
@@ -828,6 +873,8 @@ export class World {
       duration: this.duration,
       holdSeconds: this.holdSeconds,
       points: this.points,
+      through: this.through,
+      standards: this.victory.mode === "standard" ? this.standardsFlying() : undefined,
     });
   }
 
@@ -1118,11 +1165,19 @@ export class World {
     // At the charge: faster, and with the ranks allowed to open up, which is
     // what the extra impact is bought with.
     if (this.hasSpecial(g, "fortify")) return 0;
+    // Behind a pavise or chained in a ring, nothing goes anywhere.
+    if (this.hasSpecial(g, "pavise") || this.hasSpecial(g, "laager")) return 0;
+    const drums = this.auras.length > 0 &&
+      this.auraAt("cadence", g.player, g.anchorX, g.anchorY, CADENCE_RADIUS, false)
+      ? CADENCE_HASTE : 1;
     const haste = (g.hasteUntil > this.tick ? CHARGE_HASTE : 1) *
       (this.hasSpecial(g, "dash") ? DASH_HASTE : 1);
     // Mired ground is the one working that touches movement rather than
     // damage or nerve: it does no harm at all, it simply refuses to be crossed.
-    return slowest * FORMATION_PACE * haste * this.mireScale(g) * moraleSpeedScale(morale / n);
+    const spikes = this.fields.length > 0 &&
+      this.fieldAt("caltrops", g.player, g.anchorX, g.anchorY, true) ? CALTROP_SCALE : 1;
+    return slowest * FORMATION_PACE * haste * drums * spikes * this.mireScale(g) *
+      moraleSpeedScale(morale / n);
   }
 
   private groupTurnRate(g: Group): number {
@@ -1424,7 +1479,7 @@ export class World {
       // Every soldier lights its own surroundings, grouped or not. No unit
       // perceives further than its own sight radius allows.
       this.fog[s.player[i]].stamp(
-        s.x[i], s.y[i], effectiveSight(this.terrain, this.stats(i).sight, s.x[i], s.y[i]),
+        s.x[i], s.y[i], effectiveSight(this.terrain, this.stats(i).sight * this.sightScale, s.x[i], s.y[i]),
       );
     }
   }
@@ -1512,7 +1567,7 @@ export class World {
     for (let k = 0; k < n; k++) {
       const eye = this.watchers[k];
       if (s.alive[eye] !== 1 || s.player[eye] !== watcher) continue;
-      const reach = effectiveSight(this.terrain, this.stats(eye).sight, s.x[eye], s.y[eye]) * (1 - hidden);
+      const reach = effectiveSight(this.terrain, this.stats(eye).sight * this.sightScale, s.x[eye], s.y[eye]) * (1 - hidden);
       if (d2(s.x[eye], s.y[eye], s.x[id], s.y[id]) > reach * reach) continue;
       if (hasLineOfSight(this.terrain, s.x[eye], s.y[eye], s.x[id], s.y[id])) return true;
       // A raycast is the expensive part. If this many watchers are all in range
@@ -1826,6 +1881,11 @@ export class World {
   /** Buffer one blow. Nothing dies until the whole tick has been resolved. */
   private strike(attacker: number, victim: number, st: Stats): void {
     const s = this.soldiers;
+    // Under a parley nobody strikes. Checked only when one stands on the field.
+    if (this.fields.length > 0 &&
+      (this.parleyAt(s.x[attacker], s.y[attacker]) || this.parleyAt(s.x[victim], s.y[victim]))) {
+      return;
+    }
     const ag = this.groupOf(attacker);
 
     // Arriving at a body of troops that was not already fighting is a charge.
@@ -1859,6 +1919,22 @@ export class World {
       s.y[victim],
     );
     if (charging) dmg *= 1 + CHARGE_BONUS;
+    // -- the second roster's habits. Every test is on a special in force, so a
+    // battle without these troops takes exactly the arithmetic it always did.
+    if (charging && ag0 && this.hasSpecial(ag0, "couch")) dmg *= 1 + COUCH_BONUS;
+    if (charging && ag && vg0 && this.hasSpecial(vg0, "setPikes")) {
+      // The charge breaks on the hedge, and it is over.
+      dmg *= SET_PIKES_PASS;
+      ag.chargeUntil = this.tick;
+    }
+    if (ag0 && this.hasSpecial(ag0, "challenge")) dmg *= CHALLENGE_STRIKE;
+    if (ag0 && this.hasSpecial(ag0, "lastStand")) dmg *= LAST_STAND_STRIKE;
+    if (st.range > MELEE_RANGE && vg0 && this.hasSpecial(vg0, "pavise")) dmg *= PAVISE_PASS;
+    if (vg0 && this.hasSpecial(vg0, "laager")) dmg *= LAAGER_PASS;
+    else if (this.auras.length > 0 &&
+      this.auraAt("laager", s.player[victim], s.x[victim], s.y[victim], LAAGER_RADIUS, false)) {
+      dmg *= 1 - LAAGER_SHELTER;
+    }
     if (shield > 0) dmg *= 1 - shield;
     if (vg0 && this.hasSpecial(vg0, "brace")) dmg *= 1 - BRACE_SOAK;
     if (vg0 && this.hasSpecial(vg0, "fortify")) dmg *= 1 - FORTIFY_SOAK;
@@ -2006,6 +2082,10 @@ export class World {
       }
       // Contested ground counts for nobody. A point changes hands only when one
       // side clearly owns it, which is what makes taking one a real commitment.
+      if (this.victory.mode === "breakthrough" && p === this.victory.exit) {
+        this.through[0] = a;
+        this.through[1] = b;
+      }
       if (a > b) {
         this.heldBy[p] = 0;
         held[0]++;
@@ -2027,6 +2107,56 @@ export class World {
         this.points[p] += held[p] * v.perPointHeld * TICK_DT;
       }
     }
+  }
+
+  /**
+   * The river comes up. Bridges go under and marsh becomes open water, all at
+   * once: every crossing the armies planned around is gone. Men caught on a
+   * bridge are left wading, which the movement rules already handle. Routes
+   * are recomputed, because the ground they were planned over no longer exists.
+   */
+  private raiseFlood(): void {
+    if (this.flooded) return;
+    this.flooded = true;
+    const t = this.terrain;
+    for (let ty = 0; ty < t.height; ty++) {
+      for (let tx = 0; tx < t.width; tx++) {
+        const k = t.typeAt(tx, ty);
+        if (k === Terrain.Bridge || k === Terrain.Marsh) t.set(tx, ty, Terrain.Water);
+      }
+    }
+    for (const g of this.groups) {
+      if (g.path.length >= 2) g.path = this.routeThrough(g, [g.path[g.path.length - 2], g.path[g.path.length - 1]]);
+    }
+  }
+
+  /** Is each side's standard still carried? Chooses the bearers on first use. */
+  standardsFlying(): [boolean, boolean] {
+    const s = this.soldiers;
+    if (!this.standardBearers) {
+      const pick = (p: number): number[] => {
+        for (const kind of ["banner", "champion", "guard"] as const) {
+          const ids: number[] = [];
+          for (let i = 0; i < s.count; i++) {
+            if (s.alive[i] === 1 && s.player[i] === p && this.typeOf(i) === kind) ids.push(i);
+          }
+          if (ids.length > 0) return ids;
+        }
+        // No colours at all: the first company raised carries them.
+        for (const g of this.groups) {
+          if (g.player === p) return g.members.filter((m) => s.alive[m] === 1);
+        }
+        return [];
+      };
+      this.standardBearers = [pick(0), pick(1)];
+    }
+    const flying = (ids: number[]): boolean => ids.some((i) => s.alive[i] === 1);
+    return [flying(this.standardBearers[0]), flying(this.standardBearers[1])];
+  }
+
+  /** Who carries each side's standard, for the renderer. Empty until chosen. */
+  bearersOf(player: number): readonly number[] {
+    return this.standardBearers ? this.standardBearers[player] : [];
   }
 
   /** How many control points a player currently holds. */
@@ -2135,6 +2265,39 @@ export class World {
           // Once, and only when they are about to be destroyed.
           now = inContact && (nerve < 0.4 || g.losses > g.raisedWith * 0.35);
           break;
+        case "setPikes":
+          // Butts go down when something is close and coming, not before: a
+          // hedge set too early is a hedge that cannot turn.
+          now = this.enemyWithin(g, 150) && g.stance !== "move" && g.stance !== "retreat";
+          break;
+        case "pavise":
+          now = this.underFire(g) && g.stance !== "move" && g.stance !== "retreat";
+          break;
+        case "couch":
+          // The last hundred paces of a charge, never a melee already joined.
+          now = !inContact && g.stance === "attack" && this.enemyWithin(g, 190);
+          break;
+        case "challenge":
+          now = inContact;
+          break;
+        case "rally":
+          now = this.friendNear(g, RALLY_RADIUS, "wavering") || (inContact && nerve < 0.6);
+          break;
+        case "cadence":
+          now = g.stance === "move" || g.stance === "attack" ||
+            this.friendNear(g, CADENCE_RADIUS, "moving");
+          break;
+        case "terror":
+          now = inContact;
+          break;
+        case "lastStand":
+          // Once in a battle, and only when the oath is actually being tested.
+          now = g.specialUses === 0 &&
+            (g.losses * 2 >= g.raisedWith || (inContact && nerve < 0.35));
+          break;
+        case "laager":
+          now = (inContact || this.underFire(g)) && g.stance !== "move" && g.stance !== "retreat";
+          break;
       }
       if (!now) continue;
 
@@ -2156,6 +2319,15 @@ export class World {
       }
       if (id === "blink") g.blinked = true;
       if (id === "breakBow") g.bowsBroken = true;
+      if (id === "challenge") {
+        // The call itself is the blow to nerve; the fighting comes after.
+        const c = this.liveCentre(g);
+        for (let i = 0; i < s.count; i++) {
+          if (s.alive[i] !== 1 || s.player[i] === g.player) continue;
+          if (d2(c.x, c.y, s.x[i], s.y[i]) > CHALLENGE_RADIUS * CHALLENGE_RADIUS) continue;
+          s.morale[i] = max(0, s.morale[i] - CHALLENGE_SHOCK);
+        }
+      }
 
       if (id === "breakBow") {
         // They are skirmishers now, and skirmishers dodge. There is no picking
@@ -2182,6 +2354,64 @@ export class World {
         this.reflow(g);
       }
     }
+    this.rebuildAuras();
+  }
+
+  /** Rebuild where every standing aura is, from the specials now in force. */
+  private rebuildAuras(): void {
+    this.auras.length = 0;
+    for (const g of this.groups) {
+      if (g.specialUntil <= this.tick) continue;
+      const id = this.specialOf(g);
+      if (id !== "rally" && id !== "cadence" && id !== "terror" && id !== "laager") continue;
+      const c = this.liveCentre(g);
+      if (c.n === 0) continue;
+      this.auras.push({ kind: id, player: g.player, x: c.x, y: c.y });
+    }
+  }
+
+  /** Strongest aura of a kind reaching this point for this side, 0 or 1. */
+  private auraAt(kind: SpecialId, player: number, x: number, y: number, reach: number, foe: boolean): boolean {
+    for (const a of this.auras) {
+      if (a.kind !== kind) continue;
+      if (foe ? a.player === player : a.player !== player) continue;
+      if (d2(a.x, a.y, x, y) <= reach * reach) return true;
+    }
+    return false;
+  }
+
+  /** Centre of a company's living men, and how many there are. */
+  private liveCentre(g: Group): { x: number; y: number; n: number } {
+    const s = this.soldiers;
+    let x = 0;
+    let y = 0;
+    let n = 0;
+    for (const m of g.members) {
+      if (s.alive[m] !== 1) continue;
+      x += s.x[m];
+      y += s.y[m];
+      n++;
+    }
+    return n === 0 ? { x: g.anchorX, y: g.anchorY, n } : { x: x / n, y: y / n, n };
+  }
+
+  /** Is a friendly company within reach that is wavering, or on the move? */
+  private friendNear(g: Group, reach: number, what: "wavering" | "moving"): boolean {
+    const s = this.soldiers;
+    const c = this.liveCentre(g);
+    for (const o of this.groups) {
+      if (o === g || o.player !== g.player) continue;
+      const oc = this.liveCentre(o);
+      if (oc.n === 0 || d2(c.x, c.y, oc.x, oc.y) > reach * reach) continue;
+      if (what === "moving") {
+        if (o.stance === "move" || o.stance === "attack") return true;
+        continue;
+      }
+      let nerve = 0;
+      for (const m of o.members) if (s.alive[m] === 1) nerve += s.morale[m];
+      if (nerve / oc.n < 0.5) return true;
+    }
+    return false;
   }
 
   /** Is anything shooting at this company? */
@@ -2320,6 +2550,20 @@ export class World {
       return;
     }
 
+    if (id === "muster" || id === "forcedMarch") {
+      const g = this.groupById(squad);
+      if (!g || g.player !== player) return;
+      const s = this.soldiers;
+      for (const m of g.members) {
+        if (s.alive[m] !== 1) continue;
+        s.morale[m] = id === "muster"
+          ? min(1, s.morale[m] + MUSTER_NERVE)
+          : max(0, s.morale[m] - MARCH_FATIGUE);
+      }
+      if (id === "forcedMarch") g.hasteUntil = this.tick + spec.duration * TICK_RATE;
+      return;
+    }
+
     if (id === "levy") {
       // Militia turn out where you point, as a formed company. Nothing lingers
       // on the field afterwards -- what was spent is spent and what arrived is
@@ -2363,12 +2607,14 @@ export class World {
       // Smoke and flare are about SIGHT and are read where sight is decided;
       // a shield is read where damage is. Only a barrage does anything to a man
       // just for standing there.
-      if (f.ability !== "barrage") continue;
+      if (f.ability !== "barrage" && f.ability !== "firepots") continue;
+      const fire = f.ability === "firepots";
       const rr = f.radius * f.radius;
       for (let i = 0; i < s.count; i++) {
         if (s.alive[i] !== 1) continue;
+        if (fire && s.player[i] === f.player) continue;
         if (d2(f.x, f.y, s.x[i], s.y[i]) > rr) continue;
-        s.incoming[i] += BARRAGE_DAMAGE_PER_SEC * TICK_DT;
+        s.incoming[i] += (fire ? FIRE_DAMAGE_PER_SEC : BARRAGE_DAMAGE_PER_SEC) * TICK_DT;
         s.struckBy[i] = -1;
         s.struckHow[i] = HOW_RANGED;
       }
@@ -2384,6 +2630,25 @@ export class World {
       worst = min(worst, SPELLS.mire.slow ?? 1);
     }
     return worst;
+  }
+
+  /** Is this point under a field of this kind -- one's own side's, or the enemy's? */
+  private fieldAt(kind: AbilityId, player: number, x: number, y: number, enemy: boolean): boolean {
+    for (const f of this.fields) {
+      if (f.ability !== kind) continue;
+      if (enemy ? f.player === player : f.player !== player) continue;
+      if (d2(f.x, f.y, x, y) <= f.radius * f.radius) return true;
+    }
+    return false;
+  }
+
+  /** Is this spot under anyone's parley? A truce binds both sides. */
+  private parleyAt(x: number, y: number): boolean {
+    for (const f of this.fields) {
+      if (f.ability !== "parley") continue;
+      if (d2(f.x, f.y, x, y) <= f.radius * f.radius) return true;
+    }
+    return false;
   }
 
   /** Is this spot lit by one of `player`'s flares? */
@@ -2612,6 +2877,25 @@ export class World {
         cover: TERRAIN_INFO[this.terrain.typeAtWorld(s.x[id], s.y[id])].cover,
         dt: TICK_DT,
       });
+
+      if (this.fields.length > 0 &&
+        this.fieldAt("beacon", s.player[id], s.x[id], s.y[id], false)) {
+        s.morale[id] = min(1, s.morale[id] + BEACON_GAIN * TICK_DT);
+      }
+      // Auras and oaths. Skipped entirely in a battle with none of them.
+      if (this.auras.length > 0) {
+        if (this.auraAt("rally", s.player[id], s.x[id], s.y[id], RALLY_RADIUS, false)) {
+          s.morale[id] = min(1, s.morale[id] + RALLY_GAIN * TICK_DT);
+        }
+        if (this.auraAt("terror", s.player[id], s.x[id], s.y[id], TERROR_RADIUS, true)) {
+          const t = this.typeOf(id);
+          const horse = t === "horse" || t === "lancer" || t === "scout";
+          s.morale[id] = max(0, s.morale[id] - TERROR_DRAIN * TICK_DT * (horse ? TERROR_HORSE : 1));
+        }
+      }
+      if (g && g.specialUntil > this.tick && this.hasSpecial(g, "lastStand")) {
+        s.morale[id] = max(s.morale[id], LAST_STAND_FLOOR);
+      }
     }
 
     this.recordBreakages();

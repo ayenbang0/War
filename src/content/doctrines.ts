@@ -7,7 +7,10 @@
  * doctrine cannot change mid-match, so recomputing it there would be pure cost.
  */
 
-export type DoctrineId = "aggressive" | "defensive" | "maneuver" | "magic";
+export type DoctrineId =
+  | "aggressive" | "defensive" | "maneuver" | "magic"
+  // Appended. The doctrine is part of a recorded army, so never reorder.
+  | "raiding" | "siegecraft" | "zealous" | "veteran";
 
 export type Doctrine = {
   readonly id: DoctrineId;
@@ -79,8 +82,61 @@ export const DOCTRINES: Record<DoctrineId, Doctrine> = {
     resolve: 1.0,
     magic: 1.6,
   },
+  raiding: {
+    id: "raiding",
+    name: "Raiding",
+    blurb: "Light, quick and far-seeing, and brittle the moment anything stands and fights.",
+    speed: 1.22,
+    turnRate: 1.3,
+    attack: 1.0,
+    defence: 0.78,
+    hp: 0.9,
+    sight: 1.2,
+    resolve: 1.08,
+    magic: 0.9,
+  },
+  siegecraft: {
+    id: "siegecraft",
+    name: "Siegecraft",
+    blurb: "Engines, works and patience. Slow to get anywhere, and very hard to shift once there.",
+    speed: 0.82,
+    turnRate: 0.85,
+    attack: 1.08,
+    defence: 1.12,
+    hp: 1.05,
+    sight: 0.92,
+    resolve: 0.92,
+    magic: 0.85,
+  },
+  zealous: {
+    id: "zealous",
+    name: "Zealous",
+    blurb: "Men who believe. They will stand where they should run, and they are not well armoured for it.",
+    speed: 1.0,
+    turnRate: 0.95,
+    attack: 1.05,
+    defence: 0.88,
+    hp: 0.95,
+    sight: 0.95,
+    resolve: 0.62,
+    magic: 1.15,
+  },
+  veteran: {
+    id: "veteran",
+    name: "Veteran",
+    blurb: "Old soldiers: steady and well kept, with no tricks and no magic left in them.",
+    speed: 0.95,
+    turnRate: 1.05,
+    attack: 1.06,
+    defence: 1.08,
+    hp: 1.08,
+    sight: 1.0,
+    resolve: 0.9,
+    magic: 0.6,
+  },
 };
 
 export const DOCTRINE_IDS: readonly DoctrineId[] = [
   "aggressive", "defensive", "maneuver", "magic",
+  "raiding", "siegecraft", "zealous", "veteran",
 ];

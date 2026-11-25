@@ -55,6 +55,10 @@ export type LevelDef = {
    * horse to be worth buying is a fact about the terrain the generator makes.
    */
   readonly country: "open" | "broken" | "high";
+  /** Night: sight is scaled by this. Absent for a battle fought by day. */
+  readonly night?: number;
+  /** The river rises at this second: bridges and marsh go under. */
+  readonly floodAtSeconds?: number;
 };
 
 export const provingGround: LevelDef = {

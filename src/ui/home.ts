@@ -16,8 +16,10 @@ import { LEVELS } from "../content/levels/index.ts";
 import { COMMANDER_IDS } from "../content/commanders.ts";
 import { DOCTRINE_IDS } from "../content/doctrines.ts";
 import { TERRAIN_INFO } from "../sim/terrain.ts";
+import { ABILITY_IDS } from "../content/abilities.ts";
+import { CHAPTERS } from "../content/campaign.ts";
 
-export type HomeChoice = "play" | "tutorial";
+export type HomeChoice = "play" | "tutorial" | "campaign";
 
 const el = (tag: string, cls?: string, text?: string): HTMLElement => {
   const n = document.createElement(tag);
@@ -46,8 +48,9 @@ export function openHome(root: HTMLElement): Promise<HomeChoice> {
 
     const actions = el("div", "home-actions");
     const play = el("button", "home-play", "Play") as HTMLButtonElement;
+    const chronicle = el("button", "home-teach", "Campaign") as HTMLButtonElement;
     const teach = el("button", "home-teach", "Learn the gestures") as HTMLButtonElement;
-    actions.append(play, teach);
+    actions.append(play, chronicle, teach);
     panel.appendChild(actions);
 
     panel.appendChild(el("p", "home-note",
@@ -72,6 +75,9 @@ export function openHome(root: HTMLElement): Promise<HomeChoice> {
     grid.appendChild(figure(String(COMMANDER_IDS.length), "enemy commanders"));
     grid.appendChild(figure(String(DOCTRINE_IDS.length), "doctrines"));
     grid.appendChild(figure("14", "orders you can draw"));
+    grid.appendChild(figure(String(ABILITY_IDS.length), "reserves to call on"));
+    grid.appendChild(figure(String(new Set(LEVELS.map((l) => l.victory.mode)).size), "ways to win"));
+    grid.appendChild(figure(String(CHAPTERS.length), "chapters of the chronicle"));
     panel.appendChild(grid);
 
     panel.appendChild(el("p", "home-foot",
@@ -81,6 +87,10 @@ export function openHome(root: HTMLElement): Promise<HomeChoice> {
     play.onclick = () => {
       root.style.display = "none";
       resolve("play");
+    };
+    chronicle.onclick = () => {
+      root.style.display = "none";
+      resolve("campaign");
     };
     teach.onclick = () => {
       root.style.display = "none";

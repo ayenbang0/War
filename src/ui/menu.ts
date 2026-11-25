@@ -23,6 +23,12 @@ const ABILITY_MARK: Record<AbilityId, string> = {
   smoke: "░",
   flare: "☀",
   levy: "⚇",
+  muster: "⚑",
+  caltrops: "⁂",
+  firepots: "♨",
+  forcedMarch: "»",
+  parley: "⚐",
+  beacon: "♆",
 };
 import { MAX_SQUADS, adviseFor, cost, suggestArmy, validate, type ArmyList } from "../content/army.ts";
 import { LEVELS, type LevelDef } from "../content/levels/index.ts";
@@ -51,12 +57,23 @@ const el = (tag: string, cls?: string, text?: string): HTMLElement => {
  * before building a world -- the world's doctrine and the enemy's budget both
  * depend on choices made here, so there is nothing to construct until then.
  */
-export function openMenu(root: HTMLElement): Promise<Setup> {
+/**
+ * A campaign chapter fixes the ground, the opponent and how hard he is run;
+ * the army is still the player's to compose.
+ */
+export type MenuPreset = {
+  readonly title: string;
+  readonly level: LevelDef;
+  readonly commander: CommanderId;
+  readonly difficulty: DifficultyId;
+};
+
+export function openMenu(root: HTMLElement, preset?: MenuPreset): Promise<Setup> {
   return new Promise((resolve) => {
-    let level: LevelDef = LEVELS[0];
-    let difficulty: DifficultyId = level.suggestedDifficulty;
+    let level: LevelDef = preset?.level ?? LEVELS[0];
+    let difficulty: DifficultyId = preset?.difficulty ?? level.suggestedDifficulty;
     /** null means "draw one at random", which is the default. */
-    let commander: CommanderId | null = null;
+    let commander: CommanderId | null = preset?.commander ?? null;
     const bought: AbilityId[] = [];
     let doctrine: DoctrineId = "maneuver";
     const picked: UnitTypeId[] = [];
@@ -89,6 +106,11 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
     }
     panel.appendChild(lvlRow);
     panel.appendChild(lvlBlurb);
+    if (preset) {
+      // The chapter has chosen the field; only the army is open.
+      lvlRow.style.display = "none";
+      panel.insertBefore(el("p", "sub", preset.title), lvlRow);
+    }
 
     function showLevel(): void {
       lvlBlurb.textContent =
@@ -117,6 +139,7 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
       diffRow.appendChild(b);
     }
     panel.appendChild(diffRow);
+    if (preset) diffRow.style.display = "none";
     panel.appendChild(diffBlurb);
 
     // -- commander ----------------------------------------------------------
@@ -148,6 +171,7 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
     }
     setCommanderBlurb();
     panel.appendChild(cmdRow);
+    if (preset) cmdRow.style.display = "none";
     panel.appendChild(cmdBlurb);
 
     // -- doctrine -----------------------------------------------------------
@@ -332,7 +356,7 @@ export function openMenu(root: HTMLElement): Promise<Setup> {
       start.disabled = !v.ok;
     }
 
-    lvlButtons[0].classList.add("on");
+    (lvlButtons[LEVELS.indexOf(level)] ?? lvlButtons[0]).classList.add("on");
     showLevel();
     auto.click();
     root.appendChild(panel);
@@ -348,6 +372,19 @@ function describeVictory(level: LevelDef): string {
   }
   if (v.mode === "points") {
     return "first to " + v.target + " points, from ground held and men killed";
+  }
+  if (v.mode === "survive") {
+    return v.defender === 0
+      ? "still be standing when the clock runs out"
+      : "break them before the clock runs out";
+  }
+  if (v.mode === "breakthrough") {
+    return v.attacker === 0
+      ? "get " + v.required + " men through to " + (level.controlPoints[v.exit]?.name ?? "the exit")
+      : "stop " + v.required + " of them reaching " + (level.controlPoints[v.exit]?.name ?? "the exit");
+  }
+  if (v.mode === "standard") {
+    return "take their colours, and keep your own";
   }
   return "break the enemy's nerve";
 }

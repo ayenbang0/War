@@ -22,7 +22,7 @@ import { ROUT_THRESHOLD } from "./morale.ts";
  */
 const AGGRESSION_WEIGHT = 1.0;
 
-export type WinMode = "rout" | "objectives" | "points";
+export type WinMode = "rout" | "objectives" | "points" | "survive" | "breakthrough" | "standard";
 
 /** A place worth standing on. Positions are world units. */
 export type ControlPoint = {
@@ -52,7 +52,29 @@ export type VictoryConfig =
       readonly perPointHeld: number;
       /** Total that wins outright. */
       readonly target: number;
-    };
+    }
+  /**
+   * Hold out. The defender wins by still being an army at full time; the
+   * attacker has to break or destroy it before the clock runs down.
+   */
+  | { readonly mode: "survive"; readonly defender: number }
+  /**
+   * Get through. The attacker wins by having this many living men standing in
+   * the exit ground at once; the defender wins by stopping that until time.
+   */
+  | {
+      readonly mode: "breakthrough";
+      readonly attacker: number;
+      /** Index into the level's control points: the ground to reach. */
+      readonly exit: number;
+      readonly required: number;
+    }
+  /**
+   * Take the colours. Each side's standard is carried by a colour party (or,
+   * failing one, its champions or its guard). Lose every man carrying it and
+   * the army has lost, whatever else is still standing.
+   */
+  | { readonly mode: "standard" };
 
 export const DEFAULT_VICTORY: VictoryConfig = { mode: "rout" };
 
@@ -73,11 +95,17 @@ export type MatchState = {
   readonly holdSeconds: readonly [number, number];
   /** Victory points accrued. */
   readonly points: readonly [number, number];
+  /** Living men of each side in a breakthrough's exit ground right now. */
+  readonly through?: readonly [number, number];
+  /** Whether each side's standard is still carried. */
+  readonly standards?: readonly [boolean, boolean];
 };
 
 export type Outcome = {
   readonly winner: number;
-  readonly reason: "rout" | "annihilated" | "timer" | "objectives" | "points";
+  readonly reason:
+    | "rout" | "annihilated" | "timer" | "objectives" | "points"
+    | "survived" | "breakthrough" | "standard";
   readonly detail: string;
 };
 
@@ -139,7 +167,42 @@ export function evaluate(config: VictoryConfig, state: MatchState): Outcome | nu
     }
   }
 
+  if (config.mode === "breakthrough" && state.through) {
+    const p = config.attacker;
+    if (state.through[p] >= config.required) {
+      return {
+        winner: p,
+        reason: "breakthrough",
+        detail: "army " + p + " broke through with " + state.through[p] + " men",
+      };
+    }
+  }
+  if (config.mode === "standard" && state.standards) {
+    const [ka, kb] = state.standards;
+    if (!ka || !kb) {
+      if (!ka && !kb) return { winner: -1, reason: "standard", detail: "both standards taken" };
+      return {
+        winner: ka ? 0 : 1,
+        reason: "standard",
+        detail: "army " + (ka ? 1 : 0) + " lost its standard",
+      };
+    }
+  }
+
   if (state.elapsed < state.duration) return null;
+
+  // Held out, or kept the road shut: the clock is the defender's friend.
+  if (config.mode === "survive") {
+    return {
+      winner: config.defender,
+      reason: "survived",
+      detail: "army " + config.defender + " was still standing at full time",
+    };
+  }
+  if (config.mode === "breakthrough") {
+    const d = config.attacker === 0 ? 1 : 0;
+    return { winner: d, reason: "breakthrough", detail: "army " + d + " held the road until time" };
+  }
 
   // -- full time --------------------------------------------------------------
 

@@ -136,8 +136,158 @@ export const theLongVigil: LevelDef = {
   ],
 };
 
+/**
+ * Getting through, not winning. The enemy holds the road to the ferry and only
+ * has to keep it shut; you have to put forty living men on the far bank before
+ * the clock runs out. Breaking them is one way to do that. It is not the only
+ * one, and usually not the cheapest.
+ */
+export const theFerryRoad: LevelDef = {
+  id: "ferry-road",
+  name: "The Ferry Road",
+  brief: "The town at Hallow Ferry is starving. Put forty men on the ferry landing before time, by any road.",
+  seed: 0x18685,
+  tilesWide: 200,
+  tilesHigh: 112,
+  duration: 14 * 60,
+  deployment: [
+    { player: 0, x: 6, y: 30, w: 24, h: 52 },
+    { player: 1, x: 118, y: 24, w: 26, h: 64 },
+  ],
+  victory: { mode: "breakthrough", attacker: 0, exit: 0, required: 40 },
+  controlPoints: [cp(0, "Hallow Ferry", 188, 56, 210)],
+  budget: 131,
+  enemyDoctrine: "veteran",
+  suggestedDifficulty: "sergeant",
+  country: "broken",
+  magic: 1,
+};
+
+/**
+ * Holding out. You are the garrison, you are outnumbered as the day goes on,
+ * and nothing is required of you but still to be an army at the end of it.
+ * Relief comes, late. The enemy is fed fresh companies in waves.
+ */
+export const theLastWall: LevelDef = {
+  id: "last-wall",
+  name: "The Last Wall",
+  brief: "Hold the heights in front of the city until the relief arrives. They will keep coming. Do not break.",
+  seed: 0x2ae16,
+  tilesWide: 176,
+  tilesHigh: 120,
+  duration: 12 * 60,
+  deployment: [
+    { player: 0, x: 8, y: 32, w: 30, h: 56 },
+    { player: 1, x: 140, y: 32, w: 28, h: 56 },
+  ],
+  victory: { mode: "survive", defender: 0 },
+  controlPoints: [cp(0, "The Gatehouse", 30, 60, 200)],
+  budget: 119,
+  enemyDoctrine: "siegecraft",
+  suggestedDifficulty: "colonel",
+  country: "high",
+  magic: 1,
+  reinforcements: [
+    { atSeconds: 3 * 60, player: 1, type: "pike", count: 22, x: 160 * TILE_SIZE, y: 50 * TILE_SIZE },
+    { atSeconds: 5 * 60, player: 1, type: "lancer", count: 8, x: 160 * TILE_SIZE, y: 80 * TILE_SIZE },
+    { atSeconds: 7 * 60, player: 1, type: "oathsworn", count: 16, x: 160 * TILE_SIZE, y: 60 * TILE_SIZE },
+    // The relief. Late, and not enough on its own.
+    { atSeconds: 9 * 60, player: 0, type: "horse", count: 10, x: 10 * TILE_SIZE, y: 60 * TILE_SIZE },
+  ],
+};
+
+/**
+ * Take the colours. Every army carries a standard; lose the men carrying it
+ * and you have lost, whatever else is still on the field. A battle of thrusts
+ * at one small knot of men, and of keeping your own out of reach.
+ */
+export const theColours: LevelDef = {
+  id: "the-colours",
+  name: "The Colours",
+  brief: "Open downland, and an enemy sworn to take your standard. Take theirs first, and keep your own out of reach.",
+  seed: 0x4fd38,
+  tilesWide: 184,
+  tilesHigh: 120,
+  duration: 16 * 60,
+  deployment: [
+    { player: 0, x: 8, y: 34, w: 28, h: 52 },
+    { player: 1, x: 148, y: 34, w: 28, h: 52 },
+  ],
+  victory: { mode: "standard" },
+  controlPoints: [cp(0, "The Old Cairn", 92, 60, 180)],
+  budget: 161,
+  enemyDoctrine: "zealous",
+  suggestedDifficulty: "captain",
+  country: "open",
+  magic: 1,
+};
+
+/**
+ * Night among the standing stones. Everyone sees a little over half as far as
+ * by day, so scouts are worth twice what they cost and a company can be on top
+ * of you before you know it is there. The stones are what you are fighting over.
+ */
+export const theStones: LevelDef = {
+  id: "night-stones",
+  name: "Night at the Stones",
+  brief: "Three standing stones in a dark wood. Hold two of them for three minutes. You will not see them coming.",
+  seed: 0x5ae8f,
+  tilesWide: 180,
+  tilesHigh: 124,
+  duration: 15 * 60,
+  deployment: [
+    { player: 0, x: 8, y: 36, w: 26, h: 52 },
+    { player: 1, x: 146, y: 36, w: 26, h: 52 },
+  ],
+  victory: { mode: "objectives", required: 2, holdToWin: 180 },
+  controlPoints: [
+    cp(0, "The Watcher", 90, 30, 160),
+    cp(1, "The Cradle", 90, 62, 160),
+    cp(2, "The Broken Man", 90, 94, 160),
+  ],
+  budget: 145,
+  enemyDoctrine: "magic",
+  suggestedDifficulty: "captain",
+  country: "broken",
+  magic: 1.5,
+  night: 0.55,
+};
+
+/**
+ * The river is rising. At seven minutes every bridge goes under and the marsh
+ * becomes open water, so whatever is on the wrong bank then stays there. The
+ * enemy knows it and sends companies round both ends of your line just before.
+ */
+export const theRisingWater: LevelDef = {
+  id: "rising-water",
+  name: "The Rising Water",
+  brief: "Rain in the hills. At seven minutes the river takes the bridges. Be on the right side of it when it does.",
+  seed: 0x74c5a,
+  tilesWide: 192,
+  tilesHigh: 128,
+  duration: 16 * 60,
+  deployment: [
+    { player: 0, x: 8, y: 36, w: 26, h: 56 },
+    { player: 1, x: 158, y: 36, w: 26, h: 56 },
+  ],
+  victory: { mode: "rout" },
+  controlPoints: [],
+  budget: 149,
+  enemyDoctrine: "raiding",
+  suggestedDifficulty: "colonel",
+  country: "broken",
+  magic: 1,
+  floodAtSeconds: 7 * 60,
+  // The pincer: two fast companies arriving round both ends of the line.
+  reinforcements: [
+    { atSeconds: 5 * 60, player: 1, type: "hounds", count: 10, x: 60 * TILE_SIZE, y: 6 * TILE_SIZE },
+    { atSeconds: 5 * 60, player: 1, type: "lancer", count: 8, x: 60 * TILE_SIZE, y: 122 * TILE_SIZE },
+  ],
+};
+
 export const LEVELS: readonly LevelDef[] = [
   provingGround, theCrossing, theOpenField, theHighGround, theLongVigil,
+  theFerryRoad, theLastWall, theColours, theStones, theRisingWater,
 ];
 
 export function levelById(id: string): LevelDef | undefined {

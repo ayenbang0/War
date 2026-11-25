@@ -58,6 +58,16 @@ const TONE: Record<string, number> = {
   scout: 0.26,
   builder: -0.10,
   healer: 0.21,
+  pike: -0.04,
+  crossbow: 0.05,
+  lancer: -0.12,
+  slinger: 0.2,
+  champion: -0.24,
+  banner: -0.02,
+  drummer: 0.18,
+  hounds: 0.12,
+  oathsworn: -0.16,
+  wagon: -0.18,
 };
 
 /** Shared dark endpoint: an ink, not black, so shadows stay in the family. */

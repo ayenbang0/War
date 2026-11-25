@@ -23,7 +23,7 @@
 
 import type { Playstyle } from "../sim/ai.ts";
 
-export type CommanderId = "boar" | "fox" | "badger" | "hare";
+export type CommanderId = "boar" | "fox" | "badger" | "hare" | "wolf" | "owl" | "stag" | "crow";
 
 export type Commander = {
   readonly id: CommanderId;
@@ -79,6 +79,40 @@ export const COMMANDERS: Record<CommanderId, Commander> = {
     bias: { aggressive: 1.5, defensive: 0.55, maneuver: 1.4, reactive: 1.2 },
     boldness: 1.15,
   },
+  wolf: {
+    id: "wolf",
+    name: "Wolf",
+    epithet: "who hunts in a pack",
+    blurb: "Pins you in front and comes round the side with everything else. Watch the flank you are not looking at.",
+    bias: { aggressive: 1.4, defensive: 0.6, maneuver: 1.7, reactive: 0.7 },
+    boldness: 1.05,
+  },
+  owl: {
+    id: "owl",
+    name: "Owl",
+    epithet: "who waits for your mistake",
+    blurb: "Sits still and answers whatever you do. Make the first move a feint, and it will answer that instead.",
+    bias: { aggressive: 0.55, defensive: 1.2, maneuver: 0.8, reactive: 2.3 },
+    boldness: 0.85,
+  },
+  stag: {
+    id: "stag",
+    name: "Stag",
+    epithet: "too proud to give ground",
+    blurb: "Meets force with force and will not step back from a fight he is losing. Make him spend himself on a strong point.",
+    bias: { aggressive: 1.6, defensive: 1.5, maneuver: 0.45, reactive: 0.6 },
+    boldness: 1.5,
+  },
+  crow: {
+    id: "crow",
+    name: "Crow",
+    epithet: "who picks at the weak",
+    blurb: "Goes for whatever is already hurt. Keep your wounded companies back, and bait it with one that only looks weak.",
+    bias: { aggressive: 1.1, defensive: 0.5, maneuver: 1.2, reactive: 1.9 },
+    boldness: 0.9,
+  },
 };
 
-export const COMMANDER_IDS: readonly CommanderId[] = ["boar", "fox", "badger", "hare"];
+export const COMMANDER_IDS: readonly CommanderId[] = [
+  "boar", "fox", "badger", "hare", "wolf", "owl", "stag", "crow",
+];

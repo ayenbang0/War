@@ -48,6 +48,7 @@ function stat(label: string, value: string): HTMLElement {
  */
 export function showAfterAction(
   root: HTMLElement, world: World, viewer: number, onAgain: () => void,
+  chronicle?: { entry: string; again: string },
 ): void {
   const outcome = world.outcome;
   if (!outcome) return;
@@ -64,6 +65,10 @@ export function showAfterAction(
   const foeAi = world.ai.find((a) => a.player === foe);
   panel.appendChild(el("p", "aa-detail",
     (foeAi ? "Against the " + foeAi.who.name + ", " + foeAi.who.epithet + ".  " : "") + outcome.detail));
+  if (chronicle) {
+    panel.appendChild(el("h2", undefined, "From the chronicle"));
+    panel.appendChild(el("p", "aa-chronicle", chronicle.entry));
+  }
 
   // -- what killed your men, and theirs ---------------------------------------
   const mine = world.casualtiesByCause[viewer];
@@ -129,7 +134,7 @@ export function showAfterAction(
     panel.appendChild(log);
   }
 
-  const again = el("button", "aa-again", "Fight again") as HTMLButtonElement;
+  const again = el("button", "aa-again", chronicle ? chronicle.again : "Fight again") as HTMLButtonElement;
   again.onclick = onAgain;
   panel.appendChild(again);
 

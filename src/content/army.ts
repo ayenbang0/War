@@ -169,12 +169,15 @@ export type Advice = {
 const BASE_WEIGHTS: Record<UnitTypeId, number> = {
   line: 6, archer: 3, skirmisher: 2, horse: 2, scout: 1,
   guard: 1, healer: 1, builder: 1, mage: 1, siege: 1,
+  pike: 1, crossbow: 1, slinger: 0.8, oathsworn: 0.8, lancer: 0.5,
+  banner: 0.5, hounds: 0.5, wagon: 0.4, champion: 0.3, drummer: 0.3,
 };
 
 export function adviseFor(level: {
   victory: { mode: string };
   duration: number;
   country: "open" | "broken" | "high";
+  night?: number;
 }): Advice {
   const w: Record<UnitTypeId, number> = { ...BASE_WEIGHTS };
   const prefer: AbilityId[] = [];
@@ -186,16 +189,19 @@ export function adviseFor(level: {
   // -- the going --------------------------------------------------------------
   if (level.country === "open") {
     scale("horse", 2); scale("scout", 1.8); scale("siege", 0.5); scale("line", 0.9);
+    scale("lancer", 1.8); scale("hounds", 1.5); scale("drummer", 1.4); scale("pike", 0.8);
     prefer.push("charge", "flare");
     notes.push("open ground, so horse and eyes pay");
   } else if (level.country === "broken") {
     // A river with bridges is no place for cavalry: there is nowhere to swing.
     scale("horse", 0.3); scale("scout", 0.6); scale("siege", 1.6);
     scale("builder", 1.6); scale("line", 1.2); scale("archer", 1.3);
+    scale("pike", 1.4); scale("crossbow", 1.4); scale("lancer", 0.3); scale("hounds", 0.6);
     prefer.push("smoke", "barrage");
     notes.push("broken ground, so foot and shot over horse");
   } else {
     scale("archer", 1.6); scale("guard", 1.4); scale("builder", 1.3); scale("horse", 0.6);
+    scale("crossbow", 1.5); scale("oathsworn", 1.3); scale("wagon", 0.6); scale("lancer", 0.6);
     prefer.push("flare", "shield");
     notes.push("high ground, so shot from above and men who will not be shifted");
   }
@@ -204,14 +210,31 @@ export function adviseFor(level: {
   if (level.victory.mode === "objectives") {
     scale("line", 1.2); scale("guard", 1.5); scale("builder", 1.8);
     scale("healer", 1.4); scale("horse", 0.8);
+    scale("wagon", 1.8); scale("oathsworn", 1.5); scale("banner", 1.4); scale("pike", 1.2);
     prefer.unshift("shield", "levy");
     notes.push("ground to hold, so sappers and men who hold it");
   } else if (level.victory.mode === "points") {
     scale("healer", 1.5); scale("builder", 1.4); scale("archer", 1.2);
+    scale("banner", 1.3); scale("slinger", 1.3); scale("crossbow", 1.2);
     prefer.unshift("levy", "shield");
     notes.push("a long reckoning, so staying power");
+  } else if (level.victory.mode === "survive") {
+    scale("line", 1.3); scale("pike", 1.5); scale("guard", 1.4); scale("oathsworn", 1.7);
+    scale("healer", 1.5); scale("banner", 1.5); scale("horse", 0.6); scale("hounds", 0.5);
+    prefer.unshift("shield", "muster");
+    notes.push("a long wait for relief, so men who will not run");
+  } else if (level.victory.mode === "breakthrough") {
+    scale("horse", 1.4); scale("lancer", 1.4); scale("drummer", 2.4); scale("skirmisher", 1.3);
+    scale("siege", 0.4); scale("wagon", 0.5); scale("builder", 0.5);
+    prefer.unshift("forcedMarch", "smoke");
+    notes.push("somewhere to get to, so legs and the drums to keep them moving");
+  } else if (level.victory.mode === "standard") {
+    scale("banner", 2.5); scale("champion", 2.2); scale("guard", 1.4); scale("lancer", 1.3);
+    prefer.unshift("charge", "muster");
+    notes.push("colours to take and keep, so a guard for yours and a fist for theirs");
   } else {
     scale("horse", 1.2); scale("skirmisher", 1.2);
+    scale("champion", 1.6); scale("hounds", 1.3); scale("lancer", 1.2);
     prefer.unshift("barrage", "charge");
     notes.push("their nerve to break, so pressure");
   }
@@ -219,8 +242,15 @@ export function adviseFor(level: {
   // -- the clock --------------------------------------------------------------
   if (level.duration < 12 * 60) {
     // No time for an engine to crawl into position.
-    scale("siege", 0.5); scale("horse", 1.3);
+    scale("siege", 0.5); scale("horse", 1.3); scale("wagon", 0.5); scale("drummer", 1.5);
     notes.push("a short clock, so nothing slow");
+  }
+
+  if (level.night !== undefined && level.night < 1) {
+    // In the dark the side that sees first chooses the fight.
+    scale("scout", 2.2); scale("hounds", 1.6); scale("siege", 0.5); scale("archer", 0.8);
+    prefer.unshift("flare");
+    notes.push("a night battle, so eyes before anything");
   }
 
   return { weights: w, prefer, note: notes.join("; ") };

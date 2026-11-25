@@ -26,6 +26,12 @@ const MARK: Record<AbilityId, string> = {
   smoke: "░",
   flare: "☀",
   levy: "⚇",
+  muster: "⚑",
+  caltrops: "⁂",
+  firepots: "♨",
+  forcedMarch: "»",
+  parley: "⚐",
+  beacon: "♆",
 };
 
 type Slot = {

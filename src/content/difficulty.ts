@@ -13,7 +13,7 @@
  * bigger army.
  */
 
-export type DifficultyId = "recruit" | "captain" | "marshal";
+export type DifficultyId = "levy" | "recruit" | "sergeant" | "captain" | "colonel" | "marshal";
 
 export type Difficulty = {
   readonly id: DifficultyId;
@@ -29,6 +29,14 @@ export type Difficulty = {
 };
 
 export const DIFFICULTIES: Record<DifficultyId, Difficulty> = {
+  levy: {
+    id: "levy",
+    name: "Levy",
+    blurb: "Barely thinks at all and almost never concentrates. For learning the pen. Same numbers as you.",
+    thinkInterval: 60,
+    commitTicks: 160,
+    focus: 0.05,
+  },
   recruit: {
     id: "recruit",
     name: "Recruit",
@@ -37,6 +45,14 @@ export const DIFFICULTIES: Record<DifficultyId, Difficulty> = {
     commitTicks: 110,
     focus: 0.15,
   },
+  sergeant: {
+    id: "sergeant",
+    name: "Sergeant",
+    blurb: "Sound enough, a little slow to see an opening. Same numbers as you.",
+    thinkInterval: 30,
+    commitTicks: 84,
+    focus: 0.32,
+  },
   captain: {
     id: "captain",
     name: "Captain",
@@ -44,6 +60,14 @@ export const DIFFICULTIES: Record<DifficultyId, Difficulty> = {
     thinkInterval: 20,
     commitTicks: 60,
     focus: 0.5,
+  },
+  colonel: {
+    id: "colonel",
+    name: "Colonel",
+    blurb: "Quick to answer and quick to concentrate. Punishes a company left alone. Same numbers as you.",
+    thinkInterval: 14,
+    commitTicks: 44,
+    focus: 0.68,
   },
   marshal: {
     id: "marshal",
@@ -55,4 +79,6 @@ export const DIFFICULTIES: Record<DifficultyId, Difficulty> = {
   },
 };
 
-export const DIFFICULTY_IDS: readonly DifficultyId[] = ["recruit", "captain", "marshal"];
+export const DIFFICULTY_IDS: readonly DifficultyId[] = [
+  "levy", "recruit", "sergeant", "captain", "colonel", "marshal",
+];

@@ -21,7 +21,8 @@ import { openHome } from "./ui/home.ts";
 import { Tutorial } from "./ui/tutorial.ts";
 import { AbilityBar } from "./ui/ability-bar.ts";
 import { COMMANDERS } from "./content/commanders.ts";
-import { LEVELS } from "./content/levels/index.ts";
+import { LEVELS, levelById } from "./content/levels/index.ts";
+import { noteBattle, openCampaign } from "./ui/campaign.ts";
 
 /**
  * The lesson's fixed setup: the smallest field, a plain mixed force, and the
@@ -67,9 +68,25 @@ const teaching = home === "tutorial";
 // Nothing can be built until the player has chosen: the world needs the level,
 // their doctrine, and an enemy army sized by the difficulty they picked. The
 // lesson skips all of that and uses a fixed, quiet setup.
+// A campaign chapter is chosen first; it fixes the ground and the enemy captain,
+// and the ordinary setup screen then opens on it for the army.
+const chapter = home === "campaign"
+  ? await openCampaign(document.getElementById("home") as HTMLElement)
+  : null;
+const chapterLevel = chapter ? levelById(chapter.levelId) : undefined;
 const setup = teaching
   ? tutorialSetup()
-  : await openMenu(document.getElementById("menu") as HTMLElement);
+  : await openMenu(
+    document.getElementById("menu") as HTMLElement,
+    chapter && chapterLevel
+      ? {
+        title: "Chapter " + chapter.number + ": " + chapter.title,
+        level: chapterLevel,
+        commander: chapter.commander,
+        difficulty: chapter.difficulty,
+      }
+      : undefined,
+  );
 const level = setup.level;
 const diff = DIFFICULTIES[setup.difficulty];
 
@@ -82,11 +99,15 @@ const diff = DIFFICULTIES[setup.difficulty];
  */
 function enemyArmy(budget: number): ArmyList {
   const doctrine = level.enemyDoctrine;
+  // The second roster is mixed in through the list rather than tacked on the
+  // end, so even a small purse fields some of it and the enemy you meet is not
+  // always the same ten kinds of men.
   const wish: UnitTypeId[] = [
-    "line", "archer", "line", "scout", "horse", "line", "skirmisher",
-    "archer", "guard", "line", "horse", "mage", "skirmisher", "siege", "archer",
-    "line", "healer", "skirmisher", "builder", "line", "scout", "guard",
-    "archer", "horse", "line", "skirmisher", "mage", "line",
+    "line", "archer", "pike", "scout", "horse", "line", "skirmisher",
+    "crossbow", "guard", "banner", "line", "hounds", "mage", "slinger", "siege",
+    "archer", "oathsworn", "lancer", "healer", "skirmisher", "builder", "pike",
+    "drummer", "line", "scout", "champion", "guard", "wagon", "archer", "horse",
+    "line", "skirmisher", "mage", "crossbow", "line",
   ];
   const squads: UnitTypeId[] = [];
   for (const id of wish) {
@@ -117,6 +138,8 @@ const world = new World({
   victory: level.victory,
   controlPoints: level.controlPoints,
   reinforcements: level.reinforcements,
+  sightScale: level.night,
+  floodAtSeconds: level.floodAtSeconds,
 });
 world.doctrine[0] = ARMIES[0].doctrine;
 world.doctrine[1] = ARMIES[1].doctrine;
@@ -333,9 +356,13 @@ function frame(now: number): void {
   // HUD and the sim both still read.
   if (world.outcome && !reported) {
     reported = true;
+    // A campaign battle is written into the chronicle the moment it ends, win
+    // or lose, and the chronicler's entry heads the report.
+    const entry = chapter ? noteBattle(chapter.id, world.outcome.winner === PLAYER) : undefined;
     showAfterAction(
       document.getElementById("report") as HTMLElement,
       world, PLAYER, () => window.location.reload(),
+      entry ? { entry, again: "Continue the chronicle" } : undefined,
     );
   }
 
@@ -441,6 +468,19 @@ function drawHud(): void {
       Math.floor(world.points[PLAYER]) + " / " + v.target + " pts" +
       "   holding " + world.pointsHeldBy(PLAYER) + "/" + world.controlPoints.length,
     );
+  } else if (v.mode === "survive") {
+    lines.push(v.defender === PLAYER ? "hold out until the clock runs down" : "break them before time");
+  } else if (v.mode === "breakthrough") {
+    const where = world.controlPoints[v.exit]?.name ?? "the exit";
+    lines.push(
+      (v.attacker === PLAYER ? "through to " : "keep them from ") + where + ": " +
+      world.through[v.attacker] + "/" + v.required,
+    );
+  } else if (v.mode === "standard") {
+    const [a, b] = world.standardsFlying();
+    const mine = PLAYER === 0 ? a : b;
+    const theirs = PLAYER === 0 ? b : a;
+    lines.push("colours: yours " + (mine ? "flying" : "taken") + ", theirs " + (theirs ? "flying" : "taken"));
   }
   if (world.deploying) {
     lines.push("", "loop to group - glyph to form up - drag to place", "ENTER to begin");

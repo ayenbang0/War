@@ -1,0 +1,224 @@
+{
+  "beta": 0.7,
+  "k": 3,
+  "candidates": 8436,
+  "fusion_formula": "(1 - beta) * z_coh + beta * z_unavail",
+  "top_k_sequences": [
+    {
+      "rank": 1,
+      "atom_ids": [
+        18,
+        19,
+        20
+      ],
+      "atoms": [
+        "a duel of champions that sways both armies' nerve",
+        "parley and surrender instead of fighting to the last",
+        "beaten men who desert, or change sides"
+      ],
+      "coherence": 1.15,
+      "unavailability": -0.037,
+      "z_coherence": 7.132,
+      "z_unavailability": 2.006,
+      "fused": 3.544
+    },
+    {
+      "rank": 2,
+      "atom_ids": [
+        6,
+        9,
+        32
+      ],
+      "atoms": [
+        "weather front that crosses the field mid-battle",
+        "a river that rises on a clock and drowns fords",
+        "seasons that change the ground across a campaign"
+      ],
+      "coherence": 0.7611,
+      "unavailability": -0.067,
+      "z_coherence": 4.087,
+      "z_unavailability": 1.819,
+      "fused": 2.5
+    },
+    {
+      "rank": 3,
+      "atom_ids": [
+        10,
+        11,
+        29
+      ],
+      "atoms": [
+        "a standard-bearer whose banner steadies nearby men",
+        "war drums that set the pace of every company in earshot",
+        "war beasts that terrify horses"
+      ],
+      "coherence": 0.7611,
+      "unavailability": -0.087,
+      "z_coherence": 4.087,
+      "z_unavailability": 1.695,
+      "fused": 2.412
+    },
+    {
+      "rank": 4,
+      "atom_ids": [
+        21,
+        35,
+        36
+      ],
+      "atoms": [
+        "orders carried by riders who can be cut down",
+        "a map that is being drawn as you scout it",
+        "ink that runs: orders smudge if the commander's nerve fails"
+      ],
+      "coherence": 0.3333,
+      "unavailability": -0.021,
+      "z_coherence": 0.737,
+      "z_unavailability": 2.106,
+      "fused": 1.695
+    },
+    {
+      "rank": 5,
+      "atom_ids": [
+        24,
+        28,
+        31
+      ],
+      "atoms": [
+        "a named commander with a personal arc told in letters",
+        "a hostage or prisoner to recover",
+        "scout reports that can be wrong"
+      ],
+      "coherence": 0.3333,
+      "unavailability": -0.058,
+      "z_coherence": 0.737,
+      "z_unavailability": 1.875,
+      "fused": 1.534
+    },
+    {
+      "rank": 6,
+      "atom_ids": [
+        7,
+        22,
+        34
+      ],
+      "atoms": [
+        "night falls partway through, sight shrinks",
+        "standing stones that strengthen magic near them",
+        "dead left on the field that block and dishearten"
+      ],
+      "coherence": 0.2333,
+      "unavailability": -0.075,
+      "z_coherence": -0.046,
+      "z_unavailability": 1.77,
+      "fused": 1.225
+    },
+    {
+      "rank": 7,
+      "atom_ids": [
+        12,
+        15,
+        30
+      ],
+      "atoms": [
+        "panic that spreads from a breaking company to its neighbours",
+        "a breaking point that can turn into heroism instead of rout",
+        "feigned retreat that draws pursuers out of formation"
+      ],
+      "coherence": 0.5667,
+      "unavailability": -0.3083,
+      "z_coherence": 2.564,
+      "z_unavailability": 0.316,
+      "fused": 0.99
+    },
+    {
+      "rank": 8,
+      "atom_ids": [
+        13,
+        17,
+        27
+      ],
+      "atoms": [
+        "broken companies that rally if left alone",
+        "a column of non-combatants to escort",
+        "a pincer: companies arriving from a second edge"
+      ],
+      "coherence": 0.3,
+      "unavailability": -0.3233,
+      "z_coherence": 0.476,
+      "z_unavailability": 0.223,
+      "fused": 0.299
+    },
+    {
+      "rank": 9,
+      "atom_ids": [
+        5,
+        25,
+        33
+      ],
+      "atoms": [
+        "enemy intent shown before it acts",
+        "the battle written up afterward as history",
+        "a choice between battles that costs something either way"
+      ],
+      "coherence": 0.2222,
+      "unavailability": -0.3233,
+      "z_coherence": -0.133,
+      "z_unavailability": 0.223,
+      "fused": 0.116
+    },
+    {
+      "rank": 10,
+      "atom_ids": [
+        4,
+        14,
+        26
+      ],
+      "atoms": [
+        "spells cast by drawing a glyph",
+        "veterans and losses that carry between battles",
+        "fieldworks dug by sappers during the fight"
+      ],
+      "coherence": 0.2111,
+      "unavailability": -0.3233,
+      "z_coherence": -0.22,
+      "z_unavailability": 0.223,
+      "fused": 0.09
+    },
+    {
+      "rank": 11,
+      "atom_ids": [
+        8,
+        16,
+        23
+      ],
+      "atoms": [
+        "terrain that burns, floods or is broken",
+        "fatigue from marching and fighting",
+        "an enemy commander who learns your habits"
+      ],
+      "coherence": 0.1,
+      "unavailability": -0.5617,
+      "z_coherence": -1.09,
+      "z_unavailability": -1.262,
+      "fused": -1.21
+    },
+    {
+      "rank": 12,
+      "atom_ids": [
+        1,
+        2,
+        37
+      ],
+      "atoms": [
+        "army-wide morale that ends the battle when it breaks",
+        "flank and rear attacks shatter nerve",
+        "a deterministic replay you can study after defeat"
+      ],
+      "coherence": 0.3167,
+      "unavailability": -0.865,
+      "z_coherence": 0.607,
+      "z_unavailability": -3.152,
+      "fused": -2.024
+    }
+  ]
+}
