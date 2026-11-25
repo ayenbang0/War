@@ -21,9 +21,10 @@ import type { Rng } from "./rng.ts";
 const scratch = new DataView(new ArrayBuffer(8));
 
 const FNV_PRIME = 0x01000193;
-const FNV_OFFSET = 0x811c9dc5;
+/** FNV-1a offset basis; exported so the kingdom and layer hashes start from it too. */
+export const FNV_OFFSET = 0x811c9dc5;
 
-function mixU32(h: number, v: number): number {
+export function mixU32(h: number, v: number): number {
   let x = h ^ (v & 0xff);
   x = imul(x, FNV_PRIME);
   x ^= (v >>> 8) & 0xff;
@@ -35,7 +36,7 @@ function mixU32(h: number, v: number): number {
   return x | 0;
 }
 
-function mixF64(h: number, v: number): number {
+export function mixF64(h: number, v: number): number {
   scratch.setFloat64(0, v, true);
   return mixU32(mixU32(h, scratch.getUint32(0, true)), scratch.getUint32(4, true));
 }

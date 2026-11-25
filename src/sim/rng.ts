@@ -25,6 +25,21 @@ export const Stream = {
   /** Which spell an adept reaches for. Its own stream, so adding a spell to
    *  the list never shifts a combat or morale roll. */
   Magic: 0x1b873593,
+  // -- the kingdom layer (src/sim/kingdom/) ---------------------------------
+  // One stream per kingdom subsystem, for the same reason as above: a new
+  // harvest roll must never shift which way the weather turns or what a
+  // captain decides. Appended, never interleaved: the battle streams above
+  // are pinned by the `stable` golden tier and must keep their values.
+  /** Harvests, trade, taxes (K3). */
+  Economy: 0x3c6ef372,
+  /** Event cards and rumours (K8, K9). */
+  Events: 0xa54ff53a,
+  /** The captains' strategic decisions (K8). Not the battle AI's stream. */
+  KingdomAi: 0x510e527f,
+  /** Abstract resolution of battles nobody fights by hand (K5). */
+  Autoresolve: 0x9b05688c,
+  /** The day's weather, rolled at each day boundary (K1). */
+  Weather: 0x1f83d9ab,
 } as const;
 
 export type StreamId = (typeof Stream)[keyof typeof Stream];
