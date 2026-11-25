@@ -24,7 +24,7 @@ function wholeCost(c: Readonly<Partial<Record<string, number>>>): boolean {
     Object.values(c).every((v) => Number.isInteger(v) && (v as number) > 0);
 }
 
-function effectProblems(where: string, e: EventEffect): string[] {
+export function effectProblems(where: string, e: EventEffect): string[] {
   switch (e.kind) {
     case "gain": return wholeCost(e.gains) ? [] : [where + ": a gain must be whole stocks > 0"];
     case "pay": return wholeCost(e.cost) ? [] : [where + ": a price must be whole stocks > 0"];
