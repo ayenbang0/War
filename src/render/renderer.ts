@@ -101,6 +101,7 @@ export class Renderer {
 
     this.terrainLayer.draw(ctx, cam);
     this.drawGrid(world.terrain, cam);
+    this.drawGroundState(world, cam, now, viewer);
     this.drawControlPoints(world, cam, viewer);
 
     // Only your own orders are on the board; you cannot read an enemy's plan.
@@ -127,6 +128,105 @@ export class Renderer {
     this.drawBreaks(world, cam, viewer);
     this.drawWorks(world, cam, now, viewer);
     this.drawFog(world, cam, viewer);
+  }
+
+  /**
+   * The state of the ground that changes every tick, drawn live over the
+   * baked chunks: cracks spreading through a wall as it is battered, and fire.
+   *
+   * Cracks are ink, more of them the more a work is worn, so how near a wall
+   * is to falling reads without colour; a wash darkens with them. Flames are
+   * three ink-edged tongues per burning tile that flicker -- and stand still
+   * under reduced motion (docs/ui-policy.md, "Motion"), when the fire is shown
+   * by the same tongues at rest and a smoke smudge, so it is no less legible.
+   * Cracks are drawn only where the viewer can see the ground (perception), or
+   * on the viewer's own walls, which a garrison always knows the state of;
+   * fire wherever it is in the viewer's sight range, since it shows over the
+   * trees.
+   */
+  private drawGroundState(world: World, cam: Camera, clock: number, viewer: number): void {
+    const t = world.terrain;
+    if (t.worn.length === 0 && t.burning.length === 0) return;
+    const ctx = this.ctx;
+    const s = TILE_SIZE;
+    const z = cam.zoom;
+    const b = cam.bounds();
+    const inView = (i: number): { tx: number; ty: number } | null => {
+      const tx = i % t.width;
+      const ty = (i / t.width) | 0;
+      if ((tx + 1) * s < b.x0 || tx * s > b.x1 || (ty + 1) * s < b.y0 || ty * s > b.y1) return null;
+      return { tx, ty };
+    };
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const i of t.worn) {
+      const at = inView(i);
+      if (!at) continue;
+      if (t.ownerAt(at.tx, at.ty) !== viewer && !this.perception.ground((at.tx + 0.5) * s, (at.ty + 0.5) * s)) continue;
+      const left = t.integrityAt(at.tx, at.ty);
+      if (left >= 1) continue;
+      const harm = 1 - left;
+      const sx = cam.worldToScreenX(at.tx * s);
+      const sy = cam.worldToScreenY(at.ty * s);
+      ctx.globalAlpha = 0.18 + harm * 0.3;
+      ctx.fillStyle = "#3f3527";
+      ctx.fillRect(sx, sy, s * z, s * z);
+      ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = "#2b231a";
+      ctx.lineWidth = Math.max(1, 1.4 * z);
+      const cracks = 1 + Math.floor(harm * 5);
+      ctx.beginPath();
+      for (let k = 0; k < cracks; k++) {
+        let x = sx + crackHash(i, k, 1) * s * z;
+        let y = sy + crackHash(i, k, 2) * s * z;
+        ctx.moveTo(x, y);
+        for (let j = 0; j < 3; j++) {
+          x += (crackHash(i, k * 7 + j, 3) - 0.5) * s * z * 0.6;
+          y += (crackHash(i, k * 7 + j, 4) - 0.5) * s * z * 0.6;
+          ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+    }
+    const now = animTime(clock);
+    for (const i of t.burning) {
+      if (t.burn[i] === 0) continue;
+      const at = inView(i);
+      if (!at) continue;
+      const cx = (at.tx + 0.5) * s;
+      const cy = (at.ty + 0.5) * s;
+      // Within sight range is enough, line of sight or not: flame and smoke
+      // stand above a wood's canopy, and a wood burning out of view behind
+      // its own edge is still plainly alight. Out of everyone's sight, no.
+      if (world.fog[viewer].at(cx, cy) !== SEEN_NOW) continue;
+      const sx = cam.worldToScreenX(cx);
+      const sy = cam.worldToScreenY(cy);
+      // Smoke: a soft grey smudge drifting off the tile.
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = "#4a443c";
+      ctx.beginPath();
+      ctx.arc(sx + s * z * 0.15, sy - s * z * 0.35, s * z * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      for (let k = 0; k < 3; k++) {
+        const flick = motion.reduced ? 0 : Math.sin(now * 9 + i * 1.7 + k * 2.1);
+        const fx = sx + (k - 1) * s * z * 0.26;
+        const h = s * z * (0.34 + 0.08 * flick + 0.06 * crackHash(i, k, 5));
+        const w = s * z * 0.12;
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = k === 1 ? "#d9822b" : "#b5482a";
+        ctx.strokeStyle = "#3f2a18";
+        ctx.lineWidth = Math.max(0.8, 1 * z);
+        ctx.beginPath();
+        ctx.moveTo(fx - w, sy + s * z * 0.2);
+        ctx.quadraticCurveTo(fx - w, sy + s * z * 0.2 - h * 0.6, fx, sy + s * z * 0.2 - h);
+        ctx.quadraticCurveTo(fx + w, sy + s * z * 0.2 - h * 0.6, fx + w, sy + s * z * 0.2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   private drawGrid(terrain: TerrainGrid, cam: Camera): void {
@@ -1357,6 +1457,14 @@ export class Renderer {
     }
     ctx.restore();
   }
+}
+
+/** Stable per-tile jitter for cracks and flames: never random, so nothing shimmers. */
+function crackHash(tile: number, k: number, salt: number): number {
+  let h = (Math.imul(tile | 0, 0x27d4eb2d) ^ Math.imul((k + salt * 131) | 0, 0x165667b1)) | 0;
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
+  return ((h ^ (h >>> 15)) >>> 0) / 4294967296;
 }
 
 export function shortestArc(from: number, to: number): number {

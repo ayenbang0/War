@@ -395,8 +395,45 @@ Three workings — ward (soaks damage, steadies nerve), hex (amplifies damage, s
 
 A first attempt to test wards through a duel "showed" them costing lives: the control swapped the adepts for a skirmisher, whose fighting swamped the effect being measured. Wards and hexes are now measured directly on damage and morale.
 
-### Phase 8 — Destructible terrain
+### Phase 8 — Destructible terrain — **DONE**
 Damageable fortifications, burnable/clearable forest, destructible bridges, with pathing and vision invalidation on change.
+
+**What was built.**
+- Stone walls, gates and timber palisades have strength stored in the sim (`TerrainGrid.wear`, an owner per tile).
+  - Engines, sappers and barrages wear them down, and fire burns the timber ones.
+  - When one falls it becomes passable rubble with less cover.
+- Woods burn by a hashed, order-free rule (`sim/fire.ts`) and burn out to clearing. Sappers can also fell them.
+- Bridges fall into the river.
+
+**One path for every change.** Every change goes through `TerrainGrid.mutate`. It bumps `revision`, stamps the tile, and records whether the change opened ground, closed it, or changed sight.
+- Companies whose road was walled off wait at the wall and re-plan the tick a breach opens. A closure re-plans only the routes it actually cuts.
+- Sight is re-swept at once.
+- The renderer re-bakes only the chunks that hold a changed tile.
+
+**Nobody ends a tick on water or inside a wall.**
+- Ground that turns impassable under men is settled in the same tick: they are moved to the nearest standing ground and shaken (PROVISIONAL P8.2).
+- Walls are only raised before anyone deploys.
+
+**Siege level.** The siege hook is `WorldConfig.siege` / `LevelDef.siege`, and "The Siege of the Last Wall" is the playable level. Gates are closed to both sides, which is the plan's scope cut for that part (P8.1).
+
+**Verified:** `tools/siege-check.ts` (65 checks, in `npm test`):
+- walls wear and fall, and gates before the curtain
+- an assault waits at the wall and goes in through a breach
+- sight opens through a breach and through a burnt wood
+- fire is repeatable, order-free, and stops at firebreaks
+- a broken bridge blocks a crossing
+- a company on a falling span is put ashore identically on two peers
+- no man is on water or inside a wall at the end of any tick of a destruction-heavy battle
+
+`tools/lockstep.ts` adds a five-minute AI-vs-AI siege with firepots and a barrage on the log. Its two peers and its replay stay hash-identical through 200+ tile changes.
+
+`tools/render-check.ts` proves:
+- a breach re-bakes one chunk of forty
+- wear re-bakes none
+- cracks and flames draw
+- flames are still under reduced motion
+
+**Goldens.** The `stable` golden did not move. `world` moved once, for a movement fix: a mover blocked mid-leg used to drop its route, and now re-plans that leg exactly (P8.9).
 
 ### Phase 9 — Levels and win conditions — **DONE**
 Level config format (terrain, objectives, AI doctrine, magic intensity, point budget), alternate win conditions as selectable modes, minimal HUD (unit status, global morale bar, doctrine, timer), audio, tutorial.

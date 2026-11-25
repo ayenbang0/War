@@ -1,10 +1,15 @@
 /**
  * Terrain grid and its deterministic generator.
  *
- * Terrain is static for Phase 0. Phase 4 adds vision blocking and elevation
- * effects on range; Phase 8 makes fortifications, forest and bridges
- * destructible, at which point mutations must invalidate cached path and
- * vision data -- the grid already carries a `revision` counter for that.
+ * Phase 4 adds vision blocking and elevation effects on range. Phase 8 makes
+ * the ground destructible: fortifications (fieldworks, stone walls, gates,
+ * palisades) carry hit points and fall to rubble, woods burn or are felled to
+ * a clearing, bridges are broken into the river. Every change of a tile's type
+ * goes through one function, `mutate`, which bumps `revision`, stamps the
+ * tile's own revision (so the renderer re-bakes only the chunks that changed)
+ * and logs the tile for the world to settle at the next tick boundary: evict
+ * anyone standing on ground that just became impassable, re-plan the routes it
+ * cut or opened, and re-sweep sight if it changed what blocks a line of sight.
  */
 
 import { floor, imul, clamp, min } from "./math.ts";
@@ -24,6 +29,17 @@ export const Terrain = {
   Road: 8,
   /** Loose scree on a mountain's skirts: slow, broken, a little cover. */
   Scree: 9,
+  // -- Phase 8, appended: the numbers are stored in Uint8Arrays and hashed.
+  /** A stone curtain wall. Impassable until it is battered down. */
+  Wall: 10,
+  /** A gate in a wall: timber and iron, the weak point of any circuit. */
+  Gate: 11,
+  /** A timber stockade. Cheaper than stone, weaker, and it burns. */
+  Palisade: 12,
+  /** What a fallen wall, gate, palisade or fieldwork leaves: broken, passable. */
+  Rubble: 13,
+  /** A wood that has been burnt out or felled: stumps and ash, open to sight. */
+  Clearing: 14,
 } as const;
 
 export type TerrainType = (typeof Terrain)[keyof typeof Terrain];
@@ -36,6 +52,13 @@ export type TerrainInfo = {
   readonly cover: number;
   /** Blocks line of sight through the tile (Phase 4). */
   readonly blocksSight: boolean;
+  /**
+   * A parapet: blocks sight like any wall, EXCEPT for men standing right
+   * against it, who see (and are seen) over the top. That is what manning a
+   * wall means, and without it a garrison behind stone is blind and its bows
+   * are useless. See vision.ts `PARAPET_REACH`.
+   */
+  readonly parapet?: boolean;
 };
 
 export const TERRAIN_INFO: Record<TerrainType, TerrainInfo> = {
@@ -57,12 +80,73 @@ export const TERRAIN_INFO: Record<TerrainType, TerrainInfo> = {
   // over rather than merely worth walking on.
   [Terrain.Road]: { name: "road", moveScale: 1.3, cover: 0.0, blocksSight: false },
   [Terrain.Scree]: { name: "scree", moveScale: 0.55, cover: 0.2, blocksSight: false },
+  // The works of a siege. All three are impassable while they stand -- that is
+  // the difference between a wall and a fieldwork you can scramble over -- and
+  // their cover is what a missile loses crossing them into the men behind.
+  [Terrain.Wall]: { name: "wall", moveScale: 0.0, cover: 0.6, blocksSight: true, parapet: true },
+  [Terrain.Gate]: { name: "gate", moveScale: 0.0, cover: 0.5, blocksSight: true, parapet: true },
+  [Terrain.Palisade]: { name: "palisade", moveScale: 0.0, cover: 0.45, blocksSight: true, parapet: true },
+  // A breach is a way in, not a road: slow going over broken stone, and some
+  // cover left in the heaps -- but far less than the wall it was.
+  [Terrain.Rubble]: { name: "rubble", moveScale: 0.6, cover: 0.25, blocksSight: false },
+  [Terrain.Clearing]: { name: "clearing", moveScale: 0.95, cover: 0.05, blocksSight: false },
 };
+
+/**
+ * What wears down, how much it takes, and what it becomes.
+ *
+ * `hp` is in the same units as `damage()` amounts. A full battery of four
+ * engines takes a stone wall section in about half a minute; a gate falls in
+ * well under half that, which is why the engines prefer it. `fuel` is how long
+ * a burning tile burns, in ticks, before it is gone; only timber burns.
+ *
+ * What a ruined tile becomes matters as much as that it can be ruined: a
+ * broken bridge is water again and cuts the map in half, a burnt wood stops
+ * blocking sight, a breached wall is a way in. Each is a route or a sightline
+ * that did not exist a moment ago, which is the whole point.
+ */
+export type Structure = {
+  readonly hp: number;
+  readonly ruin: TerrainType;
+  /** Burn time in ticks, if this burns at all. */
+  readonly fuel?: number;
+  /** What it becomes when it burns out, if not `ruin`. */
+  readonly ash?: TerrainType;
+};
+
+export const STRUCTURE: Partial<Record<TerrainType, Structure>> = {
+  [Terrain.Fortification]: { hp: 255, ruin: Terrain.Rubble },
+  [Terrain.Bridge]: { hp: 255, ruin: Terrain.Water, fuel: 14 * 20 },
+  [Terrain.Forest]: { hp: 255, ruin: Terrain.Clearing, fuel: 30 * 20 },
+  [Terrain.Wall]: { hp: 2400, ruin: Terrain.Rubble },
+  [Terrain.Gate]: { hp: 900, ruin: Terrain.Rubble, fuel: 24 * 20 },
+  [Terrain.Palisade]: { hp: 700, ruin: Terrain.Rubble, fuel: 18 * 20 },
+};
+
+/** Walls, gates and palisades: the works a siege is fought over. */
+export function isCurtain(t: TerrainType): boolean {
+  return t === Terrain.Wall || t === Terrain.Gate || t === Terrain.Palisade;
+}
+
+/** Anything that counts as a work to be battered: curtains and fieldworks. */
+export function isWork(t: TerrainType): boolean {
+  return isCurtain(t) || t === Terrain.Fortification;
+}
 
 /** World units per tile. One soldier occupies roughly a third of a tile. */
 export const TILE_SIZE = 32;
 
 // -- deterministic value noise -------------------------------------------------
+
+/**
+ * A deterministic roll in [0, 1) for a tile at a moment, from integer hashing
+ * alone. Fire uses it rather than an rng stream: a roll that is a pure
+ * function of (tile, step, seed) cannot be shifted by the order tiles are
+ * visited in, and it draws nothing from any stream another subsystem reads.
+ */
+export function tileRoll(tile: number, step: number, seed: number): number {
+  return hash2(tile, step, seed ^ 0x6a09e667);
+}
 
 function hash2(x: number, y: number, seed: number): number {
   let h = (seed ^ imul(x | 0, 0x27d4eb2d) ^ imul(y | 0, 0x165667b1)) | 0;
@@ -112,19 +196,55 @@ export class TerrainGrid {
   /** 0..255, drives sight, ranged reach and movement bonuses. */
   readonly elevation: Uint8Array;
   /**
-   * Structural integrity, 0..255. Only meaningful on destructible tiles;
-   * everything else simply stays at full and is never touched.
+   * Damage each tile has taken since it last changed type. Zero everywhere at
+   * generation, so nothing needs initialising and a tile that changes type
+   * starts whole. A tile falls when its wear reaches STRUCTURE[type].hp.
    */
-  readonly integrity: Uint8Array;
+  readonly wear: Float64Array;
+  /** Ticks of burning left on each tile; 0 = not alight. */
+  readonly burn: Uint16Array;
+  /**
+   * Which side a work belongs to, -1 for nobody: the defender's walls in a
+   * siege, the side that dug a fieldwork. Engines never batter their own.
+   */
+  readonly owner: Int8Array;
+  /**
+   * The revision at which each tile last changed type. Derived bookkeeping for
+   * the renderer, which re-bakes only the chunks holding a tile newer than the
+   * chunk; never hashed, because nothing in the sim reads it back.
+   */
+  readonly tileRevision: Uint32Array;
+  /** Tiles alight, ascending by index. Fire is stepped in this order. */
+  readonly burning: number[] = [];
+  /** Tiles with wear on them, for drawing cracks. Unordered; render only. */
+  readonly worn: number[] = [];
   /** Bumped on any mutation so caches (paths, vision, render chunks) can invalidate. */
   revision = 0;
+  /** Revision of the last change that made impassable ground passable (a breach). */
+  openedAt = 0;
+  /** Revision of the last change that made passable ground impassable. */
+  closedAt = 0;
+  /** Revision of the last change to what blocks a line of sight. */
+  sightAt = 0;
+  /**
+   * True once anything has worn, burnt, been owned or changed type after
+   * generation. The world hash covers the destructible state only from then
+   * on, so a battle in which nothing is ever touched hashes exactly as it did
+   * before destructible terrain existed.
+   */
+  dynamic = false;
+  /** Tiles whose type changed since the world last settled them, in order. */
+  private changes: number[] = [];
 
   constructor(width: number, height: number) {
     this.width = width;
     this.height = height;
     this.type = new Uint8Array(width * height);
     this.elevation = new Uint8Array(width * height);
-    this.integrity = new Uint8Array(width * height).fill(255);
+    this.wear = new Float64Array(width * height);
+    this.burn = new Uint16Array(width * height);
+    this.owner = new Int8Array(width * height).fill(-1);
+    this.tileRevision = new Uint32Array(width * height);
   }
 
   get worldWidth(): number {
@@ -162,42 +282,75 @@ export class TerrainGrid {
     return TERRAIN_INFO[this.typeAt(tx, ty)].moveScale > 0;
   }
 
+  /**
+   * THE one way a tile changes type after generation.
+   *
+   * Everything a change invalidates is decided here and only here: the
+   * revision moves (render chunks, perception, routes), the tile is stamped
+   * for a per-chunk re-bake, and the kind of change is recorded -- opened,
+   * closed, sight -- so the world re-plans only the routes that could be
+   * affected and re-sweeps sight only when something that blocks it moved.
+   */
+  private mutate(i: number, t: TerrainType): void {
+    const was = TERRAIN_INFO[this.type[i] as TerrainType];
+    const now = TERRAIN_INFO[t];
+    this.type[i] = t;
+    this.wear[i] = 0;
+    this.burn[i] = 0;
+    if (!isWork(t)) this.owner[i] = -1;
+    this.revision++;
+    this.tileRevision[i] = this.revision;
+    if (was.moveScale <= 0 && now.moveScale > 0) this.openedAt = this.revision;
+    if (was.moveScale > 0 && now.moveScale <= 0) this.closedAt = this.revision;
+    if (was.blocksSight !== now.blocksSight || was.parapet !== now.parapet) this.sightAt = this.revision;
+    this.dynamic = true;
+    this.changes.push(i);
+  }
+
+  /** Hand over the tiles changed since the last call, oldest first. */
+  drainChanges(): number[] {
+    const out = this.changes;
+    this.changes = [];
+    return out;
+  }
+
   set(tx: number, ty: number, t: TerrainType): void {
     if (!this.inBounds(tx, ty)) return;
-    this.type[ty * this.width + tx] = t;
-    this.integrity[ty * this.width + tx] = 255;
-    this.revision++;
+    this.mutate(ty * this.width + tx, t);
   }
 
   /**
    * Wear a tile down. Returns true if it collapsed into something else.
    *
-   * What a ruined tile becomes matters as much as that it can be ruined: a
-   * broken bridge is water again and cuts the map in half, a burnt wood stops
-   * blocking sight, a breached wall is open ground. Each is a route or a
-   * sightline that did not exist a moment ago, which is the whole point.
+   * See STRUCTURE for what each work takes and becomes.
    */
   damage(tx: number, ty: number, amount: number): boolean {
-    if (!this.inBounds(tx, ty)) return false;
+    if (!this.inBounds(tx, ty) || amount <= 0) return false;
     const i = ty * this.width + tx;
-    const t = this.type[i] as TerrainType;
-    // `=== undefined`, not a truthiness test: forest and fortifications both
-    // collapse into Terrain.Plain, which is 0, so `!DESTRUCTIBLE[t]` quietly
-    // declared them indestructible. Only bridges worked, because Water is 3.
-    const ruined = DESTRUCTIBLE[t];
-    if (ruined === undefined) return false;
-
-    const left = this.integrity[i] - amount;
-    if (left > 0) {
-      this.integrity[i] = left;
-      return false;
-    }
-    this.type[i] = ruined;
-    this.integrity[i] = 255;
-    // Bumping the revision is what invalidates cached render chunks AND tells
-    // squads their route may no longer exist.
-    this.revision++;
+    const st = STRUCTURE[this.type[i] as TerrainType];
+    if (st === undefined) return false;
+    if (this.wear[i] === 0) this.worn.push(i);
+    this.wear[i] += amount;
+    this.dynamic = true;
+    if (this.wear[i] < st.hp) return false;
+    this.collapse(i, st.ruin);
     return true;
+  }
+
+  /** A tile falls: drop it from the worn list and turn it into its ruin. */
+  private collapse(i: number, ruin: TerrainType): void {
+    const at = this.worn.indexOf(i);
+    if (at >= 0) this.worn.splice(at, 1);
+    this.mutate(i, ruin);
+  }
+
+  /** How much of a destructible tile is left, 0..1 (1 for anything else). */
+  integrityAt(tx: number, ty: number): number {
+    if (!this.inBounds(tx, ty)) return 1;
+    const i = ty * this.width + tx;
+    const st = STRUCTURE[this.type[i] as TerrainType];
+    if (st === undefined) return 1;
+    return clamp(1 - this.wear[i] / st.hp, 0, 1);
   }
 
   /**
@@ -209,35 +362,87 @@ export class TerrainGrid {
    * Bumps the revision like any other terrain change, which is what re-bakes
    * the render chunks and tells every company its route may have changed.
    */
-  fortify(tx: number, ty: number): boolean {
-    if (!this.inBounds(tx, ty)) return false;
+  fortify(tx: number, ty: number, player = -1): boolean {
+    if (!this.fortifiableAt(tx, ty)) return false;
     const i = ty * this.width + tx;
-    const t = this.type[i] as TerrainType;
-    if (t !== Terrain.Plain && t !== Terrain.Road && t !== Terrain.Scree) return false;
-    this.type[i] = Terrain.Fortification;
-    this.integrity[i] = 255;
-    this.revision++;
+    this.mutate(i, Terrain.Fortification);
+    this.owner[i] = player;
     return true;
   }
 
   /** True where a fieldwork could be raised. */
   fortifiableAt(tx: number, ty: number): boolean {
     const t = this.typeAt(tx, ty);
-    return t === Terrain.Plain || t === Terrain.Road || t === Terrain.Scree;
+    return t === Terrain.Plain || t === Terrain.Road || t === Terrain.Scree ||
+      t === Terrain.Rubble || t === Terrain.Clearing;
+  }
+
+  /**
+   * Build a curtain (wall, gate or palisade) for a side. Setup only: this is
+   * how a siege battlefield is laid out before anyone stands on it, never
+   * something done under men's feet. Water and mountain are left alone -- a
+   * river or a cliff is already a wall.
+   */
+  raise(tx: number, ty: number, t: TerrainType, player: number): boolean {
+    if (!this.inBounds(tx, ty) || !isCurtain(t)) return false;
+    const i = ty * this.width + tx;
+    const cur = this.type[i] as TerrainType;
+    if (cur === Terrain.Water || cur === Terrain.Mountain) return false;
+    this.mutate(i, t);
+    this.owner[i] = player;
+    return true;
   }
 
   /** True where a tile can be worn down at all. */
   destructibleAt(tx: number, ty: number): boolean {
-    return DESTRUCTIBLE[this.typeAt(tx, ty)] !== undefined;
+    return STRUCTURE[this.typeAt(tx, ty)] !== undefined;
+  }
+
+  /** Whose work this is, or -1. */
+  ownerAt(tx: number, ty: number): number {
+    if (!this.inBounds(tx, ty)) return -1;
+    return this.owner[ty * this.width + tx];
+  }
+
+  flammableAt(tx: number, ty: number): boolean {
+    return STRUCTURE[this.typeAt(tx, ty)]?.fuel !== undefined;
+  }
+
+  burningAt(tx: number, ty: number): boolean {
+    return this.inBounds(tx, ty) && this.burn[ty * this.width + tx] > 0;
+  }
+
+  /** Set a tile alight. False if it does not burn or is already burning. */
+  ignite(tx: number, ty: number): boolean {
+    if (!this.inBounds(tx, ty)) return false;
+    const i = ty * this.width + tx;
+    const fuel = STRUCTURE[this.type[i] as TerrainType]?.fuel;
+    if (fuel === undefined || this.burn[i] > 0) return false;
+    this.burn[i] = fuel;
+    this.dynamic = true;
+    // Kept sorted so fire is always stepped in tile order, whoever lit what.
+    let at = this.burning.length;
+    while (at > 0 && this.burning[at - 1] > i) at--;
+    this.burning.splice(at, 0, i);
+    return true;
+  }
+
+  /**
+   * Burn a tile for `ticks`. Returns true if it burnt out (and fell). Only
+   * fire.ts calls this; it keeps `burning` in step itself.
+   */
+  burnDown(i: number, ticks: number): boolean {
+    const left = this.burn[i] - ticks;
+    if (left > 0) {
+      this.burn[i] = left;
+      return false;
+    }
+    this.burn[i] = 0;
+    const st = STRUCTURE[this.type[i] as TerrainType];
+    if (st !== undefined) this.collapse(i, st.ash ?? st.ruin);
+    return true;
   }
 }
-
-/** What each destructible terrain becomes when it fails. */
-const DESTRUCTIBLE: Partial<Record<TerrainType, TerrainType>> = {
-  [Terrain.Fortification]: Terrain.Plain,
-  [Terrain.Bridge]: Terrain.Water,
-  [Terrain.Forest]: Terrain.Plain,
-};
 
 /**
  * Generate a battlefield: a river splitting the map with bridge crossings,

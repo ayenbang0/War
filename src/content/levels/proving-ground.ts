@@ -7,6 +7,7 @@
  */
 
 import type { ControlPoint, VictoryConfig } from "../../sim/victory.ts";
+import type { SiegeWorks } from "../../sim/siege.ts";
 import type { UnitTypeId } from "../unit-types.ts";
 import type { DoctrineId } from "../doctrines.ts";
 import type { DifficultyId } from "../difficulty.ts";
@@ -59,6 +60,17 @@ export type LevelDef = {
   readonly night?: number;
   /** The river rises at this second: bridges and marsh go under. */
   readonly floodAtSeconds?: number;
+  /**
+   * A siege: walls and gates raised round the defended place (sim/siege.ts).
+   * The deployment zone of the defender must lie inside the circuit.
+   */
+  readonly siege?: SiegeWorks;
+  /**
+   * Companies the machine fields before anything else, for a battlefield
+   * that cannot be fought without them -- engines and sappers for an assault
+   * on a wall. Still bought from its budget and held to every rule.
+   */
+  readonly enemyCore?: readonly UnitTypeId[];
 };
 
 export const provingGround: LevelDef = {

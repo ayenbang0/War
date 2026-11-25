@@ -67,7 +67,9 @@ export function enemyArmy(level: LevelDef, budget: number): ArmyList {
     "line", "skirmisher", "mage", "crossbow", "line",
   ];
   const squads: UnitTypeId[] = [];
-  for (const id of wish) {
+  // A siege cannot be fought without engines: the level's core goes first,
+  // bought from the same purse and held to the same caps as anything else.
+  for (const id of [...(level.enemyCore ?? []), ...wish]) {
     squads.push(id);
     if (!validate({ doctrine, squads }, budget).ok) squads.pop();
   }

@@ -127,6 +127,67 @@ export function findPath(
   toX: number,
   toY: number,
 ): number[] {
+  return search(grid, fromX, fromY, toX, toY, false, false).route;
+}
+
+/** A route, and whether it actually gets where it was asked to go. */
+export type RouteResult = { route: number[]; reached: boolean };
+
+/**
+ * Route as far toward a point as the ground allows.
+ *
+ * The same search as findPath, but when the goal cannot be reached at all --
+ * the far side of an unbroken wall, a garrison inside its circuit -- it walks
+ * to the reachable tile closest to the goal instead of refusing. That is what
+ * an assault looks like: ordered into a town, a company marches up to the wall
+ * and waits there, and the world knows the route fell short (`reached` false)
+ * so it can try again the moment a breach opens.
+ *
+ * Kept apart from findPath so the stable path golden, which pins findPath,
+ * cannot move because of it.
+ */
+export function findPathPartial(
+  grid: TerrainGrid,
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+): RouteResult {
+  return search(grid, fromX, fromY, toX, toY, true, false);
+}
+
+/**
+ * Route as findPathPartial does, but walkable to the letter from the exact
+ * start point.
+ *
+ * The ordinary route is string-pulled from the CENTRE of the start tile and
+ * checked at half-tile samples (clearLine). A mover, though, tests every point
+ * it steps to, so a leg that grazes the corner of a cliff or a wall between
+ * two samples -- or one that only the tile centre could see past -- stops it
+ * dead. This variant pulls from the real start and keeps a waypoint only when
+ * every tile the straight line crosses is open (strictLine), so nothing it
+ * returns can block. The world asks for it only when a mover has actually
+ * been blocked, which keeps every route that already walked exactly as it was.
+ */
+export function findPathStrict(
+  grid: TerrainGrid,
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+): RouteResult {
+  return search(grid, fromX, fromY, toX, toY, true, true);
+}
+
+function search(
+  grid: TerrainGrid,
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  partial: boolean,
+  strict = false,
+): RouteResult {
   const sx = clampTile(floor(fromX / TILE_SIZE), grid.width);
   const sy = clampTile(floor(fromY / TILE_SIZE), grid.height);
   let gx = clampTile(floor(toX / TILE_SIZE), grid.width);
@@ -138,7 +199,7 @@ export function findPath(
   // Route to the closest reachable tile instead of refusing outright.
   if (!grid.passableAt(gx, gy)) {
     const near = nearestPassable(grid, gx, gy);
-    if (near < 0) return [];
+    if (near < 0) return { route: [], reached: false };
     gx = near % grid.width;
     gy = (near / grid.width) | 0;
     goalX = (gx + 0.5) * TILE_SIZE;
@@ -151,7 +212,7 @@ export function findPath(
   let ssy = sy;
   if (!grid.passableAt(sx, sy)) {
     const near = nearestPassable(grid, sx, sy);
-    if (near < 0) return [];
+    if (near < 0) return { route: [], reached: false };
     ssx = near % grid.width;
     ssy = (near / grid.width) | 0;
     escape = [(ssx + 0.5) * TILE_SIZE, (ssy + 0.5) * TILE_SIZE];
@@ -159,7 +220,9 @@ export function findPath(
 
   const start = ssy * grid.width + ssx;
   const goal = gy * grid.width + gx;
-  if (start === goal) return escape ? escape.concat([goalX, goalY]) : [goalX, goalY];
+  if (start === goal) {
+    return { route: escape ? escape.concat([goalX, goalY]) : [goalX, goalY], reached: true };
+  }
 
   const s = scratchFor(grid);
   s.epoch++;
@@ -172,19 +235,31 @@ export function findPath(
   s.state[start] = 1;
   heapPush(s, start);
 
+  // The closest tile to the goal the search has settled, for a partial route.
+  // Closest by the heuristic, ties to the lower index, like everything else.
+  let best = start;
+  let bestH = s.fScore[start];
+
   let expansions = 0;
   while (s.heapSize > 0) {
     const current = heapPop(s);
     if (current === goal) {
-      const route = reconstruct(grid, s, goal, goalX, goalY);
-      return escape ? escape.concat(route) : route;
+      const route = reconstruct(grid, s, goal, goalX, goalY, strict && !escape ? [fromX, fromY] : null);
+      return { route: escape ? escape.concat(route) : route, reached: true };
     }
     if (s.state[current] === 2) continue;
     s.state[current] = 2;
-    if (++expansions > MAX_EXPANSIONS) return [];
+    if (++expansions > MAX_EXPANSIONS) break;
 
     const cx = current % grid.width;
     const cy = (current / grid.width) | 0;
+    if (partial) {
+      const h = heuristic(cx, cy, gx, gy);
+      if (h < bestH || (h === bestH && current < best)) {
+        bestH = h;
+        best = current;
+      }
+    }
 
     for (let k = 0; k < NEIGHBOURS.length; k += 2) {
       const stepX = NEIGHBOURS[k];
@@ -222,7 +297,11 @@ export function findPath(
       }
     }
   }
-  return [];
+  if (!partial || best === start) return { route: [], reached: false };
+  const bx = ((best % grid.width) + 0.5) * TILE_SIZE;
+  const by = (((best / grid.width) | 0) + 0.5) * TILE_SIZE;
+  const route = reconstruct(grid, s, best, bx, by, strict && !escape ? [fromX, fromY] : null);
+  return { route: escape ? escape.concat(route) : route, reached: false };
 }
 
 function clampTile(v: number, n: number): number {
@@ -251,6 +330,8 @@ function reconstruct(
   goal: number,
   toX: number,
   toY: number,
+  /** For a strict route: the exact start point to pull from. */
+  from: readonly number[] | null = null,
 ): number[] {
   const tiles: number[] = [];
   let node = goal;
@@ -268,7 +349,81 @@ function reconstruct(
   }
   pts[pts.length - 2] = toX;
   pts[pts.length - 1] = toY;
-  return stringPull(grid, pts);
+  if (from === null) return stringPull(grid, pts);
+  pts[0] = from[0];
+  pts[1] = from[1];
+  return strictPull(grid, pts);
+}
+
+/**
+ * String-pull with strictLine: drop a waypoint only when the kept one before
+ * it has a strictly open line past it. Consecutive tile centres of an A* path
+ * are always strictly open (diagonals never squeeze past a blocked tile), so
+ * the result always walks -- unless the exact start sits so near a blocked
+ * corner that even its first tile centre is cut off, in which case the start
+ * tile's centre is kept as the first waypoint.
+ */
+function strictPull(grid: TerrainGrid, pts: number[]): number[] {
+  const out: number[] = [];
+  let anchorX = pts[0];
+  let anchorY = pts[1];
+  for (let i = 2; i < pts.length - 2; i += 2) {
+    if (!strictLine(grid, anchorX, anchorY, pts[i + 2], pts[i + 3])) {
+      out.push(pts[i], pts[i + 1]);
+      anchorX = pts[i];
+      anchorY = pts[i + 1];
+    }
+  }
+  out.push(pts[pts.length - 2], pts[pts.length - 1]);
+  if (out.length >= 2 && !strictLine(grid, pts[0], pts[1], out[0], out[1])) {
+    const tx = floor(pts[0] / TILE_SIZE);
+    const ty = floor(pts[1] / TILE_SIZE);
+    out.unshift((tx + 0.5) * TILE_SIZE, (ty + 0.5) * TILE_SIZE);
+  }
+  return out;
+}
+
+/**
+ * True when EVERY tile the exact segment crosses is passable: a grid walk
+ * (Amanatides-Woo), not samples, so no corner can slip between two checks.
+ * Passing exactly through a grid corner counts as a diagonal step and needs
+ * both side tiles open, the same rule A* keeps.
+ */
+export function strictLine(
+  grid: TerrainGrid,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): boolean {
+  let tx = floor(ax / TILE_SIZE);
+  let ty = floor(ay / TILE_SIZE);
+  if (!grid.passableAt(tx, ty)) return false;
+  const dx = bx - ax;
+  const dy = by - ay;
+  const sx = dx > 0 ? 1 : dx < 0 ? -1 : 0;
+  const sy = dy > 0 ? 1 : dy < 0 ? -1 : 0;
+  let tMaxX = sx > 0 ? ((tx + 1) * TILE_SIZE - ax) / dx : sx < 0 ? (tx * TILE_SIZE - ax) / dx : Infinity;
+  let tMaxY = sy > 0 ? ((ty + 1) * TILE_SIZE - ay) / dy : sy < 0 ? (ty * TILE_SIZE - ay) / dy : Infinity;
+  const tDeltaX = sx !== 0 ? TILE_SIZE / abs(dx) : Infinity;
+  const tDeltaY = sy !== 0 ? TILE_SIZE / abs(dy) : Infinity;
+  while (min(tMaxX, tMaxY) <= 1) {
+    if (tMaxX < tMaxY) {
+      tx += sx;
+      tMaxX += tDeltaX;
+    } else if (tMaxY < tMaxX) {
+      ty += sy;
+      tMaxY += tDeltaY;
+    } else {
+      if (!grid.passableAt(tx + sx, ty) || !grid.passableAt(tx, ty + sy)) return false;
+      tx += sx;
+      ty += sy;
+      tMaxX += tDeltaX;
+      tMaxY += tDeltaY;
+    }
+    if (!grid.passableAt(tx, ty)) return false;
+  }
+  return true;
 }
 
 /** Drop any waypoint the previous kept waypoint can already see past. */

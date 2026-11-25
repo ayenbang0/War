@@ -19,6 +19,11 @@ export const terrainFill: Record<number, string> = {
   7: "#8f9a72", // marsh: sickly green, close to the plain it deceives you into
   8: "#c9ae82", // road: a pale beaten track
   9: "#b4a893", // scree: grey-brown broken ground skirting the peaks
+  10: "#857a6a", // wall: dressed stone, darker and colder than any ground
+  11: "#7d6143", // gate: oak and iron, warm against the stone either side
+  12: "#9a7c55", // palisade: raw timber
+  13: "#c4b69a", // rubble: broken stone spilt over the plain, passable
+  14: "#cfc29f", // clearing: stumps and ash where a wood was
 };
 
 // -- palette roles (audit RF-01, RF-02) -----------------------------------------

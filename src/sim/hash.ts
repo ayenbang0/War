@@ -73,6 +73,14 @@ export function hashWorld(world: World): string {
     for (const p of g.path) h = mixF64(h, p);
     h = mixU32(h, g.patrol.length);
     for (const p of g.patrol) h = mixF64(h, p);
+    // A route that fell short is an order still pending: where it is for
+    // decides where the company goes when a breach opens. Mixed only while it
+    // is pending, so a battle with no walls hashes exactly as it always has.
+    if (g.routeShort) {
+      h = mixU32(h, 0x53484f52);
+      h = mixF64(h, g.goalX);
+      h = mixF64(h, g.goalY);
+    }
   }
 
   // Soldiers are the bulk of the state and the thing most likely to drift, so
@@ -95,6 +103,13 @@ export function hashWorld(world: World): string {
     h = mixF64(h, s.cooldown[i]);
     h = mixF64(h, s.ammo[i]);
   }
+
+  // Destructible ground: what each tile is, how worn, what is alight and whose
+  // works are whose. The revision alone (hashed above) sees only that SOMETHING
+  // changed, not wear accumulating toward a collapse two peers might reach a
+  // tick apart. Covered from the first moment anything is touched; a battle in
+  // which nothing ever is hashes exactly as it did before Phase 8.
+  if (world.terrain.dynamic) h = mixTerrainState(h, world.terrain);
 
   // Workings alter damage and morale, so they are state, not decoration.
   h = mixU32(h, world.workings.length);
@@ -122,6 +137,20 @@ export function hashWorld(world: World): string {
   }
 
   return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+function mixTerrainState(h: number, t: TerrainGrid): number {
+  for (let i = 0; i < t.type.length; i++) {
+    h = mixU32(h, t.type[i]);
+    if (t.wear[i] !== 0) {
+      h = mixU32(h, i);
+      h = mixF64(h, t.wear[i]);
+    }
+    if (t.burn[i] !== 0) h = mixU32(h, (i << 16) ^ t.burn[i]);
+    if (t.owner[i] !== -1) h = mixU32(h, i * 4 + t.owner[i]);
+  }
+  h = mixU32(h, t.burning.length);
+  return h;
 }
 
 /**

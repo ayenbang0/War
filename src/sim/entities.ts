@@ -217,6 +217,16 @@ export type Group = {
   radius: number;
   path: number[];
   pathRevision: number;
+  /**
+   * The last route planned fell short of where it was ordered: the goal lies
+   * beyond a wall, or across a river with no standing bridge. The company
+   * marches as close as the ground allows and waits there, still under its
+   * order, and re-plans to (goalX, goalY) the moment anything opens -- that is
+   * how an assault pours through a breach without being told again.
+   */
+  routeShort: boolean;
+  goalX: number;
+  goalY: number;
   stance: Stance;
   /** Group id being attacked, or -1. */
   target: number;
