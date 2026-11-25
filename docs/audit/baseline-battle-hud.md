@@ -87,3 +87,11 @@ All of these listeners sit on `window`. They are attached once the menus resolve
 - Keyboard-only pass: Tab order through the ability bar and report, visible focus style, and Esc/Enter on the report.
 - State pass: 45 squads in "Your companies", 12 abilities, pause then blur then resume, resize mid-stroke, window blur mid-stroke (the pen has no blur handler), and `localStorage` refused at `noteBattle`.
 - Perf: frame cost of the per-frame `soldiersOf`/`armyMorale` scans and DOM rewrites at 4096 soldiers (BH-02).
+
+## K2 status
+
+Findings fixed by K2 (branch `k2fix`). Anything not listed keeps its original owner.
+
+| id | status | how |
+|---|---|---|
+| FL-01 | fixed in K2 (91ac90c) | placement is a `place` order applied at the tick boundary; refused whole onto impassable ground or off the map |

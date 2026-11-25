@@ -1,22 +1,78 @@
 /*
  * The game's one stylesheet, shared by index.html (the game) and e2e.html (the
  * browser test harness), so both pages lay the same screens out identically.
+ *
+ * It follows ONE scaling policy, written down in docs/ui-policy.md (audit
+ * BS-06, BS-07, BS-08, RT-02): sizes in rem off the browser's own root size,
+ * so the player's text-size and zoom settings are honoured; no body or HUD
+ * text below 1rem (16 px at the default); every text colour at 4.5:1 or
+ * better against the panel it sits on (3:1 for large text and UI glyphs);
+ * an authored focus ring; one scroll region per screen; motion reduced when
+ * the player asks. The kingdom screens use the same tokens.
  */
+:root {
+  /* Inks. --ink-2 is the darkest the old secondary ink could go and still read
+     as secondary: 4.7:1 or better on every panel colour below. */
+  --ink: #3a3124;
+  --ink-1: #5f5138;
+  --ink-2: #6d5c40;
+  --friend: #30507c;
+  --foe: #7a3029;
+  --panel: #e7dfcb;
+  --panel-2: #efe8d6;
+  --focus: #1f3f66;
+  --focus-halo: #f7f1e2;
+  --mono: ui-monospace, "Cascadia Mono", Menlo, monospace;
+  /* The body text floor. Nothing a player reads is smaller. */
+  --text: 1rem;
+  --text-lg: 1.125rem;
+}
+html { font-size: 100%; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: #d9cbb0; }
+/*
+ * An authored focus ring (BS-10), unlike hover in kind, not just in degree:
+ * hover changes a button's fill, focus draws a two-tone ring outside it -- a
+ * pale halo under a dark ring -- so it holds 3:1 on parchment, on the blue
+ * primary buttons and over the map alike.
+ */
+:focus { outline: none; }
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--focus-halo);
+}
+/* Motion, reduced when asked (docs/ui-policy.md "Motion"). The battlefield
+   reads the same preference in src/render/motion.ts. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+  }
+}
 canvas { display: block; touch-action: none; cursor: crosshair; }
 canvas.panning { cursor: grabbing; }
 .panel {
   position: fixed;
-  font: 11px/1.45 ui-monospace, "Cascadia Mono", Menlo, monospace;
+  font: var(--text)/1.45 var(--mono);
   color: #4a3f30;
-  background: rgba(235, 227, 209, 0.78);
+  /* Near-opaque: the panel sits over forest and water as well as parchment,
+     and its text must hold 4.5:1 over the darkest of them. */
+  background: rgba(235, 227, 209, 0.92);
   border: 1px solid rgba(120, 102, 74, 0.4);
-  padding: 7px 9px;
+  padding: 0.45rem 0.6rem;
   border-radius: 3px;
   pointer-events: none;
-  white-space: pre;
+  /* Line breaks are kept, but long lines WRAP to the window (BS-08): at 200%
+     zoom the lesson text reflows instead of running off the edge. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-#hud { left: 12px; top: 12px; font-size: 13px; line-height: 1.5; letter-spacing: 0.02em; }
+#hud {
+  left: max(12px, env(safe-area-inset-left)); top: max(12px, env(safe-area-inset-top));
+  line-height: 1.5; letter-spacing: 0.01em;
+  max-width: min(34rem, calc(100vw - 24px));
+  max-height: calc(100vh - 24px); overflow: hidden;
+}
 /* RT-01: the HUD is emptied whenever no battle is live, and an empty panel
    must not show as a dark box behind the menu screens. */
 #hud:empty { display: none; }
@@ -24,209 +80,227 @@ canvas.panning { cursor: grabbing; }
 .after-action {
   position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
   background: rgba(38, 32, 22, 0.86); z-index: 12; overflow: auto; padding: 24px;
-  font: 13px/1.5 ui-monospace, "Cascadia Mono", Menlo, monospace; color: #3a3124;
+  font: var(--text)/1.5 var(--mono); color: var(--ink);
+  /* One scroll region per screen (RT-02): the overlay scrolls, the panel does
+     not, and `margin: auto` centres it without cutting off its top. */
+  align-items: flex-start;
 }
 .aa-panel {
-  background: #e7dfcb; border: 1px solid #a3906c; border-radius: 4px;
-  padding: 22px 26px; max-width: 640px; width: 100%; max-height: 100%; overflow: auto;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+  background: var(--panel); border: 1px solid #a3906c; border-radius: 4px;
+  padding: 1.4rem 1.6rem; max-width: 44rem; width: 100%; margin: auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.35); box-sizing: border-box;
 }
-.aa-verdict { margin: 0 0 2px; font-size: 22px; letter-spacing: 1px; }
-.aa-won { color: #3b5f8a; }
-.aa-lost { color: #8c3a34; }
-.aa-drew { color: #6b5c40; }
-.aa-detail { margin: 0 0 16px; color: #7a6848; }
+.aa-verdict { margin: 0 0 2px; font-size: 1.5rem; letter-spacing: 1px; }
+.aa-won { color: var(--friend); }
+.aa-lost { color: var(--foe); }
+.aa-drew { color: var(--ink-2); }
+.aa-detail { margin: 0 0 16px; color: var(--ink-2); }
 .aa-panel h2 {
-  font-size: 11px; letter-spacing: 1.6px; text-transform: uppercase;
-  color: #8a7856; margin: 18px 0 6px; font-weight: 600;
+  font-size: var(--text); letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-2); margin: 18px 0 6px; font-weight: 600;
 }
-.aa-panel h3 { font-size: 13px; margin: 0 0 6px; font-weight: 600; }
-.aa-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.aa-panel h3 { font-size: var(--text); margin: 0 0 6px; font-weight: 600; }
+.aa-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 18px; }
 .aa-col {
-  border: 1px solid #cbbc9c; border-radius: 3px; padding: 8px 10px; background: #efe8d6;
+  border: 1px solid #cbbc9c; border-radius: 3px; padding: 8px 10px; background: var(--panel-2);
 }
-.aa-stat { display: flex; justify-content: space-between; gap: 10px; }
-.aa-label { color: #5f5138; }
+.aa-stat { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.aa-label { color: var(--ink-1); }
 .aa-value { font-weight: 600; }
 .aa-lesson {
-  margin: 12px 0 0; padding: 8px 10px; background: #efe8d6;
-  border-left: 3px solid #8c3a34; color: #5f5138;
+  margin: 12px 0 0; padding: 8px 10px; background: var(--panel-2);
+  border-left: 3px solid var(--foe); color: var(--ink-1);
 }
 .aa-companies { display: grid; gap: 3px; }
 .aa-company {
-  display: grid; grid-template-columns: 1.2fr 1.4fr auto; gap: 10px;
-  padding: 4px 8px; background: #efe8d6; border: 1px solid #ded2b6; border-radius: 2px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 2px 10px;
+  padding: 4px 8px; background: var(--panel-2); border: 1px solid #ded2b6; border-radius: 2px;
 }
 .aa-name { font-weight: 600; }
-.aa-record { color: #7a6848; }
-.aa-fate { color: #8a7856; text-align: right; }
+.aa-record { color: var(--ink-2); }
+.aa-fate { color: var(--ink-2); }
 .aa-log { display: grid; gap: 2px; }
-.aa-log-line { color: #5f5138; }
+.aa-log-line { color: var(--ink-1); }
 .aa-again { margin-top: 20px; padding: 8px 18px; font: inherit; cursor: pointer; }
 /* -- home screen --------------------------------------------------------- */
 .home {
   position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
   background: rgba(38, 32, 22, 0.9); z-index: 14; overflow: auto; padding: 24px;
-  font: 13px/1.6 ui-monospace, "Cascadia Mono", Menlo, monospace; color: #3a3124;
+  font: var(--text)/1.6 var(--mono); color: var(--ink);
+  align-items: flex-start;
 }
 .home-panel {
-  background: #e7dfcb; border: 1px solid #a3906c; border-radius: 4px;
-  padding: 34px 40px 28px; max-width: 660px; width: 100%; max-height: 100%; overflow: auto;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.35); text-align: center;
+  background: var(--panel); border: 1px solid #a3906c; border-radius: 4px;
+  padding: 2rem 2.4rem 1.75rem; max-width: 46rem; width: 100%; margin: auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.35); text-align: center; box-sizing: border-box;
 }
 .home-title {
-  margin: 0; font-size: 58px; letter-spacing: 16px; font-weight: 600;
-  color: #3b3227; text-indent: 16px;
+  margin: 0; font-size: 3.6rem; letter-spacing: 0.28em; font-weight: 600;
+  color: #3b3227; text-indent: 0.28em;
 }
-.home-tagline { margin: 2px 0 26px; color: #7a6848; }
-.home-actions { display: flex; gap: 12px; justify-content: center; margin-bottom: 10px; }
-.home-play, .home-teach { font: inherit; cursor: pointer; padding: 13px 34px; border-radius: 3px; }
+.home-tagline { margin: 2px 0 26px; color: var(--ink-2); }
+.home-actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-bottom: 10px; }
+.home-play, .home-teach { font: inherit; cursor: pointer; padding: 0.8rem 2.1rem; border-radius: 3px; }
 .home-play {
-  background: #3b5f8a; color: #f2ead6; border: 1px solid #2e4a6d;
-  font-size: 17px; font-weight: 600; letter-spacing: 2px; padding: 13px 54px;
+  background: var(--friend); color: #f4efe2; border: 1px solid #24406a;
+  font-size: var(--text-lg); font-weight: 600; letter-spacing: 2px; padding: 0.8rem 3.2rem;
 }
-.home-play:hover { background: #456d9c; }
-.home-teach { background: #efe8d6; border: 1px solid #b9a880; color: #3a3124; }
+.home-play:hover { background: #3c6293; }
+.home-teach { background: var(--panel-2); border: 1px solid #b9a880; color: var(--ink); }
 .home-teach:hover { background: #f6f0e0; }
-.home-note { margin: 6px 0 4px; color: #8a7856; font-size: 12px; }
+.home-note { margin: 6px 0 4px; color: var(--ink-2); }
 .home-panel h2 {
-  font-size: 11px; letter-spacing: 1.6px; text-transform: uppercase;
-  color: #8a7856; margin: 24px 0 8px; font-weight: 600; text-align: left;
+  font-size: var(--text); letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-2); margin: 24px 0 8px; font-weight: 600; text-align: left;
 }
-.home-about { text-align: left; color: #5f5138; }
+.home-about { text-align: left; color: var(--ink-1); }
 .home-about p { margin: 0 0 9px; }
-.home-figures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.home-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 8px; }
 .home-figure {
-  background: #efe8d6; border: 1px solid #ded2b6; border-radius: 3px; padding: 9px 6px;
+  background: var(--panel-2); border: 1px solid #ded2b6; border-radius: 3px; padding: 9px 6px;
 }
-.home-figure-value { font-size: 21px; font-weight: 600; color: #3b5f8a; }
-.home-figure-label { font-size: 11px; color: #8a7856; }
-.home-foot { margin: 20px 0 0; color: #9a8a68; font-size: 11px; text-align: left; }
+.home-figure-value { font-size: 1.4rem; font-weight: 600; color: var(--friend); }
+.home-figure-label { color: var(--ink-2); }
+.home-foot { margin: 20px 0 0; color: var(--ink-2); text-align: left; }
 /* -- chronicle ----------------------------------------------------------- */
 .chronicle { text-align: left; }
-.chronicle-title { margin: 0; font-size: 30px; letter-spacing: 3px; font-weight: 600; color: #3b3227; text-align: center; }
+.chronicle-title { margin: 0; font-size: 1.9rem; letter-spacing: 3px; font-weight: 600; color: #3b3227; text-align: center; }
 .chronicle .home-tagline { text-align: center; }
-.chronicle-from { margin: 0 0 6px; color: #8a7856; font-style: italic; }
+.chronicle-from { margin: 0 0 6px; color: var(--ink-2); font-style: italic; }
 .chronicle-letter {
   margin: 0 0 12px; padding: 12px 16px; background: #f1e9d4; color: #3f3527;
   border-left: 3px solid #a3906c; font-family: Georgia, "Iowan Old Style", serif;
-  font-size: 14px; line-height: 1.65; white-space: normal;
+  font-size: var(--text-lg); line-height: 1.65; white-space: normal;
 }
-.chronicle-meta { margin: 0 0 16px; color: #7a6848; }
+.chronicle-meta { margin: 0 0 16px; color: var(--ink-2); }
 .chronicle-record { display: grid; gap: 3px; }
 .chronicle-row {
   display: grid; grid-template-columns: 2em 1fr auto; gap: 10px; padding: 4px 8px;
-  background: #efe8d6; border: 1px solid #ded2b6; border-radius: 2px;
+  background: var(--panel-2); border: 1px solid #ded2b6; border-radius: 2px;
 }
-.chronicle-row.won .chronicle-fate { color: #3b5f8a; font-weight: 600; }
-.chronicle-row.lost .chronicle-fate { color: #8c3a34; font-weight: 600; }
-.chronicle-num { color: #8a7856; }
-.chronicle-road { display: grid; gap: 4px; max-width: 280px; text-align: left; }
-.chronicle-road-blurb { font-size: 12px; color: #6b5c40; }
+.chronicle-row.won .chronicle-fate { color: var(--friend); font-weight: 600; }
+.chronicle-row.lost .chronicle-fate { color: var(--foe); font-weight: 600; }
+.chronicle-num { color: var(--ink-2); }
+.chronicle-road { display: grid; gap: 4px; max-width: 20rem; text-align: left; }
+.chronicle-road-blurb { color: var(--ink-2); }
 .chronicle-restart {
-  margin-top: 6px; background: none; border: none; color: #8a7856; cursor: pointer;
-  font: inherit; font-size: 11px; text-decoration: underline;
+  margin-top: 6px; background: none; border: none; color: var(--ink-2); cursor: pointer;
+  font: inherit; text-decoration: underline; padding: 6px 4px;
 }
 .aa-chronicle {
   margin: 0; padding: 10px 14px; background: #f1e9d4; border-left: 3px solid #a3906c;
-  font-family: Georgia, "Iowan Old Style", serif; font-size: 14px; line-height: 1.6; color: #3f3527;
+  font-family: Georgia, "Iowan Old Style", serif; font-size: var(--text-lg); line-height: 1.6; color: #3f3527;
 }
 /* -- ability bar --------------------------------------------------------- */
 /* AB-01: the bar spans the window and wraps, so ten to twelve slots stay on
    screen (two rows at 1280 px) instead of overflowing both edges. The strip
    itself lets the pointer through to the map; only the buttons catch it. */
+/* The bar is compact -- key, mark, name and count on ONE line, the cooldown
+   on a second only while there is one -- so even at the 16 px floor ten slots
+   take two short rows at 1280 px, and the battle opens with the army framed
+   above it (RT-04, BattleLayer.frameOpening). */
 .ability-bar {
-  position: fixed; left: 14px; right: 14px; bottom: 14px;
-  display: none; flex-wrap: wrap; justify-content: center; gap: 6px 8px; z-index: 6;
+  position: fixed; left: 14px; right: 14px; bottom: max(10px, env(safe-area-inset-bottom));
+  display: none; flex-wrap: wrap; justify-content: center; gap: 5px 6px; z-index: 6;
   pointer-events: none;
-  font: 12px/1.3 ui-monospace, "Cascadia Mono", Menlo, monospace;
+  font: var(--text)/1.25 var(--mono);
 }
 .ability {
-  display: grid; grid-template-columns: auto auto; grid-auto-rows: auto;
-  align-items: center; gap: 0 8px; cursor: pointer;
-  background: rgba(231, 223, 203, 0.94); color: #3a3124;
-  border: 1px solid #a3906c; border-radius: 3px; padding: 7px 11px;
+  display: grid; grid-template-columns: auto auto auto auto; grid-auto-rows: auto;
+  align-items: center; gap: 0 0.4rem; cursor: pointer;
+  background: rgba(231, 223, 203, 0.96); color: var(--ink);
+  border: 1px solid #a3906c; border-radius: 3px; padding: 0.3rem 0.55rem;
   box-shadow: 0 3px 12px rgba(0,0,0,0.28); font: inherit; text-align: left;
 }
 .ability { pointer-events: auto; }
 .ability:hover { background: #f2ecdb; }
-.ability.armed { border-color: #3b5f8a; background: #dce6f1; box-shadow: 0 0 0 2px #3b5f8a; }
-.ability.spent { opacity: 0.42; }
+.ability.armed { border-color: var(--friend); background: #dce6f1; box-shadow: 0 0 0 2px var(--friend); }
+/* Spent or cooling fades; none left (.exhausted) also strikes the name through,
+   so it does not rely on contrast alone. */
+.ability.spent { opacity: 0.6; }
+.ability.exhausted .ability-name { text-decoration: line-through; }
 .ability-key {
-  grid-row: 1 / span 2; font-size: 15px; font-weight: 600; color: #8a7856;
-  border-right: 1px solid #cbbc9c; padding-right: 8px; align-self: stretch;
+  font-weight: 600; color: var(--ink-2);
+  border-right: 1px solid #cbbc9c; padding-right: 0.4rem; align-self: stretch;
   display: flex; align-items: center;
 }
-.ability-mark { font-size: 15px; }
+.ability-mark { font-size: var(--text); }
 .ability-name { font-weight: 600; }
-.ability-count { grid-column: 2; color: #7a6848; }
-.ability-cool { grid-column: 2; color: #8c3a34; }
+.ability-count { color: var(--ink-2); }
+.ability-cool { grid-column: 1 / -1; color: var(--foe); text-align: right; }
+.ability-cool:empty { display: none; }
 #menu {
   position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
   background: rgba(38, 32, 22, 0.82); z-index: 10; overflow: auto; padding: 24px;
-  font: 13px/1.5 ui-monospace, "Cascadia Mono", Menlo, monospace; color: #3a3124;
+  font: var(--text)/1.5 var(--mono); color: var(--ink);
+  align-items: flex-start;
 }
 .menu-panel {
-  background: #e7dfcb; border: 1px solid #a3906c; border-radius: 4px;
-  padding: 22px 26px; max-width: 720px; width: 100%; max-height: 100%; overflow: auto;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+  background: var(--panel); border: 1px solid #a3906c; border-radius: 4px;
+  padding: 1.4rem 1.6rem; max-width: 50rem; width: 100%; margin: auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.35); box-sizing: border-box;
 }
-.menu-panel h1 { margin: 0 0 2px; font-size: 26px; letter-spacing: 0.14em; font-weight: 600; }
+.menu-panel h1 { margin: 0 0 2px; font-size: 1.65rem; letter-spacing: 0.14em; font-weight: 600; }
 .menu-panel h2 {
-  margin: 18px 0 7px; font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
-  color: #7a6848; font-weight: 600;
+  margin: 18px 0 7px; font-size: var(--text); letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-2); font-weight: 600;
 }
-.menu-panel .sub { margin: 0 0 4px; color: #6d5c40; }
+.menu-panel .sub { margin: 0 0 4px; color: var(--ink-2); }
 .choices { display: flex; gap: 7px; flex-wrap: wrap; }
 .choice, .step, .primary, .secondary {
   font: inherit; cursor: pointer; border: 1px solid #a3906c;
-  background: #f2ecdc; color: #3a3124; border-radius: 3px; padding: 5px 11px;
+  background: #f2ecdc; color: var(--ink); border-radius: 3px; padding: 0.3rem 0.7rem;
 }
-.choice.on { background: #3b5f8a; border-color: #2c496b; color: #f4efe2; }
-.blurb { margin: 6px 0 0; color: #6d5c40; min-height: 1.5em; }
+.choice:hover, .step:hover, .secondary:hover { background: #f8f3e6; }
+.choice.on { background: var(--friend); border-color: #24406a; color: #f4efe2; }
+.blurb { margin: 6px 0 0; color: var(--ink-2); min-height: 1.5em; }
 .budget { margin: 4px 0 10px; font-weight: 600; }
-.budget.over { color: #8c3a34; }
+.budget.over { color: var(--foe); }
 .roster { display: grid; gap: 6px; }
 .unit {
-  display: grid; grid-template-columns: 44px 1fr auto; gap: 2px 12px; align-items: center;
-  border: 1px solid #cbbc9c; border-radius: 3px; padding: 7px 10px; background: #efe8d6;
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 2px 12px; align-items: center;
+  border: 1px solid #cbbc9c; border-radius: 3px; padding: 7px 10px; background: var(--panel-2);
 }
 .unit-icon {
   grid-column: 1; grid-row: 1 / span 3; display: flex;
   align-items: center; justify-content: center;
   border: 1px solid #d5c7a6; border-radius: 2px; background: #e5dcc4;
 }
-.unit-head { grid-column: 2; display: flex; gap: 10px; align-items: baseline; }
+.unit-head { grid-column: 2; display: flex; flex-wrap: wrap; gap: 0 10px; align-items: baseline; }
 .unit-name { font-weight: 600; }
-.unit-cost { color: #7a6848; font-size: 11px; }
-.unit-role { grid-column: 2; color: #5f5138; font-size: 12px; }
-.unit-stats { grid-column: 2; color: #8a7856; font-size: 11px; }
+.unit-cost { color: var(--ink-2); }
+.unit-role { grid-column: 2; color: var(--ink-1); }
+.unit-stats { grid-column: 2; color: var(--ink-2); overflow-wrap: anywhere; }
 .unit-controls { grid-column: 3; grid-row: 1 / span 3; display: flex; align-items: center; gap: 8px; }
-.step { width: 28px; text-align: center; padding: 4px 0; }
-.count { min-width: 18px; text-align: center; font-weight: 600; }
-.problems { color: #8c3a34; min-height: 1.4em; margin: 10px 0 0; font-size: 12px; }
-.actions { display: flex; gap: 9px; margin-top: 8px; }
-.primary { background: #3b5f8a; border-color: #2c496b; color: #f4efe2; font-weight: 600; }
-.primary:disabled { background: #b9b09a; border-color: #a3906c; cursor: not-allowed; }
-.hint { color: #6d5c40; margin: 10px 0 0; font-size: 12px; }
+.step { min-width: 2rem; min-height: 2rem; text-align: center; padding: 0.2rem 0; }
+.count { min-width: 1.2rem; text-align: center; font-weight: 600; }
+.problems { color: var(--foe); min-height: 1.4em; margin: 10px 0 0; }
+.actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 8px; }
+.primary { background: var(--friend); border-color: #24406a; color: #f4efe2; font-weight: 600; }
+.primary:hover:not(:disabled) { background: #3c6293; }
+/* Disabled reads as disabled by more than a faded fill, and its label still
+   holds 5:1 (it was 1.88:1, BS-30). */
+.primary:disabled { background: #d9d1bd; border-color: #a3906c; color: var(--ink-1); border-style: dashed; cursor: not-allowed; }
+.hint { color: var(--ink-2); margin: 10px 0 0; }
 /* -- confirm dialog ------------------------------------------------------ */
 .dialog {
   position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
-  background: rgba(38, 32, 22, 0.62); z-index: 30; padding: 24px;
-  font: 13px/1.5 ui-monospace, "Cascadia Mono", Menlo, monospace; color: #3a3124;
+  background: rgba(38, 32, 22, 0.62); z-index: 30; padding: 24px; overflow: auto;
+  font: var(--text)/1.5 var(--mono); color: var(--ink);
+  align-items: flex-start;
 }
 .dialog-panel {
-  background: #e7dfcb; border: 1px solid #a3906c; border-radius: 4px;
-  padding: 22px 26px; max-width: 460px; width: 100%;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+  background: var(--panel); border: 1px solid #a3906c; border-radius: 4px;
+  padding: 1.4rem 1.6rem; max-width: 32rem; width: 100%; margin: auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.35); box-sizing: border-box;
 }
-.dialog-title { margin: 0 0 8px; font-size: 17px; font-weight: 600; }
-.dialog-body { margin: 0; color: #5f5138; }
-.dialog-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 18px; }
-.dialog-actions .home-play { font-size: 13px; letter-spacing: 0.5px; padding: 10px 22px; }
-.dialog-actions .home-teach { padding: 10px 22px; }
+.dialog-title { margin: 0 0 8px; font-size: var(--text-lg); font-weight: 600; }
+.dialog-body { margin: 0; color: var(--ink-1); }
+.dialog-actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: flex-end; margin-top: 18px; }
+.dialog-actions .home-play { font-size: var(--text); letter-spacing: 0.5px; padding: 0.6rem 1.4rem; }
+.dialog-actions .home-teach { padding: 0.6rem 1.4rem; }
 /* -- storage refused (BS-01) --------------------------------------------- */
 .storage-notice {
   margin: 0 0 14px; padding: 8px 12px; text-align: left;
-  background: #f3e3c4; border-left: 3px solid #8c3a34; color: #5f3a2a; font-size: 12px;
+  background: #f3e3c4; border-left: 3px solid var(--foe); color: #5f3a2a;
 }

@@ -13,9 +13,12 @@ import type { Group } from "../sim/entities.ts";
 import { TerrainGrid, TILE_SIZE } from "../sim/terrain.ts";
 import { Camera } from "./camera.ts";
 import { TerrainLayer } from "./terrain-layer.ts";
-import { ink, inkFaint, inkSoft, parchment, playerColor, unitEdge, unitFill, unitSheen, unitShadow } from "./palette.ts";
+import { colorFor, foeKeyline, inkFaint, inkSoft, parchment, sideColor, statusColor, unitEdge, unitFill, unitSheen, unitShadow } from "./palette.ts";
 import { FOG_CELL } from "../sim/vision.ts";
 import { RECOVER_LOCK_SECONDS, TICK_RATE } from "../sim/world.ts";
+import { COMPANY_BREAK } from "../sim/morale.ts";
+import { Perception, SEEN_BEFORE, SEEN_NOW, SEEN_OBSCURED } from "./perception.ts";
+import { animTime, motion } from "./motion.ts";
 import { UNIT_TYPE_IDS } from "../content/unit-types.ts";
 import { SIZE, bodyPath, detailPath, gait, offsetBrush, type Brush } from "./soldier-art.ts";
 import { JUMP, isMoving, presenceOf } from "./presence.ts";
@@ -27,11 +30,34 @@ const GRID_TILES = 8;
 const SOLDIER_LOD_ZOOM = 0.4;
 /** Below this zoom, groups get a halo so bodies of troops stay findable. */
 const GROUP_HALO_ZOOM = 0.75;
-/** Seconds an enemy halo lingers at its last seen position before going cold. */
-const HALO_MEMORY_SECONDS = 14;
+/**
+ * How long an enemy's last-seen mark lingers before going cold, in SIM ticks
+ * (audit RF-06). It used to age on the wall clock, so pausing to plan -- which
+ * is what Space is for -- faded every enemy report away while nothing on the
+ * field had moved. Aging on the sim clock freezes memory with the battle.
+ */
+const MEMORY_TICKS = 14 * TICK_RATE;
+/** A mark holds full strength this long before it starts to fade. */
+const MEMORY_HOLD_TICKS = TICK_RATE;
+/** A mark whose ground has been in plain view, and empty, this long is withdrawn. */
+const EMPTY_GROUND_TICKS = 3 * TICK_RATE;
 /** Amplitude of the idle fidget, in world units, per sine term. */
 const WANDER = 1.15;
-const RECOVER_COLOR = "#9c3f63";
+const RECOVER_COLOR = statusColor.recover;
+/**
+ * Smallest canvas label, in CSS px (docs/ui-policy.md, "Canvas text"). Map
+ * labels sit on busy ground, so they also get a parchment halo stroke.
+ */
+export const CANVAS_LABEL_MIN_PX = 13;
+
+/** What the viewer last saw of an enemy company. */
+type Sighting = {
+  x: number; y: number; tick: number; n: number; radius: number; player: number;
+  /** Tick since which the viewer has been looking at this ground and finding nobody, or -1. */
+  emptySince: number;
+};
+/** A piece of enemy works, as last seen. */
+type KnownWork = { tx: number; ty: number; kind: string; player: number };
 
 export type Snapshot = { x: Float64Array; y: Float64Array; facing: Float64Array };
 
@@ -39,14 +65,24 @@ export class Renderer {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly terrainLayer: TerrainLayer;
   /** Where each enemy group was last seen, so a lost group leaves a report
-   *  behind rather than either vanishing or being tracked through the fog. */
-  private readonly lastSeen = new Map<number, { x: number; y: number; at: number; n: number }>();
+   *  behind rather than either vanishing or being tracked through the fog.
+   *  Stamped and aged in sim ticks. */
+  private readonly lastSeen = new Map<number, Sighting>();
+  /**
+   * Enemy works as last observed, keyed by tile (audit RF-05). Works in ground
+   * the viewer is not looking at are drawn from here, never from the live
+   * board, so an enemy's digging is learned by watching it, not for free.
+   */
+  private readonly knownWorks = new Map<string, KnownWork>();
   /** The dead, left where they fell. See fallen.ts. */
   readonly fallen = new Fallen();
+  /** The one answer to "can the viewer see that", shared with the effects. */
+  readonly perception: Perception;
 
-  constructor(ctx: CanvasRenderingContext2D, terrain: TerrainGrid) {
+  constructor(ctx: CanvasRenderingContext2D, terrain: TerrainGrid, viewer = 0) {
     this.ctx = ctx;
     this.terrainLayer = new TerrainLayer(terrain);
+    this.perception = new Perception(viewer);
   }
 
   draw(
@@ -59,16 +95,17 @@ export class Renderer {
     viewer: number,
   ): void {
     const ctx = this.ctx;
+    this.perception.refresh(world, now * 1000);
     ctx.fillStyle = parchment;
     ctx.fillRect(0, 0, cam.viewW, cam.viewH);
 
     this.terrainLayer.draw(ctx, cam);
     this.drawGrid(world.terrain, cam);
-    this.drawControlPoints(world, cam);
+    this.drawControlPoints(world, cam, viewer);
 
     // Only your own orders are on the board; you cannot read an enemy's plan.
     for (const g of world.groups) {
-      if (g.player === viewer) this.drawOrder(g, cam, world.tick);
+      if (g.player === viewer) this.drawOrder(g, cam);
     }
     for (const g of world.groups) {
       if (selected.includes(g.id)) this.drawSelection(world, g, cam, viewer);
@@ -77,15 +114,18 @@ export class Renderer {
     // Zoomed out far enough that individual men are a smear, groups get a
     // halo. Both armies: knowing roughly where an enemy body of troops is, once
     // you have seen it, is the whole reason to pull the camera back.
-    this.fallen.draw(this.ctx, cam, world, viewer, now);
-    if (cam.zoom < GROUP_HALO_ZOOM) this.drawGroupHalos(world, cam, viewer, now / 1000);
-    else this.drawLastSeen(world, cam, viewer, now / 1000);
+    // The fallen fade on the sim clock too, so a pause does not age them.
+    this.fallen.draw(this.ctx, cam, world, viewer, world.tick / TICK_RATE);
+    this.rememberSightings(world, viewer);
+    if (cam.zoom < GROUP_HALO_ZOOM) this.drawGroupHalos(world, cam, viewer);
+    else this.drawLastSeen(world, cam, viewer);
     this.drawSoldiers(world, cam, prev, alpha, now, viewer);
     this.drawWorkings(world, cam, viewer, now);
-    this.drawFields(world, cam, now);
+    this.drawFields(world, cam, now, viewer);
     this.drawRecovering(world, cam, viewer);
     this.drawSpecials(world, cam, now, viewer, prev);
-    this.drawWorks(world, cam, now);
+    this.drawBreaks(world, cam, viewer);
+    this.drawWorks(world, cam, now, viewer);
     this.drawFog(world, cam, viewer);
   }
 
@@ -123,7 +163,7 @@ export class Renderer {
     const sx = cam.worldToScreenX(p.x);
     const sy = cam.worldToScreenY(p.y);
     ctx.save();
-    ctx.strokeStyle = playerColor[g.player] ?? ink;
+    ctx.strokeStyle = colorFor(g.player, viewer);
     ctx.lineWidth = 1.5;
     ctx.setLineDash([5, 4]);
     ctx.globalAlpha = 0.85;
@@ -152,6 +192,10 @@ export class Renderer {
     const viewerBit = viewer === 0 ? 1 : 2;
 
     for (const player of [0, 1]) {
+      // Colour seat by side, not by seat number: your men are always the
+      // friend colour, whichever side of the table you sit (RF-02).
+      const seat = player === viewer ? 0 : 1;
+      const foe = player !== viewer;
       for (const type of UNIT_TYPE_IDS) {
         const base = Math.max(1.6, 4.6 * cam.zoom * SIZE[type]);
         const shown: number[] = [];
@@ -191,13 +235,32 @@ export class Renderer {
           ctx.fill();
         }
 
-        // 2. The body itself, in this type's tone of its army's colour.
+        // 1b. The foe's keyline (RF-01): a pale rim round every enemy counter,
+        //     at every zoom, under the body so it reads as an outer edge. It is
+        //     the identity channel that survives greyscale and colour-blindness:
+        //     friend counters are plain, foe counters are ringed. At strategic
+        //     zoom, where silhouettes become blocks, the foe's block is also a
+        //     diamond where the friend's is a square.
+        if (foe) {
+          ctx.beginPath();
+          for (const brush of brushes) {
+            if (detailed) bodyPath(type, brush);
+            else diamond(ctx, brush.x, brush.y, base * 0.85);
+          }
+          ctx.lineJoin = "round";
+          ctx.strokeStyle = foeKeyline;
+          ctx.lineWidth = Math.max(1.6, base * 0.42);
+          ctx.stroke();
+        }
+
+        // 2. The body itself, in this type's tone of its side's colour.
         ctx.beginPath();
         for (const brush of brushes) {
           if (detailed) bodyPath(type, brush);
+          else if (foe) diamond(ctx, brush.x, brush.y, base * 0.85);
           else ctx.rect(brush.x - base * 0.6, brush.y - base * 0.6, base * 1.2, base * 1.2);
         }
-        ctx.fillStyle = unitFill(player, type);
+        ctx.fillStyle = unitFill(seat, type);
         ctx.fill();
 
         // 3. Top-light, as a bevel rather than a smaller copy floating inside.
@@ -224,7 +287,9 @@ export class Renderer {
 
         // 4. The outline, derived from the fill rather than a flat black, with
         //    round joins so a wedge's point reads as drawn rather than pricked.
-        if (cam.zoom > 0.85) {
+        //    A foe counter keeps its dark edge at every detailed zoom, inside
+        //    the pale keyline: dark-in-light is the mark of the enemy.
+        if (cam.zoom > 0.85 || (foe && detailed)) {
           ctx.beginPath();
           for (const brush of brushes) {
             if (detailed) bodyPath(type, brush);
@@ -232,7 +297,7 @@ export class Renderer {
           }
           ctx.lineJoin = "round";
           ctx.lineCap = "round";
-          ctx.strokeStyle = unitEdge(player, type);
+          ctx.strokeStyle = unitEdge(seat, type);
           ctx.lineWidth = Math.max(0.6, base * 0.1);
           ctx.stroke();
         }
@@ -279,8 +344,9 @@ export class Renderer {
     const phase = id * 0.618;
     const moved = !snap && jump > 0.05;
 
-    if (!moved) {
-      // Standing men fidget. Perfect stillness reads as a screenshot.
+    if (!moved && !motion.reduced) {
+      // Standing men fidget. Perfect stillness reads as a screenshot -- unless
+      // the player has asked for less motion, when it reads as calm.
       wx += (Math.sin(now * 0.6 + phase) + Math.sin(now * 0.37 + phase * 2.1)) * WANDER;
       wy += (Math.cos(now * 0.53 + phase * 1.7) + Math.cos(now * 0.41 + phase)) * WANDER;
     }
@@ -304,34 +370,16 @@ export class Renderer {
   }
 
   /** What each group has been told to do, drawn on the map in ink. */
-  private drawOrder(g: Group, cam: Camera, tick: number): void {
-    if (g.stance === "idle") return;
+  private drawOrder(g: Group, cam: Camera): void {
+    // A recovering company's countdown is drawn once, on the men, by
+    // drawRecovering. A second ring at the anchor disagreed with it about
+    // where the company was whenever the anchor had walked ahead (RF-19).
+    if (g.stance === "idle" || g.stance === "recover") return;
     const ctx = this.ctx;
     ctx.save();
-    ctx.strokeStyle = playerColor[g.player] ?? ink;
+    ctx.strokeStyle = sideColor("friend");
     ctx.lineWidth = 1.6;
     ctx.globalAlpha = 0.55;
-
-    if (g.stance === "recover") {
-      // The remaining term of helplessness, closing like a clock. The whole
-      // cost of the gesture is exposure, so it must not be easy to forget.
-      const left = Math.max(0, g.recoverUntil - tick) / (RECOVER_LOCK_SECONDS * TICK_RATE);
-      const sx = cam.worldToScreenX(g.anchorX);
-      const sy = cam.worldToScreenY(g.anchorY);
-      const r = Math.max(14, (g.radius + 20) * cam.zoom);
-      ctx.strokeStyle = RECOVER_COLOR;
-      ctx.lineWidth = 3;
-      ctx.globalAlpha = 0.3;
-      ctx.beginPath();
-      ctx.arc(sx, sy, r, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 0.95;
-      ctx.beginPath();
-      ctx.arc(sx, sy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * left);
-      ctx.stroke();
-      ctx.restore();
-      return;
-    }
 
     if (g.stance === "hold") {
       ctx.setLineDash([6, 5]);
@@ -396,68 +444,102 @@ export class Renderer {
    * report goes stale. That is what a map table actually shows you, and it
    * makes a scout worth buying.
    */
-  private drawGroupHalos(world: World, cam: Camera, viewer: number, now: number): void {
+  private drawGroupHalos(world: World, cam: Camera, viewer: number): void {
     const ctx = this.ctx;
     ctx.save();
     // Strongest right at the point where soldiers stop being legible.
     const strength = Math.min(1, (GROUP_HALO_ZOOM - cam.zoom) / (GROUP_HALO_ZOOM - 0.25));
 
-    for (const g of world.groups) {
-      const n = world.liveCount(g);
-      if (n === 0) {
-        this.lastSeen.delete(g.id);
-        continue;
-      }
-      const own = g.player === viewer;
-      const p = presenceOf(world, g, viewer);
-      let x = p.x;
-      let y = p.y;
-      let fade = 1;
-      if (own && p.n === 0) continue;
-
-      if (!own) {
-        if (g.seenBy[viewer] && p.n > 0) {
-          this.lastSeen.set(g.id, { x: p.x, y: p.y, at: now, n: p.n });
-        }
-        const seen = this.lastSeen.get(g.id);
-        if (!seen) continue;
-        const age = now - seen.at;
-        if (age > HALO_MEMORY_SECONDS) {
-          this.lastSeen.delete(g.id);
-          continue;
-        }
-        x = seen.x;
-        y = seen.y;
-        // Hold full strength briefly, then fade, so a group crossing a sight
-        // edge does not flicker every time the sweep loses it for a moment.
-        fade = age < 1 ? 1 : 1 - (age - 1) / (HALO_MEMORY_SECONDS - 1);
-      }
-
+    const halo = (x: number, y: number, radius: number, n: number, side: "friend" | "foe", fade: number): void => {
       const sx = cam.worldToScreenX(x);
       const sy = cam.worldToScreenY(y);
-      const r = Math.max(11, (g.radius + 22) * cam.zoom);
-      if (sx < -r || sy < -r || sx > cam.viewW + r || sy > cam.viewH + r) continue;
-
+      const r = Math.max(11, (radius + 22) * cam.zoom);
+      if (sx < -r || sy < -r || sx > cam.viewW + r || sy > cam.viewH + r) return;
       const shown = strength * fade;
       const grad = ctx.createRadialGradient(sx, sy, r * 0.2, sx, sy, r);
-      const tint = own ? "59, 95, 138" : "140, 58, 52";
-      grad.addColorStop(0, "rgba(" + tint + "," + (0.5 * shown).toFixed(3) + ")");
-      grad.addColorStop(1, "rgba(" + tint + ", 0)");
+      grad.addColorStop(0, sideColor(side, 0.5 * shown));
+      grad.addColorStop(1, sideColor(side, 0));
       ctx.fillStyle = grad;
       ctx.beginPath();
       ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.fill();
-
-      // A ring scaled by headcount, so a big body reads as bigger.
+      // A ring scaled by headcount, so a big body reads as bigger. The foe's
+      // is dashed, so the two sides differ in more than colour (RF-01).
       ctx.globalAlpha = 0.55 * shown;
-      ctx.strokeStyle = own ? "#3b5f8a" : "#8c3a34";
+      ctx.strokeStyle = sideColor(side);
       ctx.lineWidth = Math.max(1, Math.min(3, 0.8 + n * 0.09));
+      ctx.setLineDash(side === "foe" ? [6, 4] : []);
       ctx.beginPath();
       ctx.arc(sx, sy, r * 0.72, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.setLineDash([]);
       ctx.globalAlpha = 1;
+    };
+
+    for (const g of world.groups) {
+      if (g.player !== viewer) continue;
+      const p = presenceOf(world, g, viewer);
+      if (p.n > 0) halo(p.x, p.y, g.radius, p.n, "friend", 1);
+    }
+    // Enemies from memory only: a company in view has just been stamped with
+    // the present tick, so it draws at full strength where it stands.
+    for (const seen of this.lastSeen.values()) {
+      const fade = this.memoryFade(world, seen);
+      if (fade > 0) halo(seen.x, seen.y, seen.radius, seen.n, "foe", fade);
     }
     ctx.restore();
+  }
+
+  /**
+   * Keep the record of where each enemy company was last seen.
+   *
+   * A company in view updates its mark to the present tick. A mark is dropped
+   * when it is too old to trust, or once the viewer has been looking at that
+   * ground for a few seconds and nobody is there. The same rule holds whether
+   * the company moved off or died out of sight, so a report of a company
+   * destroyed unseen stays on the map until somebody goes and looks, rather
+   * than vanishing the instant it dies and telling you so (RF-10).
+   */
+  private rememberSightings(world: World, viewer: number): void {
+    const inView = new Set<number>();
+    for (const g of world.groups) {
+      if (g.player === viewer || !g.seenBy[viewer]) continue;
+      const p = presenceOf(world, g, viewer);
+      if (p.n === 0) continue;
+      inView.add(g.id);
+      this.lastSeen.set(g.id, {
+        x: p.x, y: p.y, tick: world.tick, n: p.n, radius: g.radius, player: g.player, emptySince: -1,
+      });
+    }
+    for (const [id, seen] of this.lastSeen) {
+      if (inView.has(id)) continue;
+      if (!this.perception.ground(seen.x, seen.y)) seen.emptySince = -1;
+      else if (seen.emptySince < 0) seen.emptySince = world.tick;
+      const disproved = seen.emptySince >= 0 && world.tick - seen.emptySince > EMPTY_GROUND_TICKS;
+      if (world.tick - seen.tick > MEMORY_TICKS || disproved) this.lastSeen.delete(id);
+    }
+  }
+
+  /** How strongly a mark still shows: 1 while fresh, falling to 0 as it ages. */
+  private memoryFade(world: World, seen: Sighting): number {
+    const age = world.tick - seen.tick;
+    if (age <= MEMORY_HOLD_TICKS) return 1;
+    return Math.max(0, 1 - (age - MEMORY_HOLD_TICKS) / (MEMORY_TICKS - MEMORY_HOLD_TICKS));
+  }
+
+  /** For tests and the e2e harness: plant a last-seen mark `ageTicks` old. */
+  noteSighting(world: World, group: number, x: number, y: number, ageTicks: number): void {
+    const g = world.groupById(group);
+    if (!g) return;
+    this.lastSeen.set(group, {
+      x, y, tick: world.tick - ageTicks, n: g.members.length, radius: g.radius, player: g.player, emptySince: -1,
+    });
+  }
+
+  /** For tests and the e2e harness: how strongly the mark of an enemy company shows. */
+  lastSeenFade(world: World, group: number): number {
+    const seen = this.lastSeen.get(group);
+    return seen ? this.memoryFade(world, seen) : 0;
   }
 
   /**
@@ -468,7 +550,7 @@ export class Renderer {
    * flickering between the two armies -- a point changing hands should be an
    * event you notice, not a strobe.
    */
-  private drawControlPoints(world: World, cam: Camera): void {
+  private drawControlPoints(world: World, cam: Camera, viewer: number): void {
     if (world.controlPoints.length === 0) return;
     const ctx = this.ctx;
     ctx.save();
@@ -480,27 +562,35 @@ export class Renderer {
       const r = cp.radius * cam.zoom;
       if (sx < -r || sy < -r || sx > cam.viewW + r || sy > cam.viewH + r) continue;
 
-      const tint = owner < 0 ? "120, 104, 74" : owner === 0 ? "59, 95, 138" : "140, 58, 52";
-      ctx.fillStyle = "rgba(" + tint + ", 0.10)";
+      // Held ground is the holder's side colour as the viewer sees it; the
+      // foe's ring is also double, so who holds it reads without colour.
+      const tint = (a: number): string =>
+        owner < 0 ? "rgba(120, 104, 74, " + a + ")" : colorFor(owner, viewer, a);
+      ctx.fillStyle = tint(0.1);
       ctx.beginPath();
       ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.strokeStyle = "rgba(" + tint + ", 0.85)";
+      ctx.strokeStyle = tint(0.85);
       ctx.lineWidth = owner < 0 ? 1.5 : 2.5;
       ctx.setLineDash(owner < 0 ? [7, 6] : []);
       ctx.beginPath();
       ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.stroke();
+      if (owner >= 0 && owner !== viewer) {
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(sx, sy, Math.max(2, r - 6), 0, Math.PI * 2);
+        ctx.stroke();
+      }
       ctx.setLineDash([]);
 
-      if (cam.zoom > 0.5) {
-        ctx.fillStyle = "rgba(58, 49, 36, 0.8)";
-        ctx.font = "600 11px ui-monospace, Menlo, monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(cp.name.toUpperCase(), sx, sy - r - 6);
-        ctx.textAlign = "left";
-      }
+      // The objective's name at every zoom -- far out is when objectives
+      // matter most -- at the canvas minimum, on a parchment halo (RF-14).
+      ctx.font = "600 " + CANVAS_LABEL_MIN_PX + "px ui-monospace, Menlo, monospace";
+      ctx.textAlign = "center";
+      haloText(ctx, cp.name.toUpperCase(), sx, sy - r - 7, "rgba(46, 38, 27, 0.95)");
+      ctx.textAlign = "left";
     }
     ctx.restore();
   }
@@ -509,32 +599,38 @@ export class Renderer {
     if (world.workings.length === 0) return;
     const ctx = this.ctx;
     ctx.save();
+    const t = animTime(now);
     for (const w of world.workings) {
       const friendly = w.player === viewer;
+      // An enemy's working is seen only where the viewer is actually looking:
+      // watching enemy adepts mend in ground nobody is watching is free
+      // intelligence (RF-05).
+      if (!friendly && !this.perception.disc(w.x, w.y, w.radius)) continue;
+      const side = friendly ? "friend" : "foe";
       const sx = cam.worldToScreenX(w.x);
       const sy = cam.worldToScreenY(w.y);
       const r = w.radius * cam.zoom;
       if (sx < -r || sy < -r || sx > cam.viewW + r || sy > cam.viewH + r) continue;
       const fade = Math.max(0, Math.min(1, (w.until - world.tick) / (TICK_RATE * 3)));
-      const pulse = 0.6 + 0.4 * Math.sin(now * 1.6 + w.x * 0.01);
+      const pulse = motion.reduced ? 0.8 : 0.6 + 0.4 * Math.sin(t * 1.6 + w.x * 0.01);
 
-      // Healing is drawn as healing: a green field with crosses rising out of
-      // it. Every working used to be the same translucent disc, so surgeons at
-      // work looked exactly like a hex being laid on you.
+      // Healing is drawn as healing: crosses rising out of a field. The SHAPE
+      // says mending; the colour says whose (RF-02). It used to be green for
+      // either side, so an enemy's surgeons looked like your own.
       const mending = w.spell === "mend" || w.spell === "succour";
       if (mending) {
-        ctx.globalAlpha = 0.22 * fade * pulse;
-        ctx.fillStyle = "#5f8a5f";
+        ctx.globalAlpha = 0.2 * fade * pulse;
+        ctx.fillStyle = sideColor(side);
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 0.85 * fade;
-        ctx.strokeStyle = "#3f7a4a";
+        ctx.strokeStyle = sideColor(side);
         ctx.lineWidth = Math.max(1.2, 2 * cam.zoom);
         for (let k = 0; k < 6; k++) {
           // Each cross drifts upward on its own clock and restarts, so the
           // field reads as continuous work rather than a static badge.
-          const phase = (now * 0.5 + k * 0.37) % 1;
+          const phase = motion.reduced ? 0.3 : (t * 0.5 + k * 0.37) % 1;
           const a2 = (k / 6) * Math.PI * 2 + w.x * 0.01;
           const cx2 = sx + Math.cos(a2) * r * 0.55;
           const cy2 = sy + Math.sin(a2) * r * 0.55 - phase * r * 0.5;
@@ -550,13 +646,14 @@ export class Renderer {
         continue;
       }
 
-      ctx.globalAlpha = 0.28 * fade * pulse;
-      ctx.fillStyle = friendly ? "#5b7a5b" : "#7a4a68";
+      // Any other working: a dashed ring in the caster's side colour.
+      ctx.globalAlpha = 0.24 * fade * pulse;
+      ctx.fillStyle = sideColor(side);
       ctx.beginPath();
       ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.fill();
-      ctx.globalAlpha = 0.65 * fade;
-      ctx.strokeStyle = friendly ? "#456b45" : "#6b3a58";
+      ctx.globalAlpha = 0.75 * fade;
+      ctx.strokeStyle = sideColor(side);
       ctx.lineWidth = 1.4;
       ctx.setLineDash([5, 6]);
       ctx.beginPath();
@@ -580,11 +677,16 @@ export class Renderer {
    * locked shields. An ability the player paid points for has to be visible
    * enough to be worth the points.
    */
-  private drawFields(world: World, cam: Camera, now: number): void {
+  private drawFields(world: World, cam: Camera, clock: number, viewer: number): void {
     if (world.fields.length === 0) return;
     const ctx = this.ctx;
+    // Decoration that flickers or scatters stands still with motion reduced.
+    const now = animTime(clock);
     ctx.save();
     for (const f of world.fields) {
+      // The enemy's are drawn only on ground the viewer can see (RF-05).
+      if (f.player !== viewer && !this.perception.disc(f.x, f.y, f.radius)) continue;
+      const side = f.player === viewer ? "friend" : "foe";
       const sx = cam.worldToScreenX(f.x);
       const sy = cam.worldToScreenY(f.y);
       const r = f.radius * cam.zoom;
@@ -627,15 +729,16 @@ export class Renderer {
           ctx.fill();
         }
       } else if (f.ability === "shield") {
+        // Whoever raised it: it used to be player-0 blue for either side.
         ctx.globalAlpha = 0.95;
-        ctx.strokeStyle = "#4f86c6";
+        ctx.strokeStyle = sideColor(side);
         ctx.lineWidth = Math.max(3, 6 * cam.zoom);
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.stroke();
         // Overlapping shields around the rim, so it reads as a wall of men.
         ctx.globalAlpha = 0.7;
-        ctx.fillStyle = "#3b5f8a";
+        ctx.fillStyle = sideColor(side);
         for (let k = 0; k < 16; k++) {
           const a2 = (k / 16) * Math.PI * 2;
           ctx.beginPath();
@@ -803,12 +906,15 @@ export class Renderer {
       const sx = cam.worldToScreenX(p.x);
       const sy = cam.worldToScreenY(p.y);
       const r = Math.max(14, (g.radius + 14) * cam.zoom);
+      // Violet and dashed under the closing arc: a status, never a side.
       ctx.strokeStyle = RECOVER_COLOR;
-      ctx.globalAlpha = 0.3;
+      ctx.globalAlpha = 0.35;
       ctx.lineWidth = Math.max(1.5, 3 * cam.zoom);
+      ctx.setLineDash([4, 4]);
       ctx.beginPath();
       ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.setLineDash([]);
       ctx.globalAlpha = 0.95;
       ctx.beginPath();
       ctx.arc(sx, sy, r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
@@ -826,8 +932,9 @@ export class Renderer {
    * damage it takes should look different from one that has not, or the player
    * has no way to read the fight.
    */
-  private drawSpecials(world: World, cam: Camera, now: number, viewer: number, prev: Snapshot): void {
+  private drawSpecials(world: World, cam: Camera, clock: number, viewer: number, prev: Snapshot): void {
     const ctx = this.ctx;
+    const now = animTime(clock);
     ctx.save();
     ctx.lineCap = "round";
     for (const g of world.groups) {
@@ -843,7 +950,7 @@ export class Renderer {
       const body = Math.min(g.radius, p.spread * 1.5 + 6);
       const r = Math.max(12, (body + 10) * cam.zoom);
       if (sx < -r * 3 || sy < -r * 3 || sx > cam.viewW + r * 3 || sy > cam.viewH + r * 3) continue;
-      const tint = playerColor[g.player] ?? ink;
+      const tint = colorFor(g.player, viewer);
       const kind = world.specialKind(g);
 
       if (kind === "brace") {
@@ -947,7 +1054,7 @@ export class Renderer {
       } else if (kind === "challenge" || kind === "lastStand") {
         // A champion's ring, or a sworn company's: hard red edges.
         ctx.globalAlpha = 0.9;
-        ctx.strokeStyle = kind === "challenge" ? "#d6a640" : "#7a1f1a";
+        ctx.strokeStyle = kind === "challenge" ? "#d6a640" : statusColor.lastStand;
         ctx.lineWidth = Math.max(2.5, 5 * cam.zoom);
         ctx.setLineDash(kind === "challenge" ? [3, 6] : []);
         ctx.beginPath();
@@ -958,8 +1065,8 @@ export class Renderer {
         // Auras reach well past the company, so draw their reach, faintly,
         // with a pulse: colours shine, drums beat, the pack's panic spreads.
         const reach = kind === "rally" ? RALLY_RADIUS : kind === "cadence" ? CADENCE_RADIUS : TERROR_RADIUS;
-        const beat = kind === "cadence" ? (now * 1.4) % 1 : (now * 0.6) % 1;
-        ctx.strokeStyle = kind === "rally" ? "#e0b84a" : kind === "cadence" ? tint : "#9b2f24";
+        const beat = motion.reduced ? 0.5 : kind === "cadence" ? (now * 1.4) % 1 : (now * 0.6) % 1;
+        ctx.strokeStyle = kind === "rally" ? "#e0b84a" : kind === "cadence" ? tint : statusColor.terror;
         ctx.lineWidth = Math.max(1.5, 3 * cam.zoom);
         ctx.globalAlpha = 0.5 * (1 - beat);
         ctx.beginPath();
@@ -991,6 +1098,43 @@ export class Renderer {
   }
 
   /**
+   * Companies whose nerve has gone, marked ON THE MAP (audit RF-09).
+   *
+   * A break used to be one line of HUD text naming the company, for your own
+   * side only, so you had to match a name to a counter -- and an enemy company
+   * breaking showed nothing at all, though its flight was plain to see. Now a
+   * struck pennant hangs over any broken company the viewer can see: a pole
+   * with its flag fallen, the shape saying "broken" and the colour saying
+   * whose. Shown for the enemy only while you can see its men, because a
+   * company in flight is something you can watch happen.
+   */
+  private drawBreaks(world: World, cam: Camera, viewer: number): void {
+    const ctx = this.ctx;
+    const s = world.soldiers;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const g of world.groups) {
+      if (g.brokeAt < 0) continue;
+      const p = presenceOf(world, g, viewer);
+      if (p.n === 0) continue;
+      // Broken now, judged on the men the viewer can see.
+      let nerve = 0;
+      let n = 0;
+      for (const m of g.members) {
+        if (s.alive[m] !== 1 || !this.perception.soldier(world, m)) continue;
+        nerve += s.morale[m];
+        n++;
+      }
+      if (n === 0 || nerve / n >= COMPANY_BREAK) continue;
+      const sx = cam.worldToScreenX(p.x);
+      const sy = cam.worldToScreenY(p.y) - Math.max(14, (p.spread + 18) * cam.zoom);
+      drawStruckPennant(ctx, sx, sy, Math.max(9, 14 * cam.zoom), colorFor(g.player, viewer));
+    }
+    ctx.restore();
+  }
+
+  /**
    * Where an enemy company was when you last had eyes on it.
    *
    * The counters themselves are only drawn while they are actually observed, so
@@ -1001,42 +1145,38 @@ export class Renderer {
    *
    * The halo at low zoom does this same job; this is its close-up twin.
    */
-  private drawLastSeen(world: World, cam: Camera, viewer: number, now: number): void {
+  private drawLastSeen(world: World, cam: Camera, viewer: number): void {
     const ctx = this.ctx;
     ctx.save();
-    for (const g of world.groups) {
-      if (g.player === viewer || world.liveCount(g) === 0) continue;
-      if (g.seenBy[viewer]) {
-        const p = presenceOf(world, g, viewer);
-        if (p.n > 0) this.lastSeen.set(g.id, { x: p.x, y: p.y, at: now, n: p.n });
-        continue;
+    for (const [id, seen] of this.lastSeen) {
+      // A company in view is drawn as itself; the mark is for the lost.
+      if (seen.tick === world.tick) {
+        const g = world.groupById(id);
+        if (g && g.seenBy[viewer]) continue;
       }
-      const seen = this.lastSeen.get(g.id);
-      if (!seen) continue;
-      const age = now - seen.at;
-      if (age > HALO_MEMORY_SECONDS) {
-        this.lastSeen.delete(g.id);
-        continue;
-      }
-      const fade = age < 1 ? 1 : 1 - (age - 1) / (HALO_MEMORY_SECONDS - 1);
+      const fade = this.memoryFade(world, seen);
+      if (fade <= 0) continue;
       const sx = cam.worldToScreenX(seen.x);
       const sy = cam.worldToScreenY(seen.y);
       const r = Math.max(10, 26 * cam.zoom);
       ctx.globalAlpha = 0.5 * fade;
-      ctx.strokeStyle = playerColor[g.player] ?? ink;
+      ctx.strokeStyle = colorFor(seen.player, viewer);
       ctx.lineWidth = Math.max(1, 1.6 * cam.zoom);
       ctx.setLineDash([4, 5]);
       ctx.beginPath();
       ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.stroke();
       ctx.setLineDash([]);
-      // How many were there when you looked, so the mark carries a fact.
-      ctx.globalAlpha = 0.75 * fade;
-      ctx.fillStyle = playerColor[g.player] ?? ink;
-      ctx.font = Math.max(9, 11 * cam.zoom) + "px ui-monospace, monospace";
+      // How many were there when you looked, so the mark carries a fact. The
+      // ring fades with age; the number keeps a readable floor until the mark
+      // goes, because a faint number is a number nobody can read (RF-14).
+      const px = Math.max(CANVAS_LABEL_MIN_PX, 13 * cam.zoom);
+      ctx.font = "600 " + px + "px ui-monospace, monospace";
       ctx.textAlign = "center";
-      ctx.fillText(String(seen.n), sx, sy + 4);
+      ctx.globalAlpha = Math.max(0.55, fade);
+      haloText(ctx, String(seen.n), sx, sy + px * 0.35, colorFor(seen.player, viewer));
     }
+    ctx.textAlign = "left";
     ctx.restore();
   }
 
@@ -1053,9 +1193,11 @@ export class Renderer {
    * instant a fortification appeared, so the one thing sappers exist to do gave
    * the player nothing to watch.
    */
-  private drawWorks(world: World, cam: Camera, now: number): void {
+  private drawWorks(world: World, cam: Camera, clock: number, viewer: number): void {
     const ctx = this.ctx;
     const t = TILE_SIZE;
+    const now = animTime(clock);
+    const works = this.visibleWorks(world, viewer);
     ctx.save();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -1065,10 +1207,10 @@ export class Renderer {
     ctx.lineWidth = Math.max(2, 6 * cam.zoom);
     ctx.globalAlpha = 0.75;
     ctx.beginPath();
-    for (let i = 0; i < world.works.length; i++) {
-      const a2 = world.works[i];
-      for (let j = i + 1; j < world.works.length; j++) {
-        const b2 = world.works[j];
+    for (let i = 0; i < works.length; i++) {
+      const a2 = works[i];
+      for (let j = i + 1; j < works.length; j++) {
+        const b2 = works[j];
         if (b2.player !== a2.player) continue;
         const dx = b2.tx - a2.tx;
         const dy = b2.ty - a2.ty;
@@ -1079,12 +1221,12 @@ export class Renderer {
     }
     ctx.stroke();
 
-    for (const w of world.works) {
+    for (const w of works) {
       const sx = cam.worldToScreenX((w.tx + 0.5) * t);
       const sy = cam.worldToScreenY((w.ty + 0.5) * t);
       const r = t * 0.42 * cam.zoom;
       if (sx < -r * 3 || sy < -r * 3 || sx > cam.viewW + r * 3 || sy > cam.viewH + r * 3) continue;
-      const tint = playerColor[w.player] ?? ink;
+      const tint = colorFor(w.player, viewer);
 
       ctx.globalAlpha = 0.9;
       ctx.fillStyle = "#a8977a";
@@ -1121,6 +1263,8 @@ export class Renderer {
 
     // Work in progress: earth piling up, and a shovel-stroke of dust.
     for (const b of world.building) {
+      // Enemy digging is seen only by watching it (RF-05).
+      if (b.player !== viewer && !this.perception.ground((b.tx + 0.5) * t, (b.ty + 0.5) * t)) continue;
       const sx = cam.worldToScreenX((b.tx + 0.5) * t);
       const sy = cam.worldToScreenY((b.ty + 0.5) * t);
       const r = t * 0.42 * cam.zoom;
@@ -1144,8 +1288,39 @@ export class Renderer {
     ctx.restore();
   }
 
+  /**
+   * The works the viewer knows of: their own as they stand, and the enemy's as
+   * last observed. Ground in view refreshes the record -- adding what has
+   * been dug, dropping what has been razed -- and ground out of view keeps the
+   * last report, never the live board (RF-05).
+   */
+  private visibleWorks(world: World, viewer: number): KnownWork[] {
+    const out: KnownWork[] = [];
+    const t = TILE_SIZE;
+    const live = new Set<string>();
+    for (const w of world.works) {
+      if (w.player === viewer) {
+        out.push(w);
+        continue;
+      }
+      const key = w.tx + "," + w.ty;
+      live.add(key);
+      if (this.perception.ground((w.tx + 0.5) * t, (w.ty + 0.5) * t)) {
+        this.knownWorks.set(key, { tx: w.tx, ty: w.ty, kind: w.kind, player: w.player });
+      }
+    }
+    for (const [key, k] of this.knownWorks) {
+      if (!live.has(key) && this.perception.ground((k.tx + 0.5) * t, (k.ty + 0.5) * t)) {
+        this.knownWorks.delete(key);
+        continue;
+      }
+      out.push(k);
+    }
+    return out;
+  }
+
   private drawFog(world: World, cam: Camera, viewer: number): void {
-    const fog = world.fog[viewer];
+    void viewer; // the perception layer was built for this viewer
     const ctx = this.ctx;
     const b = cam.bounds();
     const x0 = Math.max(0, Math.floor(b.x0 / FOG_CELL) * FOG_CELL);
@@ -1156,9 +1331,15 @@ export class Renderer {
     ctx.save();
     for (let wy = y0; wy < y1; wy += FOG_CELL) {
       for (let wx = x0; wx < x1; wx += FOG_CELL) {
-        const state = fog.at(wx + 1, wy + 1);
-        if (state === 1) continue;
-        ctx.fillStyle = state === 2 ? "rgba(58, 48, 34, 0.30)" : "rgba(44, 37, 26, 0.78)";
+        // Through the perception layer, so ground the fog disc lit but no man
+        // of yours actually has a line to -- the far side of a wood -- shades
+        // as remembered, not as seen (RF-03). Lit ground that looks empty now
+        // IS empty, as far as anything you could see goes.
+        const state = this.perception.shade(world, wx + 1, wy + 1);
+        if (state === SEEN_NOW) continue;
+        ctx.fillStyle = state === SEEN_BEFORE || state === SEEN_OBSCURED
+          ? "rgba(58, 48, 34, 0.30)"
+          : "rgba(44, 37, 26, 0.78)";
         ctx.fillRect(
           Math.floor(cam.worldToScreenX(wx)), Math.floor(cam.worldToScreenY(wy)), size, size,
         );
@@ -1213,4 +1394,65 @@ function crossMark(ctx: CanvasRenderingContext2D, x: number, y: number, r: numbe
   ctx.moveTo(x + r, y - r);
   ctx.lineTo(x - r, y + r);
   ctx.stroke();
+}
+
+/** A diamond, for the foe's block at strategic zoom. */
+function diamond(ctx: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+  ctx.moveTo(x, y - r);
+  ctx.lineTo(x + r, y);
+  ctx.lineTo(x, y + r);
+  ctx.lineTo(x - r, y);
+  ctx.closePath();
+}
+
+/**
+ * Text on a parchment halo, so a map label stays readable over forest, water
+ * or a crowd of counters (docs/ui-policy.md, "Canvas text").
+ */
+export function haloText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, fill: string): void {
+  ctx.save();
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "rgba(243, 236, 219, 0.92)";
+  ctx.lineWidth = 4;
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = fill;
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+/**
+ * A struck pennant: a pole with its flag hanging down it, drawn in the
+ * company's side colour on a pale backing, so "broken" reads by shape.
+ */
+function drawStruckPennant(ctx: CanvasRenderingContext2D, x: number, y: number, h: number, colour: string): void {
+  ctx.save();
+  // Pale backing first, so the mark reads over any ground.
+  ctx.strokeStyle = "rgba(243, 236, 219, 0.95)";
+  ctx.lineWidth = Math.max(4, h * 0.38);
+  ctx.beginPath();
+  ctx.moveTo(x, y - h);
+  ctx.lineTo(x, y + h * 0.4);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(243, 236, 219, 0.95)";
+  ctx.beginPath();
+  ctx.moveTo(x - 1, y - h * 0.55);
+  ctx.lineTo(x - h * 0.75, y + h * 0.15);
+  ctx.lineTo(x - 1, y + h * 0.35);
+  ctx.closePath();
+  ctx.fill();
+  // The pole, and the flag fallen against it.
+  ctx.strokeStyle = "#2f2418";
+  ctx.lineWidth = Math.max(1.5, h * 0.14);
+  ctx.beginPath();
+  ctx.moveTo(x, y - h);
+  ctx.lineTo(x, y + h * 0.4);
+  ctx.stroke();
+  ctx.fillStyle = colour;
+  ctx.beginPath();
+  ctx.moveTo(x - 1, y - h * 0.45);
+  ctx.lineTo(x - h * 0.6, y + h * 0.1);
+  ctx.lineTo(x - 1, y + h * 0.25);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
 }

@@ -18,6 +18,8 @@ import { cost, validate } from "../src/content/army.ts";
 import { COMMANDERS } from "../src/content/commanders.ts";
 import { LEVELS } from "../src/content/levels/index.ts";
 import { recordBattle, FIRST_CHAPTER } from "../src/content/campaign.ts";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 let failures = 0;
 let section = "";
@@ -756,6 +758,72 @@ begin("app: screens and layers");
     heads.join(" / "));
   app.dispose();
   check("the canvas has no listeners left", canvas.count() === 0);
+}
+
+// -- the one scaling policy (docs/ui-policy.md) ------------------------------
+//
+// No browser runs here, so these read the stylesheet and pages as text. The
+// e2e scenario k2-text-floor checks computed sizes in a real browser.
+begin("ui policy (BS-06, BS-07, BS-10, BS-11, RT-02)");
+{
+  const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const css = read("../src/style.css").replace(/\/\*[\s\S]*?\*\//g, "");
+
+  // Every font size, longhand or in the `font:` shorthand, resolves to 1rem
+  // (16 px) or more. Sizes are rem or a --text token; a px font size is a
+  // policy break in itself, because it ignores the player's text setting.
+  const small: string[] = [];
+  const pxFonts: string[] = [];
+  for (const m of css.matchAll(/font(?:-size)?\s*:\s*([^;}]+)/g)) {
+    const v = m[1];
+    for (const n of v.matchAll(/(\d*\.?\d+)(px|rem|em)\b/g)) {
+      // In the shorthand, a size after "/" is the line height, not a size.
+      const before = v.slice(0, n.index ?? 0);
+      if (before.trimEnd().endsWith("/")) continue;
+      const size = parseFloat(n[1]);
+      if (n[2] === "px") pxFonts.push(m[0].trim());
+      else if (size < 1) small.push(m[0].trim());
+    }
+  }
+  check("no font size under 1rem in the stylesheet", small.length === 0, small.join(" | "));
+  check("no font size in px (sizes follow the player's text setting)", pxFonts.length === 0, pxFonts.join(" | "));
+  const token = /--text:\s*(\d*\.?\d+)rem/.exec(css);
+  check("the body text token is at least 1rem", token !== null && parseFloat(token[1]) >= 1, token ? token[0] : "missing");
+
+  check("an authored focus ring exists", /:focus-visible\s*\{[^}]*outline:\s*3px/.test(css));
+  check("reduced motion is honoured", /@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(css));
+  check("panels do not scroll inside scrolling overlays (one scroll region)",
+    !/\.(menu|aa|home)-panel\s*\{[^}]*overflow:\s*auto/.test(css));
+  for (const page of ["../index.html", "../e2e.html"]) {
+    check(page.slice(3) + " declares its language", /<html lang="en">/.test(read(page)));
+  }
+
+  // Contrast of the text inks against the panels they sit on (WCAG 2.x).
+  const lum = (hex: string): number => {
+    const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  };
+  const ratio = (a: string, b: string): number => {
+    const [l1, l2] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return (l1 + 0.05) / (l2 + 0.05);
+  };
+  const tok = (name: string): string => {
+    const m = new RegExp("--" + name + ":\\s*(#[0-9a-fA-F]{6})").exec(css);
+    return m ? m[1] : "#000000";
+  };
+  const panels = ["panel", "panel-2"].map(tok).concat(["#f1e9d4", "#f2ecdc"]);
+  const low: string[] = [];
+  for (const ink of ["ink", "ink-1", "ink-2", "friend", "foe"]) {
+    for (const bg of panels) {
+      const r = ratio(tok(ink), bg);
+      if (r < 4.5) low.push(ink + " on " + bg + " " + r.toFixed(2));
+    }
+  }
+  check("every text ink holds 4.5:1 on every panel", low.length === 0, low.join(", "));
+  check("primary buttons' text holds 4.5:1", ratio("#f4efe2", tok("friend")) >= 4.5);
+  check("disabled primary text holds 4.5:1", ratio(tok("ink-1"), "#d9d1bd") >= 4.5);
+  check("the focus ring holds 3:1 on parchment", ratio(tok("focus"), tok("panel")) >= 3);
 }
 
 console.log("");

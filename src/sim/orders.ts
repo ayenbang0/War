@@ -41,14 +41,31 @@ export type OrderBody =
    * `squad` is the company it attaches to for the ones that need one (a charge
    * is given TO somebody), or -1 for the ones that simply land somewhere.
    */
-  | { kind: "ability"; squad: number; ability: AbilityId; x: number; y: number };
+  | { kind: "ability"; squad: number; ability: AbilityId; x: number; y: number }
+  /**
+   * Set a company down with its centre on (x, y), keeping its shape.
+   *
+   * A SETUP order: it means something only while the board is being set out
+   * (World.deploying), and is dropped once the battle has begun -- picking men
+   * up and putting them down mid-battle would be teleporting. It exists so the
+   * deployment drag goes through the order stream like everything else (audit
+   * PC-05), rather than the frame loop writing soldier positions directly,
+   * which no replay or lockstep peer could ever reproduce.
+   */
+  | { kind: "place"; squad: number; x: number; y: number };
 
 export type OrderKind = OrderBody["kind"];
 
 export const ORDER_KINDS: readonly OrderKind[] = [
   "move", "attack", "hold", "formation", "retreat", "patrol", "recover",
-  "ambush", "feint", "ability",
+  "ambush", "feint", "ability", "place",
 ];
+
+/**
+ * Orders that arrange the board rather than command a battle. They are the
+ * only ones the world applies while deploying; see World.step.
+ */
+export const SETUP_ORDER_KINDS: readonly OrderKind[] = ["place", "formation"];
 
 export type Order = OrderBody & {
   /** Tick at which this order takes effect. */
@@ -90,6 +107,25 @@ export class OrderQueue {
     const rest: Order[] = [];
     for (const o of this.pending) {
       if (o.tick <= tick) due.push(o);
+      else rest.push(o);
+    }
+    this.pending = rest;
+    due.sort((a, b) => a.tick - b.tick || a.player - b.player || a.seq - b.seq);
+    return due;
+  }
+
+  /**
+   * Remove and return only the due orders of the given kinds, in canonical
+   * order, leaving every other order queued. Deployment uses this: setup
+   * orders apply while the clock is held at tick 0, and anything else (a
+   * march order a peer stamped for tick 0) waits for the battle as before.
+   */
+  drainKinds(tick: number, kinds: readonly OrderKind[]): Order[] {
+    if (this.pending.length === 0) return [];
+    const due: Order[] = [];
+    const rest: Order[] = [];
+    for (const o of this.pending) {
+      if (o.tick <= tick && kinds.includes(o.kind)) due.push(o);
       else rest.push(o);
     }
     this.pending = rest;

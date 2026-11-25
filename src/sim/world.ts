@@ -19,9 +19,9 @@
  *   3. Each soldier steers toward its own slot, pushing off neighbours.
  */
 
-import { atan2, clamp, cos, dist, max, min, PI, rotateToward, round, sin, sqrt, TAU } from "./math.ts";
+import { atan2, clamp, cos, dist, floor, max, min, PI, rotateToward, round, sin, sqrt, TAU } from "./math.ts";
 import { Rng, Stream } from "./rng.ts";
-import { OrderQueue, type Order } from "./orders.ts";
+import { OrderQueue, SETUP_ORDER_KINDS, type Order } from "./orders.ts";
 import { generateTerrain, Terrain, TerrainGrid, TERRAIN_INFO, TILE_SIZE } from "./terrain.ts";
 import { formationSlots, formationRadius, type FormationShape } from "./formations.ts";
 import { advanceToward } from "./movement.ts";
@@ -281,6 +281,12 @@ export type CombatEvent = {
   readonly y1: number;
   lethal: boolean;
   readonly victim: number;
+  /**
+   * The soldier who struck. Presentation only, like the rest of the event: the
+   * renderer gates a blow on whether the viewer can see EITHER man (audit
+   * RF-04), which needs to know who threw it, not merely from where.
+   */
+  readonly attacker: number;
 };
 
 export type WorldConfig = {
@@ -403,7 +409,7 @@ export class World {
    */
   readonly casualtiesByCause: [number[], number[]] = [[0, 0, 0], [0, 0, 0]];
   /** Companies that broke, in the order they broke, for the after-action. */
-  readonly breakages: { name: string; player: number; tick: number; cause: string }[] = [];
+  readonly breakages: { name: string; player: number; tick: number; cause: string; group: number }[] = [];
 
   readonly rng: {
     readonly combat: Rng;
@@ -662,7 +668,7 @@ export class World {
     if (dying.destroyedAt < 0 && dying.losses >= dying.raisedWith) {
       dying.destroyedAt = this.tick;
       this.breakages.push({
-        name: dying.name, player: dying.player, tick: this.tick, cause: "wiped out",
+        name: dying.name, player: dying.player, tick: this.tick, cause: "wiped out", group: dying.id,
       });
     }
     for (const m of this.groups[at].members) {
@@ -838,7 +844,13 @@ export class World {
 
   step(): void {
     if (this.outcome) return;
-    if (this.deploying) return;
+    if (this.deploying) {
+      // The board is being set out and the clock does not run, but the setup
+      // orders -- placing a company, dressing its ranks -- still land here, at
+      // a tick boundary, and nowhere else (audit PC-05).
+      this.applySetupOrders();
+      return;
+    }
     if (this.tick === this.floodAt) this.raiseFlood();
     this.landReinforcements();
     for (const ai of this.ai) ai.update(this);
@@ -924,6 +936,58 @@ export class World {
     for (const order of this.orders.drain(this.tick)) this.applyOrder(order);
   }
 
+  /**
+   * Apply the setup orders due now while deploying. Other orders stay queued
+   * for the battle, exactly as before setup orders existed (the commander
+   * refuses to issue them while deploying, so the player banks nothing; this
+   * only keeps a peer's or a test's tick-0 order from vanishing).
+   */
+  private applySetupOrders(): void {
+    for (const order of this.orders.drainKinds(this.tick, SETUP_ORDER_KINDS)) {
+      if (order.kind === "place") this.applyPlace(order.player, order.squad, order.x, order.y);
+      else if (order.kind === "formation") this.applyOrder(order);
+    }
+  }
+
+  /**
+   * Set a company down with its centre on (x, y). Refused whole -- nobody
+   * moves -- if any man would land off the map or on ground nobody can stand
+   * on, so a company is never dropped half into a river (audit FL-01).
+   */
+  private applyPlace(player: number, squad: number, x: number, y: number): void {
+    const g = this.groupById(squad);
+    if (!g || g.player !== player) return;
+    const s = this.soldiers;
+    let cx = 0;
+    let cy = 0;
+    let n = 0;
+    for (const m of g.members) {
+      if (s.alive[m] !== 1) continue;
+      cx += s.x[m];
+      cy += s.y[m];
+      n++;
+    }
+    if (n === 0) return;
+    const dx = x - cx / n;
+    const dy = y - cy / n;
+    for (const m of g.members) {
+      if (s.alive[m] !== 1) continue;
+      const nx = s.x[m] + dx;
+      const ny = s.y[m] + dy;
+      if (nx < 0 || ny < 0 || nx >= this.terrain.worldWidth || ny >= this.terrain.worldHeight) return;
+      if (!this.terrain.passableAt(floor(nx / TILE_SIZE), floor(ny / TILE_SIZE))) return;
+    }
+    for (const m of g.members) {
+      if (s.alive[m] !== 1) continue;
+      s.x[m] += dx;
+      s.y[m] += dy;
+    }
+    // The anchor goes with them, or the men would walk back to where they were
+    // picked up from the moment the battle began.
+    g.anchorX += dx;
+    g.anchorY += dy;
+  }
+
   private applyOrder(order: Order): void {
     if (order.kind === "ability") {
       this.applyAbility(order.player, order.ability, order.x, order.y, order.squad);
@@ -986,6 +1050,10 @@ export class World {
         g.path = this.routeThrough(g, order.path);
         return;
       }
+      case "place":
+        // A setup order that arrived after the battle began. Picking men up
+        // and putting them down mid-battle would be teleporting.
+        return;
       case "recover":
         g.stance = "recover";
         g.target = -1;
@@ -1974,6 +2042,7 @@ export class World {
       y1: s.y[victim],
       lethal: false,
       victim,
+      attacker,
     });
   }
 
@@ -2928,7 +2997,7 @@ export class World {
         g.flankLosses * 2 >= g.losses && g.losses > 0 ? "flanked"
           : g.losses >= max(1, (g.losses + living) / 2) ? "cut to pieces"
             : "worn down";
-      this.breakages.push({ name: g.name, player: g.player, tick: this.tick, cause });
+      this.breakages.push({ name: g.name, player: g.player, tick: this.tick, cause, group: g.id });
     }
   }
 }

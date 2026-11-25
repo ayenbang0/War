@@ -32,6 +32,11 @@ export class Pen {
   drawing = false;
   /** Label of the last committed gesture, for the HUD. */
   lastAction = "";
+  /**
+   * The last stroke, if it meant nothing: kept, with the reason, so it can
+   * fade out in grey instead of vanishing (audit PC-02). `at` is real ms.
+   */
+  rejected: { points: Point[]; why: string; at: number } | null = null;
 
   private readonly canvas: HTMLCanvasElement;
   private readonly cam: Camera;
@@ -108,7 +113,13 @@ export class Pen {
   private onUp = (e: PointerEvent): void => {
     if (!this.drawing || e.pointerId !== this.pointerId) return;
     this.release(e.pointerId);
-    this.lastAction = this.commander.commit(this.points);
+    const stroke = this.points;
+    this.lastAction = this.commander.commit(stroke);
+    // A tap that merely cleared or selected is not a refusal; a drawn stroke
+    // that did nothing is, and is shown as one.
+    this.rejected = this.commander.rejected && stroke.length > 1
+      ? { points: stroke, why: this.lastAction, at: performance.now() }
+      : null;
     this.points = [];
   };
 

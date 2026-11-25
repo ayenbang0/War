@@ -153,7 +153,7 @@ export type Recognized =
 // -- tuning, all in world units ------------------------------------------------
 
 /** Below this total length a stroke is a tap, not a drawing. */
-const TAP_LENGTH = 26;
+export const TAP_LENGTH = 26;
 /** Extra grab room around a squad footprint when anchoring a stroke. */
 export const ANCHOR_SLACK = 26;
 /** Endpoint within this much of an enemy footprint counts as targeting it. */
@@ -613,7 +613,10 @@ export function gestureLabel(r: Recognized | null): string {
     case "feint":
       return "feint";
     case "lasso":
-      return "group " + r.squads.length;
+      // A bare word: how many MEN the loop takes is a question about where
+      // each man stands, which only the Commander can answer (audit PC-07).
+      // Counting anchors here read "group 0" over a loop round half a company.
+      return "group";
     default:
       return r.kind;
   }

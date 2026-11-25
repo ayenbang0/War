@@ -68,3 +68,22 @@ Owner phases: K0 = screen stack / focus / keyboard / scaling and settings policy
 9. Two recover rings while a recovering company's anchor is displaced (RF-19).
 10. State pass: 45 squads plus a long melee near the `MAX_EFFECTS` cap (RF-22); night battle wash over fog; window blur and resize mid-battle.
 11. AI fairness, headless: assert that the AI's posture does not change when an unseen player company is added or removed (RF-07), and that its targets match seen-soldier centroids rather than anchors (RF-08).
+
+## K2 status
+
+Findings fixed by K2 (branch `k2fix`). Anything not listed keeps its original owner.
+
+| id | status | how |
+|---|---|---|
+| RF-01 | fixed in K2 (91ac90c) | foe keyline and dark edge on each man, diamonds at far zoom, dashed last-seen rings |
+| RF-02 | fixed in K2 (91ac90c) | viewer-relative friend/foe roles for workings, mends, shields, fields, halos, held ground |
+| RF-03 | fixed in K2 (91ac90c) | lit ground out of line of sight is shaded as remembered (`src/render/perception.ts`) |
+| RF-04 | fixed in K2 (91ac90c) | effects and bodies gated by the same seen-bit rule as counters; hidden archers draw no streak |
+| RF-05 | fixed in K2 (91ac90c) | enemy works, digging, workings and fields drawn only where observed; works remembered as last seen |
+| RF-06 | fixed in K2 (91ac90c) | last-seen marks and the fallen age on the sim clock; they hold while paused (render-check and e2e) |
+| RF-07 | fixed in K2 (91ac90c) | AI strength and morale from seen men plus 60 s memory; parity prior when nothing seen |
+| RF-08 | fixed in K2 (91ac90c) | AI aims at and remembers the centroid of seen men, not the order anchor |
+| RF-09 | fixed in K2 (91ac90c) | struck pennant over a broken company in view, either side; ring flash when it breaks |
+| RF-10 | fixed in K2 (91ac90c) | a mark expires by age or after its ground is seen empty for 3 s, not when the company dies unseen |
+| RF-14 | fixed in K2 (91ac90c) | canvas label floor 13 px with a halo; control-point names at every zoom |
+| RF-19 | fixed in K2 (91ac90c) | anchor copy of the recover ring removed |

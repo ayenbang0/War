@@ -73,3 +73,16 @@ Contrast ratios below were computed from the CSS hex values (WCAG relative lumin
 - Mouse only and Pointer Events (touch/stylus): hit targets (BS-28), double scroll (BS-14).
 - State: storage refused (private window / blocked storage) through chapter 1 → Continue (BS-01); tutorial left running idle to the 10-minute clock, and the passive AI approaching (BS-05); long commander/level names; 0 abilities; max squads; window blur during a lesson; resize mid-stroke in the tutorial; frame-rate sweep at 60 and 144 Hz for the step hold (BS-23).
 - Contrast spot-check of the HUD panel over the darkest real terrain in the tutorial field.
+
+## K2 status
+
+Findings fixed by K2 (branch `k2fix`). Anything not listed keeps its original owner.
+
+| id | status | how |
+|---|---|---|
+| BS-06 | fixed in K2 (91ac90c) | 16 px (1rem) floor for every DOM and HUD text; rem off the browser root (docs/ui-policy.md) |
+| BS-07 | fixed in K2 (91ac90c) | secondary ink `--ink-2` #6d5c40 (4.7:1 or better on every panel); tokens in `:root` |
+| BS-08 | fixed in K2 (91ac90c) | HUD wraps (`pre-wrap`, max-width to the window); lesson text no longer hard-wrapped |
+| BS-10 | fixed in K2 (91ac90c) | two-tone `:focus-visible` ring, distinct from hover; hover added to choice/step/secondary/primary |
+| BS-11 | partly fixed in K2 (91ac90c) | `<html lang="en">` only; ARIA roles and live regions remain for K11 |
+| BS-30 | fixed in K2 (91ac90c) | disabled primary is #5f5138 on #d9d1bd (5.07:1) and dashed |

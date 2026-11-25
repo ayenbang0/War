@@ -147,22 +147,10 @@ export class Tutorial {
       "LESSON " + (this.index + 1) + " of " + STEPS.length + (ticked ? "   done" : ""),
       step.ask,
       "",
-      wrap(step.how),
+      // Not hard-wrapped: the HUD panel wraps its own text to the window, so
+      // the lesson reflows at 200% zoom instead of running off the edge
+      // (audit BS-08, docs/ui-policy.md).
+      step.how,
     ];
   }
-}
-
-/** Wrap to something a monospaced HUD can show without running off the edge. */
-function wrap(text: string, width = 58): string {
-  const words = text.split(" ");
-  const out: string[] = [];
-  let line = "";
-  for (const w of words) {
-    if (line.length + w.length + 1 > width) {
-      out.push(line);
-      line = w;
-    } else line = line ? line + " " + w : w;
-  }
-  if (line) out.push(line);
-  return out.join("\n");
 }
