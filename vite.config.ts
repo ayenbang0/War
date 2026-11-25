@@ -1,6 +1,9 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  // Relative asset paths, so the build works wherever it is served from,
+  // including GitHub Pages under /War/.
+  base: "./",
   build: {
     // The entry point awaits the menu before it can build a world, and
     // top-level await needs a modern target. The game already requires Pointer
