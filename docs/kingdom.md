@@ -644,3 +644,128 @@ and state kept; a lost holding leaves) and "city plans (K3b)"
 `k3b-zoom-through`, and K3's two scenarios now run through the city. Audit:
 `docs/audit/u2-city-view.md` (no open P0/P1; runtime pass pending a real
 browser).
+
+## K4 — armies and recruitment
+
+Army tokens on the kingdom map (PLAN.md §B.4, §B.5), the battle game's
+rulebook carried onto the map: a squad costs what a battle says it costs,
+and the battle's caps hold.
+
+### Files
+
+| File | What |
+|---|---|
+| `src/content/kingdom/armies.ts` | every army number: caps, costs, wages, rations, carry, speed, sight, hunger, pay, recovery (all provisional, docs/PROVISIONAL.md K4.x) |
+| `src/content/kingdom/army-strings.ts` | the sim's refusals (`ARMY_REFUSAL`), the pen's plates (`PEN`), the card and dialogs (`AC`) |
+| `src/sim/kingdom/armies.ts` | queries, `checkArmyOrder` / `applyArmyOrder` (one validation path), `marchArmies` (every tick), `runArmyDay` (once a day) |
+| `src/input/kingdom-gestures.ts`, `kingdom-commander.ts` | the army vocabulary; `interpretStroke` stays the one function for ghost and order |
+| `src/render/kingdom/layout.ts`, `renderer.ts` | where counters are drawn (`armyCounterAt`, `fanSlots`); how |
+| `src/ui/kingdom/army-card.ts`, `recruit-menu.ts` | the army card; the levy and recruit dialogs |
+| `tools/kingdom-armies.ts` | the K4 suite (in `npm test`) |
+| `src/e2e/scenarios-k4.ts` | `k4-armies`, `k4-barracks-recruit` |
+
+### The army
+
+`Army {id, owner, name, doctrine, squads, abilities, mover, supply, morale,
+captain, hunger, unpaid, arrears, posture, …}` wraps a battle `ArmyList`
+(`armyList(a)`) with per-squad current strength (`ArmySquad {id, unit, men,
+wounded, levy}`; `squadStrengths(a)` for K5). Armies and squads take ids
+from the world's one counter and are kept in id order; at most 8 a side.
+Morale is kept (K6 gives it rules). An army is a sight source (45 miles).
+
+**The king rides with at most one army** (`king.army`): his mover copies
+its mover each tick, and his march and halt orders become its. The first
+army raised where he stands alone takes him in; `kingJoin` moves him.
+
+### Raising an army
+
+- **From nothing**: the king's followers (the levy he rallied) form a levy
+  squad of spears or slingers where he stands, no barracks, coin or iron;
+  at least 4 men, up to a full squad. It takes no wage.
+- **At a barracks**: a standing, paid-up barracks in a holding of the
+  king's raises trained squads for their men in followers, battle points ×
+  4 coin, and iron by type. They draw a wage.
+
+### Orders (appended to `KINGDOM_ORDER_KINDS`)
+
+`recruit {at, army, unit, levy}` · `disband {army}` · `marchArmy {army, to}` ·
+`haltArmy {army}` · `merge {army, into}` · `split {army, squads}` ·
+`garrison {army}` · `patrol {army, holdings}` · `recover {army}` ·
+`setDoctrine {army, doctrine}` · `unlockAbility {army, ability}` ·
+`intercept {army, target}` (another side's army, in sight) · `kingJoin {army}`.
+Every one is checked by `checkArmyOrder`, the function the card's buttons
+and the pen's ghost ask, and applied at the tick boundary.
+
+### The army day (after the economy's day)
+
+1. **Wages**: what is owed first, then today's, from coin (`wages`); unpaid
+   days are counted and the first flagged (`wagesLate`).
+2. **Bread**: packs and wagons first, then the stores (at home or with the
+   king, `rations`), then forage where it stands (it strips the fields and
+   bumps the holding's `foraged`, K6's unrest hook). At home or with the
+   king the packs are refilled (`provisions`).
+3. **Hunger** past 2 days: desertion, death (wounded first) and sickness at
+   per-mille rates with stored remainders, so losses are exact and need no
+   random draw. **Unpaid** past 3 days: trained men desert.
+4. **Recovery** while resting in a town of yours (faster with a hall, or with
+   healers anywhere) mends the wounded; at a barracks, gaps are refilled
+   from the followers and iron (`recruitment`).
+5. An army with no men left is gone (`armyGone`: starved / deserted).
+
+The king's unformed followers also walk home from a hungry party (K4.5).
+
+### The proof: "recruit → march → starve" (tools/kingdom-armies.ts)
+
+The first army is raised at Cold Hearth and marched alone to Rookstead with
+what its packs hold. It eats them empty, goes hungry, loses no one in the
+grace, then loses men to desertion, death and sickness every day until it
+has starved away -- the same men on the same days on every run, and on
+another seed too; the same army kept by full stores is not short (two weeks; loose grain spoils).
+
+### The pen (§B.5)
+
+| Stroke | Order |
+|---|---|
+| line from an army (or the king) to a holding | march |
+| line from a counter to another side's army | intercept |
+| line from one army of yours to another | merge (from the king: he rides with it) |
+| line across an army of yours, starting on no counter | split (the later half of its squads) |
+| ring round its holding, or round the army alone | garrison |
+| large ring round two or more holdings | patrol, in the order the ring passed them |
+| heart on an army | recover |
+| tap | the army's card |
+
+Closed strokes are read before anyone is grabbed; their subject is the army
+the ring starts on, else the one army of yours it encloses. A stroke the sim
+would refuse shows "no order: <the sim's reason>". The kingdom matrix
+(`tools/gesture-corpus.ts` army scene: two armies fanned under the king, one
+at Greyshaw, one of yours beside another side's at Fell End, at three zooms)
+stays diagonal; the battle matrix is untouched (`hullFill` is only exported).
+
+### Save format version 4
+
+Adds the armies, `king.army`, each holding's `foraged`, and the three new
+ledger categories (`provisions`, `disbanded`, `favours`) on every page.
+`migrate3to4` fills them empty; v2 → v3 now re-lays pages to K3's own width.
+Every army field is validated on load (ids, caps, men ≤ a full squad,
+wounded ≤ men, the king's army standing where he is, garrisons).
+
+### Determinism and the golden
+
+The kingdom golden moved (884fd624 → c4706524): the hash now covers army
+state, `king.army` and `foraged`, and K4.5 (followers leaving a hungry
+party) changes the decade's levy. The battle tiers did not move.
+
+### UI
+
+Counters (shield and numeral for yours, diamond and initial for another
+side's, crown tick on the king's army, posture badge, men and days of grain
+in words, a strength bar), the live route of each marching army, the army
+card with every pen verb as a button, "Raise followers…" on the king card,
+"Raise squads…" on a barracks lot in the city, and the armies' daily coin
+and grain on the resources bar. Audit: docs/audit/u2-army-panels.md.
+
+### What K4 does not do
+
+Battles when armies meet (K5: `intercepted` is the hook); morale rules and
+unrest from foraging (K6); captains' armies moving on their own (K8).

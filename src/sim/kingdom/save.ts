@@ -33,7 +33,15 @@ import {
   TAX_RATE_IDS, type StockId, type TaxRateId,
 } from "../../content/kingdom/economy.ts";
 import { KINGDOM_ORDER_KINDS, type KingdomOrder } from "./orders.ts";
-import { KING_TASKS, PLOT_STAGES, type FactionExploration, type Find, type KingTask, type Mover, type PlotStage } from "./state.ts";
+import {
+  ARMY_POSTURES, KING_TASKS, PLOT_STAGES, type Army, type ArmyPosture, type FactionExploration, type Find, type KingTask,
+  type Mover, type PlotStage,
+} from "./state.ts";
+import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "../../content/unit-types.ts";
+import { DOCTRINE_IDS, type DoctrineId } from "../../content/doctrines.ts";
+import { ABILITY_IDS, type AbilityId } from "../../content/abilities.ts";
+import { MAX_OF_ONE_ABILITY } from "../../content/army.ts";
+import { MAX_ARMIES_PER_SIDE } from "../../content/kingdom/armies.ts";
 import { KNOW_KNOWN, KNOW_SEEN, KNOW_UNKNOWN, type Knowledge } from "../../content/kingdom/exploration.ts";
 import { STORY_EVENTS } from "../../content/story/events.ts";
 import { UPGRADE_IDS, type UpgradeId } from "../../content/story/upgrades.ts";
@@ -44,7 +52,7 @@ import { roadBetween } from "./graph.ts";
 import { KINGDOM_STREAMS, KingdomWorld } from "./world.ts";
 
 export const KINGDOM_SAVE_FORMAT = "war.kingdom";
-export const KINGDOM_SAVE_VERSION = 3;
+export const KINGDOM_SAVE_VERSION = 4;
 
 export type SavedPlot = { id: number; crop: string | null; stage: PlotStage; progress: number; days: number; health: number };
 export type SavedHolding = {
@@ -61,6 +69,32 @@ export type SavedHolding = {
   taxCarry: number;
   doleCarry: number;
   famine: number;
+  foraged: number;
+};
+export type SavedSquad = { id: number; unit: UnitTypeId; men: number; wounded: number; levy: boolean };
+export type SavedArmy = {
+  id: number;
+  owner: FactionId;
+  name: string;
+  doctrine: DoctrineId;
+  squads: SavedSquad[];
+  abilities: AbilityId[];
+  mover: Mover;
+  supply: number;
+  morale: number;
+  captain: string;
+  hunger: number;
+  unpaid: number;
+  arrears: number;
+  posture: ArmyPosture;
+  postureDays: number;
+  patrol: number[];
+  patrolIndex: number;
+  target: number;
+  mergeInto: boolean;
+  desertCarry: number;
+  dieCarry: number;
+  sickCarry: number;
 };
 export type SavedEconomy = {
   faction: FactionId;
@@ -81,17 +115,22 @@ export type SavedExploration = {
 };
 
 /**
- * Version 3 (K3a): the map twice the size (holdings 37-72 appended, so every
+ * Version 4 (K4): armies -- every army on the map with its squads' strength,
+ * supply, wages and orders; the army the king rides with; each holding's
+ * days foraged this season; three new ledger categories (provisions,
+ * disbanded, favours).
+ *
+ * (Version 3 (K3a): the map twice the size (holdings 37-72 appended, so every
  * later id moved: see migrate2to3), three new ledger categories, and every
- * faction's exploration -- map knowledge, finds and special upgrades.
+ * faction's exploration -- map knowledge, finds and special upgrades.)
  *
  * (Version 2, K3: version 1 plus the economy -- every faction's stores and
  * ledger pages, and the new fields on holdings (works, idle, tax and its
  * remainders, famine), plots (days, health) and the king (task).)
  */
-export type KingdomSaveV3 = {
+export type KingdomSaveV4 = {
   format: typeof KINGDOM_SAVE_FORMAT;
-  version: 3;
+  version: 4;
   map: string;
   /** Fingerprint of the static map; see mapFingerprint. */
   mapFingerprint: string;
@@ -105,15 +144,16 @@ export type KingdomSaveV3 = {
     seqs: number[];
     pending: KingdomOrder[];
     holdings: SavedHolding[];
-    king: { id: number; companions: string[]; mover: Mover; task: KingTask; taskDays: number };
+    king: { id: number; companions: string[]; mover: Mover; task: KingTask; taskDays: number; army: number };
     economy: SavedEconomy[];
     explore: SavedExploration[];
+    armies: SavedArmy[];
   };
   log: KingdomOrder[];
 };
 
 /** The current save shape. */
-export type KingdomSave = KingdomSaveV3;
+export type KingdomSave = KingdomSaveV4;
 
 export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
 
@@ -122,6 +162,23 @@ export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok
  * appended its categories, so an old page is the new one minus its tail.
  */
 const V2_CATEGORIES = LEDGER_CATEGORY_IDS.indexOf("finds");
+/** ...and a version-3 page those before K4's first. */
+const V3_CATEGORIES = LEDGER_CATEGORY_IDS.indexOf("provisions");
+
+/** Re-lay a ledger page's flow from `from` categories wide to `to` wide (the new ones zero). */
+function relayPage(v: unknown, from: number, to: number): unknown {
+  if (v === null || typeof v !== "object") return v;
+  const d = { ...(v as Record<string, unknown>) };
+  const flow = Array.isArray(d.flow) ? d.flow : [];
+  // A page of the wrong shape is left wrong, for readPage to refuse.
+  if (flow.length !== LEDGER_STOCK_IDS.length * from) return d;
+  const out = new Array<unknown>(LEDGER_STOCK_IDS.length * to).fill(0);
+  for (let st = 0; st < LEDGER_STOCK_IDS.length; st++) {
+    for (let c = 0; c < from; c++) out[st * to + c] = flow[st * from + c];
+  }
+  d.flow = out;
+  return d;
+}
 
 /** A ledger page with nothing on it yet, as a v1 save's economy begins (in the v2 layout). */
 function blankPage(day: number, start: number[]): LedgerDay {
@@ -238,19 +295,7 @@ function migrate2to3(save: Record<string, unknown>): Record<string, unknown> {
     return o;
   };
   snap.pending = (Array.isArray(snap.pending) ? snap.pending : []).map(order);
-  const relay = (v: unknown): unknown => {
-    if (v === null || typeof v !== "object") return v;
-    const d = { ...(v as Record<string, unknown>) };
-    const flow = Array.isArray(d.flow) ? d.flow : [];
-    const out = new Array<unknown>(LEDGER_STOCK_IDS.length * LEDGER_CATEGORY_IDS.length).fill(0);
-    // A page of the wrong shape is left wrong, for readPage to refuse.
-    if (flow.length !== LEDGER_STOCK_IDS.length * V2_CATEGORIES) return d;
-    for (let st = 0; st < LEDGER_STOCK_IDS.length; st++) {
-      for (let c = 0; c < V2_CATEGORIES; c++) out[st * LEDGER_CATEGORY_IDS.length + c] = flow[st * V2_CATEGORIES + c];
-    }
-    d.flow = out;
-    return d;
-  };
+  const relay = (v: unknown): unknown => relayPage(v, V2_CATEGORIES, V3_CATEGORIES);
   snap.economy = (Array.isArray(snap.economy) ? snap.economy : []).map((v) => {
     const e = { ...(v as Record<string, unknown>) };
     e.open = relay(e.open);
@@ -285,7 +330,31 @@ function migrate2to3(save: Record<string, unknown>): Record<string, unknown> {
 export const MIGRATIONS: Readonly<Record<number, (save: Record<string, unknown>) => Record<string, unknown>>> = {
   1: migrate1to2,
   2: migrate2to3,
+  3: migrate3to4,
 };
+
+/**
+ * Version 3 (K3a) -> 4 (K4). Before K4 nobody had an army: the snapshot gets
+ * none, the king rides alone, no holding has been foraged, and ledger pages
+ * gain K4's three categories (provisions, disbanded, favours) at zero. No id
+ * moves (armies take ids after everything a v3 save holds). The order log is
+ * kept; it holds no army orders, so it replays exactly as before -- K4's
+ * daily rules (the followers' desertion when the party goes hungry) are the
+ * honest meaning of an old log under new rules, as in every earlier step.
+ */
+function migrate3to4(save: Record<string, unknown>): Record<string, unknown> {
+  const snap = { ...(save.snapshot as Record<string, unknown>) };
+  snap.holdings = (Array.isArray(snap.holdings) ? snap.holdings : []).map((v) => ({ ...(v as Record<string, unknown>), foraged: 0 }));
+  snap.king = { ...(snap.king as Record<string, unknown>), army: 0 };
+  snap.armies = [];
+  snap.economy = (Array.isArray(snap.economy) ? snap.economy : []).map((v) => {
+    const e = { ...(v as Record<string, unknown>) };
+    e.open = relayPage(e.open, V3_CATEGORIES, LEDGER_CATEGORY_IDS.length);
+    e.closed = relayPage(e.closed, V3_CATEGORIES, LEDGER_CATEGORY_IDS.length);
+    return e;
+  });
+  return { ...save, version: 4, snapshot: snap };
+}
 
 /**
  * Bring a parsed save up to `current`, one step at a time.
@@ -354,7 +423,7 @@ export function serialize(world: KingdomWorld): KingdomSave {
   const page = (d: LedgerDay | null): LedgerDay | null => (d === null ? null : { day: d.day, start: [...d.start], flow: [...d.flow] });
   return {
     format: KINGDOM_SAVE_FORMAT,
-    version: 3,
+    version: 4,
     map: world.map.id,
     mapFingerprint: mapFingerprint(world),
     seed: world.seed,
@@ -365,7 +434,7 @@ export function serialize(world: KingdomWorld): KingdomSave {
       weather: world.weather,
       rng,
       seqs: world.orders.sequences(),
-      pending: world.orders.queued().map((o) => ({ ...o })),
+      pending: world.orders.queued().map((o) => ({ ...o, ...("squads" in o ? { squads: [...o.squads] } : {}), ...("holdings" in o ? { holdings: [...o.holdings] } : {}) })),
       holdings: world.holdings.map((h) => ({
         id: h.id,
         key: h.key,
@@ -380,10 +449,11 @@ export function serialize(world: KingdomWorld): KingdomSave {
         taxCarry: h.taxCarry,
         doleCarry: h.doleCarry,
         famine: h.famine,
+        foraged: h.foraged,
       })),
       king: {
         id: world.king.id, companions: [...world.king.companions], mover: cloneMover(world.king.mover),
-        task: world.king.task, taskDays: world.king.taskDays,
+        task: world.king.task, taskDays: world.king.taskDays, army: world.king.army,
       },
       economy: world.economy.map((e, f) => ({
         faction: FACTION_IDS[f],
@@ -401,8 +471,16 @@ export function serialize(world: KingdomWorld): KingdomSave {
         finds: ex.finds.map((x) => ({ ...x })),
         upgrades: [...ex.upgrades],
       })),
+      armies: world.armies.map((a) => ({
+        id: a.id, owner: FACTION_IDS[a.owner], name: a.name, doctrine: a.doctrine,
+        squads: a.squads.map((q) => ({ id: q.id, unit: q.unit, men: q.men, wounded: q.wounded, levy: q.levy })),
+        abilities: [...a.abilities], mover: cloneMover(a.mover), supply: a.supply, morale: a.morale, captain: a.captain,
+        hunger: a.hunger, unpaid: a.unpaid, arrears: a.arrears, posture: a.posture, postureDays: a.postureDays,
+        patrol: [...a.patrol], patrolIndex: a.patrolIndex, target: a.target, mergeInto: a.mergeInto,
+        desertCarry: a.desertCarry, dieCarry: a.dieCarry, sickCarry: a.sickCarry,
+      })),
     },
-    log: world.log.map((o) => ({ ...o })),
+    log: world.log.map((o) => ({ ...o, ...("squads" in o ? { squads: [...o.squads] } : {}), ...("holdings" in o ? { holdings: [...o.holdings] } : {}) })),
   };
 }
 
@@ -475,6 +553,40 @@ function readOrder(v: unknown, what: string): KingdomOrder {
       return { kind, plot: int(o.plot, what + ".plot"), crop: oneOf(o.crop, CROP_IDS, what + ".crop"), tick, player, seq };
     case "resolveEvent":
       return { kind, site: int(o.site, what + ".site"), choice: int(o.choice, what + ".choice"), tick, player, seq };
+    // K4. Army and squad ids may name nothing (the sim refuses them); unit,
+    // doctrine and ability ids must be known (their hash code is their index).
+    case "recruit":
+      return {
+        kind, at: int(o.at, what + ".at"), army: int(o.army, what + ".army"), unit: oneOf(o.unit, UNIT_TYPE_IDS, what + ".unit"),
+        levy: bool(o.levy, what + ".levy"), tick, player, seq,
+      };
+    case "disband":
+    case "haltArmy":
+    case "garrison":
+    case "recover":
+      return { kind, army: int(o.army, what + ".army"), tick, player, seq };
+    case "marchArmy":
+      return { kind, army: int(o.army, what + ".army"), to: int(o.to, what + ".to"), tick, player, seq };
+    case "merge":
+      return { kind, army: int(o.army, what + ".army"), into: int(o.into, what + ".into"), tick, player, seq };
+    case "split":
+      return {
+        kind, army: int(o.army, what + ".army"),
+        squads: arr(o.squads, what + ".squads").map((n, i) => int(n, what + ".squads[" + i + "]")), tick, player, seq,
+      };
+    case "patrol":
+      return {
+        kind, army: int(o.army, what + ".army"),
+        holdings: arr(o.holdings, what + ".holdings").map((n, i) => int(n, what + ".holdings[" + i + "]")), tick, player, seq,
+      };
+    case "setDoctrine":
+      return { kind, army: int(o.army, what + ".army"), doctrine: oneOf(o.doctrine, DOCTRINE_IDS, what + ".doctrine"), tick, player, seq };
+    case "unlockAbility":
+      return { kind, army: int(o.army, what + ".army"), ability: oneOf(o.ability, ABILITY_IDS, what + ".ability"), tick, player, seq };
+    case "intercept":
+      return { kind, army: int(o.army, what + ".army"), target: int(o.target, what + ".target"), tick, player, seq };
+    case "kingJoin":
+      return { kind, army: int(o.army, what + ".army"), tick, player, seq };
     default:
       return { kind: "harvest", plot: int(o.plot, what + ".plot"), tick, player, seq };
   }
@@ -594,6 +706,73 @@ function readExploration(v: unknown, what: string, world: KingdomWorld, faction:
   return { holdings, roads, finds, upgrades };
 }
 
+function readArmies(v: unknown, world: KingdomWorld, nextId: number): Army[] {
+  const list = arr(v, "snapshot.armies");
+  const ids = new Set<number>();
+  const perSide = new Array<number>(FACTION_IDS.length).fill(0);
+  const firstFree = world.nextId;
+  const fresh = (id: number, what: string): void => {
+    if (id < firstFree || id >= nextId) throw new Bad(what + " has an id outside the counter's range");
+    if (ids.has(id)) throw new Bad(what + " reuses id " + id);
+    ids.add(id);
+  };
+  let last = 0;
+  return list.map((x, i) => {
+    const what = "army[" + i + "]";
+    const o = obj(x, what);
+    const id = int(o.id, what + ".id", 1);
+    fresh(id, what);
+    if (id <= last) throw new Bad(what + " is out of id order");
+    last = id;
+    const ownerId = oneOf(o.owner, FACTION_IDS, what + ".owner");
+    const owner = FACTION_IDS.indexOf(ownerId);
+    if (++perSide[owner] > MAX_ARMIES_PER_SIDE) throw new Bad(what + " is past the cap of " + MAX_ARMIES_PER_SIDE + " armies a side");
+    let lastSquad = 0;
+    const squads = arr(o.squads, what + ".squads").map((q, j) => {
+      const qw = what + ".squads[" + j + "]";
+      const qo = obj(q, qw);
+      const sid = int(qo.id, qw + ".id", 1);
+      fresh(sid, qw);
+      if (sid <= lastSquad) throw new Bad(qw + " is out of id order");
+      lastSquad = sid;
+      const unit = oneOf(qo.unit, UNIT_TYPE_IDS, qw + ".unit");
+      const men = int(qo.men, qw + ".men", 1);
+      if (men > UNIT_TYPES[unit].soldiers) throw new Bad(qw + " has more men than a full squad");
+      const wounded = int(qo.wounded, qw + ".wounded");
+      if (wounded > men) throw new Bad(qw + " has more wounded than men");
+      return { id: sid, unit, men, wounded, levy: bool(qo.levy, qw + ".levy") };
+    });
+    if (squads.length === 0) throw new Bad(what + " has no squads");
+    const abilities = arr(o.abilities, what + ".abilities").map((ab, j) => oneOf(ab, ABILITY_IDS, what + ".abilities[" + j + "]"));
+    for (const ab of abilities) {
+      if (abilities.filter((y) => y === ab).length > MAX_OF_ONE_ABILITY) throw new Bad(what + " holds too many of one ability");
+    }
+    const morale = int(o.morale, what + ".morale");
+    if (morale > 100) throw new Bad(what + ".morale is over 100");
+    const patrol = arr(o.patrol, what + ".patrol").map((n, j) => {
+      const hid = int(n, what + ".patrol[" + j + "]", 1);
+      if (!world.holding(hid)) throw new Bad(what + " patrols an unknown holding");
+      return hid;
+    });
+    const patrolIndex = int(o.patrolIndex, what + ".patrolIndex");
+    if (patrol.length > 0 ? patrolIndex >= patrol.length : patrolIndex !== 0) throw new Bad(what + ".patrolIndex is off its patrol");
+    const a: Army = {
+      id, owner, name: str(o.name, what + ".name"), doctrine: oneOf(o.doctrine, DOCTRINE_IDS, what + ".doctrine"),
+      squads, abilities, mover: readMover(o.mover, what + ".mover", world), supply: int(o.supply, what + ".supply"),
+      morale, captain: str(o.captain, what + ".captain"), hunger: int(o.hunger, what + ".hunger"),
+      unpaid: int(o.unpaid, what + ".unpaid"), arrears: int(o.arrears, what + ".arrears"),
+      posture: oneOf(o.posture, ARMY_POSTURES, what + ".posture") as ArmyPosture, postureDays: int(o.postureDays, what + ".postureDays"),
+      patrol, patrolIndex, target: int(o.target, what + ".target"), mergeInto: bool(o.mergeInto, what + ".mergeInto"),
+      desertCarry: int(o.desertCarry, what + ".desertCarry"), dieCarry: int(o.dieCarry, what + ".dieCarry"),
+      sickCarry: int(o.sickCarry, what + ".sickCarry"),
+    };
+    if (a.desertCarry >= 1000 || a.dieCarry >= 1000 || a.sickCarry >= 1000) throw new Bad(what + " has a remainder of a whole man or more");
+    if ((a.posture === "patrol") !== (a.patrol.length > 0)) throw new Bad(what + " patrols without a patrol, or the reverse");
+    if (a.target === a.id) throw new Bad(what + " chases itself");
+    return a;
+  });
+}
+
 function build(save: Record<string, unknown>, resight = false): KingdomWorld {
   const mapId = str(save.map, "map");
   const map = KINGDOM_MAPS[mapId];
@@ -671,6 +850,7 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
       tax: oneOf(h.tax, TAX_RATE_IDS, what + ".tax"),
       taxCarry: int(h.taxCarry, what + ".taxCarry"), doleCarry: int(h.doleCarry, what + ".doleCarry"),
       famine: int(h.famine, what + ".famine"),
+      foraged: int(h.foraged, what + ".foraged"),
     };
   });
 
@@ -680,6 +860,7 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
   const mover = readMover(k.mover, "snapshot.king.mover", world);
   const task = oneOf(k.task, KING_TASKS, "snapshot.king.task");
   const taskDays = int(k.taskDays, "snapshot.king.taskDays");
+  const kingArmy = int(k.army, "snapshot.king.army");
 
   const eco = arr(s.economy, "snapshot.economy");
   if (eco.length !== FACTION_IDS.length) throw new Bad("snapshot.economy has the wrong number of factions");
@@ -703,6 +884,27 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
   const ex = arr(s.explore, "snapshot.explore");
   if (ex.length !== FACTION_IDS.length) throw new Bad("snapshot.explore has the wrong number of factions");
   const explore = ex.map((v, i) => readExploration(v, "explore[" + i + "]", world, i));
+
+  const armies = readArmies(s.armies, world, nextId);
+  if (kingArmy !== 0) {
+    const a = armies.find((x) => x.id === kingArmy);
+    if (!a || a.owner !== 0) throw new Bad("snapshot.king.army is not one of the king's armies");
+    const same = a.mover.node === mover.node && a.mover.road === mover.road && a.mover.along === mover.along;
+    if (!same) throw new Bad("snapshot.king is not where the army he rides with is");
+  }
+  const armyIds = new Map(armies.map((a) => [a.id, a]));
+  saved.forEach((h, i) => {
+    for (const g of h.garrison) {
+      const a = armyIds.get(g);
+      const live = world.holdings[i];
+      if (!a || FACTION_IDS[a.owner] !== h.owner || a.mover.node !== live.id || a.posture !== "hold") {
+        throw new Bad("holding[" + i + "] has a garrison that is not an army of its owner holding there");
+      }
+    }
+  });
+  for (const a of armies) {
+    if (a.target !== 0 && !armyIds.has(a.target)) throw new Bad("army " + a.id + " chases an army that is not on the map");
+  }
 
   const seqs = arr(s.seqs, "snapshot.seqs").map((n, i) => int(n, "snapshot.seqs[" + i + "]"));
   const pending = arr(s.pending, "snapshot.pending").map((o, i) => readOrder(o, "pending[" + i + "]"));
@@ -730,11 +932,14 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
     live.taxCarry = h.taxCarry;
     live.doleCarry = h.doleCarry;
     live.famine = h.famine;
+    live.foraged = h.foraged;
   });
   world.king.companions = companions;
   world.king.mover = mover;
   world.king.task = task;
   world.king.taskDays = taskDays;
+  world.king.army = kingArmy;
+  world.armies.push(...armies);
   economy.forEach((e, i) => {
     const live = world.economy[i];
     for (const st of STOCK_IDS) live.stocks[st] = e.stocks[st];

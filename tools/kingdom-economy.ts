@@ -589,7 +589,7 @@ section("determinism");
   const p2 = JSON.parse(json);
   p2.snapshot.holdings[0].buildings[0] = "castle-in-the-air";
   check("a save with an unknown building is refused", !deserialize(p2).ok);
-  check("the save is version " + KINGDOM_SAVE_VERSION, parsed.version === KINGDOM_SAVE_VERSION && KINGDOM_SAVE_VERSION === 3);
+  check("the save is version " + KINGDOM_SAVE_VERSION, parsed.version === KINGDOM_SAVE_VERSION && KINGDOM_SAVE_VERSION >= 3);
 }
 
 section("migration");
@@ -602,7 +602,7 @@ section("migration");
   const m = migrate(v1);
   const m2 = migrate(v1, MIGRATIONS, 2);
   check("it migrates to version 2 (K3)", m2.ok && m2.value.version === 2);
-  check("and on to version 3 (K3a)", m.ok && m.value.version === 3);
+  check("and on to the current version (" + KINGDOM_SAVE_VERSION + ")", m.ok && m.value.version === KINGDOM_SAVE_VERSION);
   const loaded = loadFromJson(text);
   check("and loads", loaded.ok, loaded.ok ? "" : loaded.error);
   if (loaded.ok) {

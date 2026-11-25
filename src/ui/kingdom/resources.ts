@@ -25,6 +25,9 @@ import { ledgerValue, netOf } from "../../sim/kingdom/ledger.ts";
 import { storageOf } from "../../sim/kingdom/economy.ts";
 import { stockIcon } from "./icons.ts";
 
+import { armiesOf, armyUpkeep } from "../../sim/kingdom/armies.ts";
+import { AC } from "../../content/kingdom/army-strings.ts";
+
 function make(doc: Document, tag: string, cls?: string, text?: string): HTMLElement {
   const n = doc.createElement(tag);
   if (cls) n.className = cls;
@@ -49,6 +52,7 @@ export class ResourcesBar {
   private readonly cells = new Map<LedgerStockId, Cell>();
   private readonly lasts: HTMLElement;
   private readonly store: HTMLElement;
+  private readonly burn: HTMLElement;
   private readonly trouble: HTMLElement;
 
   constructor(doc: Document) {
@@ -70,7 +74,9 @@ export class ResourcesBar {
     const lines = make(doc, "p", "k-stock-lines");
     this.lasts = make(doc, "span", "k-lasts");
     this.store = make(doc, "span", "k-store");
-    lines.append(this.lasts, this.store);
+    // K4: what the armies cost a day, beside what the stores last.
+    this.burn = make(doc, "span", "k-burn");
+    lines.append(this.lasts, this.store, this.burn);
     this.trouble = make(doc, "p", "k-trouble");
     this.trouble.style.display = "none";
     this.root.append(list, lines, this.trouble);
@@ -94,6 +100,8 @@ export class ResourcesBar {
     setText(this.lasts, STOCK_NAME.grain + " " + E.grainLasts(grainDays(world)));
     const st = storageOf(world, KING_PLAYER);
     setText(this.store, " · " + E.grainStore(st.granary + st.loose));
+    const up = armyUpkeep(world, KING_PLAYER);
+    setText(this.burn, armiesOf(world, KING_PLAYER).length > 0 ? " · " + AC.burnLine(up) : "");
     const lines: string[] = [];
     if (e.hunger > 0) lines.push(E.hungry(e.hunger));
     for (const h of world.holdingsOf("king")) if (h.famine > 0) lines.push(E.famineAt({ name: h.name, days: h.famine }));
@@ -110,6 +118,10 @@ export class ResourcesBar {
 
   get troubleText(): string {
     return this.trouble.style.display === "none" ? "" : this.trouble.textContent ?? "";
+  }
+
+  get burnText(): string {
+    return this.burn.textContent ?? "";
   }
 
   get lastsText(): string {

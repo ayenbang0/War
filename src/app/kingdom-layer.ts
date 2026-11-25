@@ -32,7 +32,16 @@ import { kingCounterAt, type MapPoint } from "../render/kingdom/layout.ts";
 import { table as TABLE_COLOUR } from "../render/kingdom/palette.ts";
 import { KingdomPen, type KingdomStrokeSink } from "../input/kingdom-pen.ts";
 import { KingdomCameraControls } from "../input/kingdom-camera-controls.ts";
-import { interpretStroke, kingdomContext, routePoints, type KingdomCardRequest, type KingdomIntent } from "../input/kingdom-commander.ts";
+import {
+  armyCounters, armyPointsOf, armyTitle, interpretStroke, kingdomContext, routePoints, type KingdomCardRequest, type KingdomIntent,
+} from "../input/kingdom-commander.ts";
+import type { ArmyDraw } from "../render/kingdom/renderer.ts";
+import { armyCard } from "../ui/kingdom/army-card.ts";
+import { AC } from "../content/kingdom/army-strings.ts";
+import { ARMY_ORDINALS } from "../content/kingdom/armies.ts";
+import { FACTIONS, FACTION_IDS } from "../content/kingdom/factions.ts";
+import { armyById, armyFullMen, armyMen, armyWounded, supplyDays } from "../sim/kingdom/armies.ts";
+import { UNIT_TYPES } from "../content/unit-types.ts";
 import type { Point } from "../input/kingdom-gestures.ts";
 import { KingdomHud } from "../ui/kingdom/hud.ts";
 import { kingCard, regionCard, type CardView } from "../ui/kingdom/cards.ts";
@@ -104,6 +113,9 @@ export function reducedMotion(win: Window): boolean {
   }
 }
 
+/** The king's armies are numbered on their counters. */
+const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"];
+
 function lerp(a: MapPoint, b: MapPoint, t: number): MapPoint {
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
 }
@@ -140,6 +152,8 @@ export class KingdomLayer implements LayerKeys {
   private clockSeconds = 0;
   /** King position before the last tick ran, for drawing him between ticks. */
   private prevKing: MapPoint;
+  /** K4: every visible army's position before the last tick ran, for the same. */
+  private prevArmies = new Map<number, MapPoint>();
   private stroke: InkStroke | null = null;
   private fades: Fade[] = [];
   private pulses: Pulse[] = [];
@@ -375,6 +389,7 @@ export class KingdomLayer implements LayerKeys {
     this.storesDirty = false;
     for (let i = 0; i < n; i++) {
       this.prevKing = this.world.kingPosition();
+      this.prevArmies = armyPointsOf(this.world);
       const events = this.world.tick();
       for (const e of events) if (this.onEvent(e)) dayTurned = true;
     }
@@ -483,8 +498,86 @@ export class KingdomLayer implements LayerKeys {
       case "revealed":
         this.explore.onEvent(e);
         return false;
+      // -- K4: armies ---------------------------------------------------------------
+      default:
+        return this.onArmyEvent(e);
     }
   }
+
+  /** K4: an army's news, said in the feed when it is the king's or one his scouts see. */
+  private onArmyEvent(e: KingdomEvent): boolean {
+    const w = this.world;
+    const day = w.date.day;
+    const name = (id: number): string => w.holding(id)?.name ?? "?";
+    const army = (id: number): string => armyById(w, id)?.name ?? "army";
+    const mine = (id: number): boolean => armyById(w, id)?.owner === KING_PLAYER;
+    switch (e.kind) {
+      case "armyRaised":
+        this.storesDirty = true;
+        if (e.owner === KING_PLAYER) this.hud.alert(day, AC.armyRaised(army(e.army), name(e.at)));
+        return false;
+      case "recruited":
+        this.storesDirty = true;
+        if (mine(e.army)) this.hud.alert(day, AC.recruited({ unit: UNIT_TYPES[e.unit].name, men: e.men, army: army(e.army) }));
+        return false;
+      case "armyArrived":
+        if (mine(e.army) && e.destination && e.army !== w.king.army) {
+          this.hud.alert(day, AC.arrived({ army: army(e.army), name: name(e.at) }));
+          const h = w.holding(e.at);
+          if (h) this.pulse({ x: h.x, y: h.y });
+        }
+        return false;
+      case "armySplit":
+        if (mine(e.army)) this.hud.alert(day, AC.splitNews({ army: army(e.army), into: army(e.into) }));
+        return false;
+      case "armiesMerged":
+        this.storesDirty = true;
+        if (e.owner === KING_PLAYER) this.hud.alert(day, AC.mergedNews({ army: e.name, into: army(e.into) }));
+        if (this.card?.kind === "army" && this.card.army === e.army) this.card.refresh();
+        return false;
+      case "armyGone":
+        this.storesDirty = true;
+        if (e.owner === KING_PLAYER) this.hud.alert(day, AC.armyGone[e.reason](e.name));
+        return false;
+      case "intercepted": {
+        const t = armyById(w, e.target);
+        if (mine(e.army)) this.hud.alert(day, AC.intercepted({ army: army(e.army), target: t ? armyTitle(t) : "?" }));
+        return false;
+      }
+      case "wagesLate":
+        this.storesDirty = true;
+        if (mine(e.army) && e.days === 1) this.hud.alert(day, AC.unpaid(army(e.army)));
+        return false;
+      case "armyDay":
+        this.storesDirty = true;
+        // Said once, on the first day men leave for hunger (the card shows the rest).
+        if (e.owner === KING_PLAYER && e.short > 0 && e.deserted + e.died > 0 && !this.hungerSaid.has(e.army)) {
+          this.hungerSaid.add(e.army);
+          this.hud.alert(day, AC.hungry(army(e.army)));
+        }
+        if (e.short === 0) this.hungerSaid.delete(e.army);
+        return false;
+      case "followersDeserted":
+        this.storesDirty = true;
+        if (e.faction === KING_PLAYER) this.hud.alert(day, AC.followersLeft(e.n));
+        return false;
+      case "kingJoined":
+        this.hud.alert(day, e.army ? AC.kingRidesWith(army(e.army)) : AC.kingAlone);
+        return false;
+      case "armyDeparted":
+      case "armyPosture":
+      case "doctrineSet":
+      case "abilityUnlocked":
+        // Said by the result line of the order that caused it; the card shows the state.
+        this.storesDirty = true;
+        return false;
+      default:
+        return false;
+    }
+  }
+
+  /** K4: armies whose hunger has been said, until they eat again. */
+  private hungerSaid = new Set<number>();
 
   /** An order from a card or menu button (K3): to the queue, and say so. */
   issueFromUi(body: KingdomOrderBody, said: string): void {
@@ -526,10 +619,51 @@ export class KingdomLayer implements LayerKeys {
     return lerp(this.prevKing, now, this.clock.carry);
   }
 
+  /** K4: where each visible army is drawn this frame, between its last two tick positions. */
+  armiesDrawn(): Map<number, MapPoint> {
+    const now = armyPointsOf(this.world);
+    if (this.clock.run === "paused") return now;
+    const out = new Map<number, MapPoint>();
+    for (const [id, p] of now) {
+      const prev = this.prevArmies.get(id);
+      out.set(id, prev ? lerp(prev, p, this.clock.carry) : p);
+    }
+    return out;
+  }
+
   /** The stroke's meaning NOW: the same call serves the preview and the commit. */
   interpret(points: readonly Point[]): KingdomIntent {
     const king = this.kingDrawn();
-    return interpretStroke(points, kingdomContext(this.world, king, this.cam.pxToWorld), this.world, king);
+    const armies = this.armiesDrawn();
+    return interpretStroke(points, kingdomContext(this.world, king, this.cam.pxToWorld, armies), this.world, king, armies);
+  }
+
+  /** K4: what the renderer draws for each visible army (the pen reads the same counters). */
+  private armyDraws(points: Map<number, MapPoint>): ArmyDraw[] {
+    const w = this.world;
+    const selected = this.card && this.card.kind === "army" ? this.card.army ?? 0 : 0;
+    return armyCounters(w, points, this.cam.pxToWorld).map(({ army: a, at, counter }) => {
+      const own = a.owner === KING_PLAYER;
+      const ordinal = ARMY_ORDINALS.findIndex((o) => a.name.startsWith(o + " "));
+      const full = armyFullMen(a);
+      const f = FACTIONS[FACTION_IDS[a.owner]];
+      return {
+        id: a.id,
+        own,
+        mark: own ? ROMAN[ordinal] ?? String(ordinal + 1) : (f ? f.name.replace(/^the /, "").charAt(0).toUpperCase() : "?"),
+        at,
+        counter,
+        men: own ? armyMen(a) : Math.max(10, Math.round(armyMen(a) / 10) * 10),
+        about: !own,
+        kingRides: w.king.army === a.id,
+        strengthPct: full > 0 ? Math.round(((armyMen(a) - armyWounded(a)) * 100) / full) : 0,
+        supplyDays: own ? supplyDays(a) : -1,
+        hungry: own && a.hunger > 0,
+        posture: a.posture,
+        route: own && a.mover.route.length > 0 ? routePoints(w, at, a.mover.route) : [],
+        selected: a.id === selected,
+      };
+    });
   }
 
   private strokeChanged(points: readonly Point[]): void {
@@ -604,7 +738,9 @@ export class KingdomLayer implements LayerKeys {
     const root = this.hud.cardRoot;
     const view: CardView = req.kind === "king"
       ? kingCard(root, this.env.doc, this.world, hooks)
-      : regionCard(root, this.env.doc, this.world, req.holding, hooks);
+      : req.kind === "army"
+        ? armyCard(root, this.env.doc, this.world, req.army, hooks)
+        : regionCard(root, this.env.doc, this.world, req.holding, hooks);
     this.card = view;
     this.hooks.pushScreen(view.screen);
   }
@@ -735,6 +871,7 @@ export class KingdomLayer implements LayerKeys {
     const ghost = this.intent ? this.intent.ghost : null;
     const tip = this.stroke && this.stroke.points.length > 0 ? this.stroke.points[this.stroke.points.length - 1] : null;
     const queued = this.queuedRoute(king);
+    const armies = this.armyDraws(this.armiesDrawn());
     this.renderer.draw({
       world: this.world,
       cam: this.cam,
@@ -749,6 +886,7 @@ export class KingdomLayer implements LayerKeys {
       pulses: this.pulses,
       selectedHolding: this.card && this.card.kind === "region" ? this.card.holding : 0,
       kingSelected: this.card !== null && this.card.kind === "king",
+      armies,
       paused: this.clock.run === "paused",
       clock: t,
     });

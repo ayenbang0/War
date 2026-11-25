@@ -27,7 +27,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Rng, Stream } from "../src/sim/rng.ts";
 import {
-  KingdomWorld, kingdomHash, loadFromJson, saveToJson, replayLog, mapFingerprint, deserialize, migrate,
+  KingdomWorld, kingdomHash, loadFromJson, saveToJson, replayLog, mapFingerprint, deserialize, migrate, MIGRATIONS,
   TICKS_PER_DAY, TICKS_PER_YEAR, KINGDOM_SAVE_VERSION, K3_MAP,
   applySight, sightSources, updateSight, targetRefusal, isFrontier, knowsHolding, knowsRoad, findAt, pendingFinds,
   checkResolve, applyResolve, discover, choiceCost, routeOptions, roadCostFor, storageOf, flowOf, netOf, findRoute, credit,
@@ -617,7 +617,9 @@ section("migration v2 -> v3");
   const v2 = JSON.parse(text);
   check("the fixture is a real version-2 save of the K3 map", v2.version === 2 && v2.mapFingerprint === K3_MAP.fingerprint);
   const m = migrate(JSON.parse(text));
-  check("it migrates to version " + KINGDOM_SAVE_VERSION, m.ok && m.value.version === 3);
+  check("it migrates to version " + KINGDOM_SAVE_VERSION, m.ok && m.value.version === KINGDOM_SAVE_VERSION);
+  const m3 = migrate(JSON.parse(text), MIGRATIONS, 3);
+  check("by way of version 3 (K3a)", m3.ok && m3.value.version === 3);
   const loaded = loadFromJson(text);
   check("and loads", loaded.ok, loaded.ok ? "" : loaded.error);
   if (loaded.ok) {
@@ -650,7 +652,7 @@ section("migration v2 -> v3");
         if (page.flow[s * nc + c] !== want) relaid = false;
       }
     }
-    check("ledger pages are re-laid for the new categories, every old value kept", relaid && nc === oldNC + 3);
+    check("ledger pages are re-laid for the new categories, every old value kept", relaid && nc === oldNC + 6);  // K3a's three, then K4's three
     check("the king still knows all of the old map", w.holdings.slice(0, 36).every((h) => knowsHolding(w, KING, h.id)) &&
       w.roads.slice(0, 52).every((r2) => knowsRoad(w, KING, r2.id)));
     check("and the new country is still to explore", w.holdings.slice(36).some((h) => !knowsHolding(w, KING, h.id)));

@@ -12,3 +12,4 @@ export * from "./save.ts";
 export * from "./ledger.ts";
 export * from "./economy.ts";
 export * from "./explore.ts";
+export * from "./armies.ts";

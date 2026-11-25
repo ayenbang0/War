@@ -36,7 +36,8 @@ import { EXPLORE_REFUSAL } from "../../content/story/strings.ts";
 import { calendar } from "./clock.ts";
 import { canAfford, credit, debitUpTo, pay } from "./ledger.ts";
 import { changeLegitimacy, standing } from "./economy.ts";
-import type { AdvanceOptions, RouteOptions } from "./graph.ts";
+import { moverPosition, type AdvanceOptions, type RouteOptions } from "./graph.ts";
+import { ARMY_SIGHT_MILES } from "../../content/kingdom/armies.ts";
 import type { FactionExploration, Find, Holding, Road } from "./state.ts";
 import type { KingdomWorld } from "./world.ts";
 
@@ -152,6 +153,12 @@ export function sightSources(world: KingdomWorld, faction: number): SightSource[
     let miles = HOLDING_SIGHT_MILES[h.kind];
     for (const b of standing(h)) if (b.def.id === "watchtower" && !h.idle[b.slot] && tower > miles) miles = tower;
     out.push({ x: h.x, y: h.y, miles });
+  }
+  // K4: every army of the faction sees round itself, in id order.
+  for (const a of world.armies) {
+    if (a.owner !== faction) continue;
+    const p = moverPosition(world.graph, a.mover);
+    out.push({ x: p.x, y: p.y, miles: ARMY_SIGHT_MILES });
   }
   return out;
 }

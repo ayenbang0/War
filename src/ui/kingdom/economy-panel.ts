@@ -258,7 +258,7 @@ export function economyPanel(
 
 // -- the menus ---------------------------------------------------------------------
 
-type Option = {
+export type Option = {
   readonly key: string;
   readonly label: string;
   readonly lines: readonly string[];
@@ -268,11 +268,15 @@ type Option = {
   readonly said: string;
 };
 
-type MenuSpec = {
+export type MenuSpec = {
   readonly name: string;
   readonly title: string;
   readonly intro: string;
   readonly options: () => Option[];
+  /** The cancel button's words (default "Cancel"): "Keep the army" on a stand-down. */
+  readonly cancelLabel?: string;
+  /** Start focus on Cancel, not the first choice: for a choice that cannot be undone (U2 A-05). */
+  readonly focusCancel?: boolean;
 };
 
 /** A modal list of choices (see the file comment). */
@@ -333,13 +337,13 @@ export function choiceMenu(doc: Document, spec: MenuSpec, hooks: EconomyHooks): 
       status.setAttribute("role", "status");
       panel.appendChild(status);
       const actions = make(doc, "div", "k-card-actions");
-      const cancel = button(doc, E.cancel, "cancel");
+      const cancel = button(doc, spec.cancelLabel ?? E.cancel, "cancel");
       cancel.onclick = () => close();
       actions.append(cancel, make(doc, "span", "k-hint", "Esc cancels"));
       panel.appendChild(actions);
       root.appendChild(panel);
       // Focus starts on the first thing that can be chosen, or on Cancel.
-      first = firstOpen ?? cancel;
+      first = spec.focusCancel ? cancel : firstOpen ?? cancel;
     },
     onKey: (k): KeyVerdict => {
       if (k.code !== "Escape") return "pass";

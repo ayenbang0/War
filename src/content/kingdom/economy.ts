@@ -53,7 +53,9 @@ export type LedgerCategoryId =
   | "food" | "retinue" | "spoilage" | "seed" | "construction" | "upkeep" | "materials"
   | "rations" | "wages" | "recruitment" | "desertion" | "disgrace"
   // K3a: exploration events and special upgrades (content/story/).
-  | "finds" | "boons" | "offerings";
+  | "finds" | "boons" | "offerings"
+  // K4: armies (src/sim/kingdom/armies.ts).
+  | "provisions" | "disbanded" | "favours";
 
 export type LedgerCategoryDef = {
   readonly id: LedgerCategoryId;
@@ -90,6 +92,10 @@ export const LEDGER_CATEGORIES: readonly LedgerCategoryDef[] = [
   { id: "finds", dir: "source", phase: "K3a", label: "finds and gifts" },
   { id: "boons", dir: "source", phase: "K3a", label: "special upgrades" },
   { id: "offerings", dir: "sink", phase: "K3a", label: "gifts and offerings" },
+  // K4, appended (save v4 re-lays old ledger pages for the new width).
+  { id: "provisions", dir: "sink", phase: "K4", label: "grain loaded on the armies" },
+  { id: "disbanded", dir: "source", phase: "K4", label: "armies stood down" },
+  { id: "favours", dir: "sink", phase: "K4", label: "abilities earned for armies" },
 ];
 
 /** Hash and save order of the categories. Append only. */

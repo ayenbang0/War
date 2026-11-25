@@ -53,10 +53,14 @@ import {
 export const ECONOMY_FACTIONS: readonly FactionId[] = ["king"];
 
 /** The economy orders (everything but the march). */
-export type EconomyOrderBody = Exclude<KingdomOrderBody, { kind: "moveKing" } | { kind: "haltKing" } | { kind: "resolveEvent" }>;
+export type EconomyOrderBody = Extract<KingdomOrderBody, {
+  kind: "forage" | "rally" | "claimHolding" | "setTax" | "build" | "sow" | "harvest";
+}>;
+
+const ECONOMY_KINDS: ReadonlySet<string> = new Set(["forage", "rally", "claimHolding", "setTax", "build", "sow", "harvest"]);
 
 export function isEconomyOrder(b: KingdomOrderBody): b is EconomyOrderBody {
-  return b.kind !== "moveKing" && b.kind !== "haltKing" && b.kind !== "resolveEvent";
+  return ECONOMY_KINDS.has(b.kind);
 }
 
 // -- construction -----------------------------------------------------------------
@@ -110,7 +114,7 @@ export function standing(h: Holding): { slot: number; def: BuildingDef }[] {
   return out;
 }
 
-function hasStanding(h: Holding, id: BuildingId, activeOnly = false): boolean {
+export function hasStanding(h: Holding, id: BuildingId, activeOnly = false): boolean {
   return standing(h).some((s) => s.def.id === id && (!activeOnly || !h.idle[s.slot]));
 }
 
@@ -223,7 +227,8 @@ export function checkEconomyOrder(world: KingdomWorld, body: EconomyOrderBody, p
       if (h.garrison.length > 0) return REFUSAL.garrisoned;
       const m = world.king.mover;
       if (m.road !== 0 || m.node !== h.id) return REFUSAL.claimFromThere;
-      if (e.stocks.levy < CLAIM_MIN_LEVY) return REFUSAL.claimNeedsFollowers(CLAIM_MIN_LEVY);
+      // K4: the men of the army he rides with are with him too.
+      if (e.stocks.levy + menRidingWithKing(world) < CLAIM_MIN_LEVY) return REFUSAL.claimNeedsFollowers(CLAIM_MIN_LEVY);
       return null;
     }
     case "setTax": {
@@ -269,6 +274,16 @@ export function checkEconomyOrder(world: KingdomWorld, body: EconomyOrderBody, p
       return null;
     }
   }
+}
+
+/**
+ * Men of the army the king rides with (K4). Summed here rather than imported
+ * from armies.ts, which imports this file.
+ */
+function menRidingWithKing(world: KingdomWorld): number {
+  let n = 0;
+  for (const a of world.armies) if (a.id === world.king.army) for (const s of a.squads) n += s.men;
+  return n;
 }
 
 function rallyFloor(world: KingdomWorld, h: Holding): number {

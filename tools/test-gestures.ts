@@ -88,7 +88,10 @@ export function printMatrix(report: MatrixReport): void {
 
 export const KINGDOM_LABELS = [
   "tapToken", "tapHolding", "march",
-  "none:nothing-there", "none:closed-shape", "none:not-from-king", "none:no-destination", "none:already-there",
+  // K4: the army vocabulary.
+  "intercept", "merge", "join", "split", "garrison", "patrol", "recover",
+  "none:nothing-there", "none:closed-no-army", "none:closed-many-armies", "none:not-from-king", "none:no-destination",
+  "none:already-there",
 ] as const;
 
 /**
@@ -107,7 +110,25 @@ function kingdomActual(c: KingdomCase): string {
     case "none":
       return "none:" + g.reason;
     case "tapToken":
-      return "tapToken";
+      return kind === "tapToken" && (target === undefined || tokenId(c, target) === g.token) ? "tapToken" : "tapToken?" + g.token;
+    case "intercept":
+      return kind === "intercept" && tokenId(c, target) === g.target ? "intercept" : "intercept?" + g.target;
+    case "merge":
+      return kind === "merge" && tokenId(c, target) === g.into ? "merge" : "merge?" + g.into;
+    case "join":
+      return kind === "join" && tokenId(c, target) === g.army ? "join" : "join?" + g.army;
+    case "split":
+      return kind === "split" && tokenId(c, target) === g.army ? "split" : "split?" + g.army;
+    case "recover":
+      return kind === "recover" && tokenId(c, target) === g.army ? "recover" : "recover?" + g.army;
+    case "garrison":
+      return kind === "garrison" && tokenId(c, target) === g.army ? "garrison" : "garrison?" + g.army;
+    case "patrol": {
+      // patrol:<army>:<holding>,<holding>... -- the holdings as a set.
+      const want = (c.expected.split(":")[2] ?? "").split(",").map((n) => targetId(c, n)).sort((a, b) => a - b).join();
+      const got = [...g.holdings].sort((a, b) => a - b).join();
+      return kind === "patrol" && tokenId(c, target) === g.army && want === got ? "patrol" : "patrol?" + got;
+    }
     case "tapHolding":
       return kind === "tapHolding" && targetId(c, target) === g.holding ? "tapHolding" : "tapHolding?" + nameOf(g.holding);
     case "march":
@@ -124,6 +145,15 @@ function targetId(_c: KingdomCase, name: string | undefined): number {
     for (const h of w.holdings) holdingIds.set(h.name, h.id);
   }
   return name ? holdingIds.get(name) ?? -1 : -1;
+}
+
+/**
+ * Army cases name their army by a corpus handle ("A1"...), which the case's
+ * context resolves: KingdomCase.armies maps handles to ids.
+ */
+function tokenId(c: KingdomCase, handle: string | undefined): number {
+  if (handle === undefined) return -1;
+  return c.armies?.[handle] ?? -1;
 }
 
 /** The expected column of a case: its label without the holding's name. */
@@ -152,7 +182,8 @@ export function runKingdomConfusionMatrix(): MatrixReport {
 export function printKingdomMatrix(report: MatrixReport): void {
   const short = (s: string): string => s.replace("none:", "-").replace("nothing-there", "nothing")
     .replace("closed-shape", "closed").replace("not-from-king", "notking").replace("no-destination", "nodest")
-    .replace("already-there", "already");
+    .replace("already-there", "already").replace("closed-no-army", "noarmy").replace("closed-many-armies", "many")
+    .replace("intercept", "intcpt").replace("garrison", "garris");
   const width = 11;
   console.log("");
   console.log("  " + "expected".padEnd(14) + KINGDOM_LABELS.map((c) => short(c).padStart(width)).join(""));

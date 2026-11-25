@@ -24,6 +24,9 @@ import { BUILDINGS, BUILDING_IDS, type BuildingId } from "../../content/kingdom/
 import { CROPS, type CropId } from "../../content/kingdom/crops.ts";
 import { E, STAGE_NAME, amountsLine } from "../../content/kingdom/ui-strings.ts";
 import { C } from "../../content/kingdom/city-strings.ts";
+import { AC, ARMY_REFUSAL } from "../../content/kingdom/army-strings.ts";
+import { hasBarracks } from "../../sim/kingdom/armies.ts";
+import { recruitMenu } from "../kingdom/recruit-menu.ts";
 
 export type CityCardHooks = FrameHooks & {
   issue(body: KingdomOrderBody, said: string): void;
@@ -68,6 +71,7 @@ export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, h
   let about: HTMLElement | null = null;
   let note: HTMLElement | null = null;
   let build: HTMLElement | null = null;
+  let recruit: HTMLElement | null = null;
   let heading: HTMLElement | null = null;
   let buildLabel = "";
   let buildNote = "";
@@ -108,6 +112,16 @@ export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, h
     const offer = buildLabel !== "" && h.owner === "king";
     if (!offer && doc.activeElement === build) heading?.focus();
     show(build, offer);
+    // K4: a barracks lot raises trained squads -- on offer while it stands,
+    // refused (and saying why) while it is still being built or unpaid.
+    if (recruit) {
+      const isBarracks = id === "barracks" && h.owner === "king";
+      if (!isBarracks && doc.activeElement === recruit) heading?.focus();
+      show(recruit, isBarracks);
+      const why = isBarracks && !hasBarracks(h) ? ARMY_REFUSAL.needsBarracks : null;
+      if (why) recruit.setAttribute("aria-disabled", "true");
+      else recruit.removeAttribute("aria-disabled");
+    }
     setText(build, buildLabel || C.buildHere);
     build.setAttribute("aria-label", (buildLabel || C.buildHere) + " " + h.name);
     if (heading) setText(heading, C.lotTitle(index + 1) + " · " + h.name);
@@ -126,6 +140,17 @@ export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, h
     build.setAttribute("aria-haspopup", "dialog");
     build.onclick = () => hooks.economy.openMenu(buildMenu(doc, world, h, hooks.economy, buildNote));
     actions.appendChild(build);
+    const rb = button(doc, AC.recruitButton, "recruit");
+    rb.setAttribute("aria-haspopup", "dialog");
+    rb.onclick = () => {
+      if (!hasBarracks(h)) {
+        if (note) setText(note, E.notNow(ARMY_REFUSAL.needsBarracks));
+        return;
+      }
+      hooks.economy.openMenu(recruitMenu(doc, world, h.id, hooks.economy));
+    };
+    recruit = rb;
+    actions.appendChild(rb);
   }, refresh, () => build);
   return { screen, kind: "lot", index, refresh };
 }

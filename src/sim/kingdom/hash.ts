@@ -27,6 +27,10 @@ import { KINGDOM_ORDER_KINDS, type KingdomOrder } from "./orders.ts";
 import { KING_TASKS, PLOT_STAGES, type Mover } from "./state.ts";
 import type { LedgerDay } from "./ledger.ts";
 import { UPGRADE_IDS } from "../../content/story/upgrades.ts";
+import { UNIT_TYPE_IDS } from "../../content/unit-types.ts";
+import { DOCTRINE_IDS } from "../../content/doctrines.ts";
+import { ABILITY_IDS } from "../../content/abilities.ts";
+import { ARMY_POSTURES, type Army } from "./state.ts";
 import { KINGDOM_STREAMS, type KingdomWorld } from "./world.ts";
 
 function mixStr(h: number, s: string | null): number {
@@ -68,7 +72,64 @@ export function mixOrder(h: number, o: KingdomOrder): number {
     case "sow": return mixU32(mixU32(h, o.plot), CROP_IDS.indexOf(o.crop));
     case "harvest": return mixU32(h, o.plot);
     case "resolveEvent": return mixU32(mixU32(h, o.site), o.choice);
+    case "recruit":
+      return mixU32(mixU32(mixU32(mixU32(h, o.at), o.army), UNIT_TYPE_IDS.indexOf(o.unit)), o.levy ? 1 : 0);
+    case "disband": return mixU32(h, o.army);
+    case "marchArmy": return mixU32(mixU32(h, o.army), o.to);
+    case "haltArmy": return mixU32(h, o.army);
+    case "merge": return mixU32(mixU32(h, o.army), o.into);
+    case "split": {
+      h = mixU32(mixU32(h, o.army), o.squads.length);
+      for (const s of o.squads) h = mixU32(h, s);
+      return h;
+    }
+    case "garrison": return mixU32(h, o.army);
+    case "patrol": {
+      h = mixU32(mixU32(h, o.army), o.holdings.length);
+      for (const x of o.holdings) h = mixU32(h, x);
+      return h;
+    }
+    case "recover": return mixU32(h, o.army);
+    case "setDoctrine": return mixU32(mixU32(h, o.army), DOCTRINE_IDS.indexOf(o.doctrine));
+    case "unlockAbility": return mixU32(mixU32(h, o.army), ABILITY_IDS.indexOf(o.ability));
+    case "intercept": return mixU32(mixU32(h, o.army), o.target);
+    case "kingJoin": return mixU32(h, o.army);
   }
+}
+
+function mixArmy(h: number, a: Army): number {
+  h = mixU32(h, a.id);
+  h = mixU32(h, a.owner);
+  h = mixStr(h, a.name);
+  h = mixU32(h, DOCTRINE_IDS.indexOf(a.doctrine));
+  h = mixU32(h, a.squads.length);
+  for (const s of a.squads) {
+    h = mixU32(h, s.id);
+    h = mixU32(h, UNIT_TYPE_IDS.indexOf(s.unit));
+    h = mixU32(h, s.men);
+    h = mixU32(h, s.wounded);
+    h = mixU32(h, s.levy ? 1 : 0);
+  }
+  h = mixU32(h, a.abilities.length);
+  for (const x of a.abilities) h = mixU32(h, ABILITY_IDS.indexOf(x));
+  h = mixMover(h, a.mover);
+  h = mixU32(h, a.supply);
+  h = mixU32(h, a.morale);
+  h = mixStr(h, a.captain);
+  h = mixU32(h, a.hunger);
+  h = mixU32(h, a.unpaid);
+  h = mixU32(h, a.arrears);
+  h = mixU32(h, ARMY_POSTURES.indexOf(a.posture));
+  h = mixU32(h, a.postureDays);
+  h = mixU32(h, a.patrol.length);
+  for (const x of a.patrol) h = mixU32(h, x);
+  h = mixU32(h, a.patrolIndex);
+  h = mixU32(h, a.target);
+  h = mixU32(h, a.mergeInto ? 1 : 0);
+  h = mixU32(h, a.desertCarry);
+  h = mixU32(h, a.dieCarry);
+  h = mixU32(h, a.sickCarry);
+  return h;
 }
 
 function mixLedgerDay(h: number, d: LedgerDay | null): number {
@@ -118,6 +179,7 @@ export function kingdomHash(world: KingdomWorld): string {
     h = mixU32(h, x.taxCarry);
     h = mixU32(h, x.doleCarry);
     h = mixU32(h, x.famine);
+    h = mixU32(h, x.foraged);
   }
 
   h = mixU32(h, world.roads.length);
@@ -138,6 +200,11 @@ export function kingdomHash(world: KingdomWorld): string {
   h = mixMover(h, k.mover);
   h = mixU32(h, KING_TASKS.indexOf(k.task));
   h = mixU32(h, k.taskDays);
+  h = mixU32(h, k.army);
+
+  // K4: every army, in id order.
+  h = mixU32(h, world.armies.length);
+  for (const a of world.armies) h = mixArmy(h, a);
 
   // K3: every faction's stores, soft stats and ledger pages.
   h = mixU32(h, world.economy.length);

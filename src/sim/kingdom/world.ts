@@ -34,7 +34,10 @@ import {
   advanceMover, buildGraph, findRoute, moverAt, moverPosition, roadLength, setRoute,
   type RoadGraph, type Route,
 } from "./graph.ts";
-import type { FactionEconomy, FactionExploration, FieldPlot, Holding, KingToken, KingdomEvent, Road } from "./state.ts";
+import type { Army, FactionEconomy, FactionExploration, FieldPlot, Holding, KingToken, KingdomEvent, Road } from "./state.ts";
+import {
+  applyArmyOrder, armyById, checkArmyOrder, isArmyOrder, marchArmies, planArmyRoute, runArmyDay, type ArmyOrderBody,
+} from "./armies.ts";
 import { DEFAULT_TAX } from "../../content/kingdom/economy.ts";
 import type { FactionBook } from "./ledger.ts";
 import { snapshotStocks } from "./ledger.ts";
@@ -103,6 +106,8 @@ export class KingdomWorld {
   readonly books: FactionBook[];
   /** Every faction's map knowledge, finds and special upgrades, in FACTION_IDS order (K3a). */
   readonly explore: FactionExploration[];
+  /** Every army on the map, of every faction, in id order (K4; armies.ts). */
+  readonly armies: Army[] = [];
 
   readonly rng: KingdomRng;
   readonly orders = new KingdomOrderQueue();
@@ -160,6 +165,7 @@ export class KingdomWorld {
         taxCarry: 0,
         doleCarry: 0,
         famine: 0,
+        foraged: 0,
       };
       this.holdings.push(h);
       this.byKey.set(h.key, h);
@@ -192,6 +198,7 @@ export class KingdomWorld {
       mover: moverAt(start.id),
       task: "none",
       taskDays: 0,
+      army: 0,
     };
 
     this.graph = buildGraph(this.holdings, this.roads);
@@ -241,6 +248,9 @@ export class KingdomWorld {
       // K3: the economy's day -- farm weather, seasons, plots, buildings,
       // taxes, foraging and rallying, bread, spoilage (economy.ts).
       runEconomyDay(this);
+      // K4: the armies' day -- wages, bread, hunger and desertion, mending
+      // and replacements -- after the party and the towns have eaten.
+      runArmyDay(this);
       // K3a: the realm's sight as the day begins (towers built, holdings
       // claimed); the king's is also kept up as he marches, below.
       for (let f = 0; f < FACTION_IDS.length; f++) updateSight(this, f);
@@ -250,8 +260,11 @@ export class KingdomWorld {
       this.log.push(order);
       this.applyOrder(order);
     }
-    this.marchKing();
-    // K4: armies march (same advanceMover).  K5: contact check, in army-id order.
+    // The king's retinue marches on its own only while he rides with no army.
+    if (this.king.army === 0) this.marchKing();
+    // K4: armies march (the same advanceMover), then meetings, in army-id order.
+    marchArmies(this);
+    // K5: contact check, in army-id order.
     // K6: morale and unrest.  K7: contracts and wages.
     this.now++;
     return this.events;
@@ -286,6 +299,21 @@ export class KingdomWorld {
   }
 
   private applyOrder(order: KingdomOrder): void {
+    // While the king rides with an army, marching or halting the king is
+    // marching or halting that army (docs/PROVISIONAL.md K4.1).
+    if ((order.kind === "moveKing" || order.kind === "haltKing") && order.player === KING_PLAYER && this.king.army !== 0) {
+      const body: ArmyOrderBody = order.kind === "moveKing"
+        ? { kind: "marchArmy", army: this.king.army, to: order.to }
+        : { kind: "haltArmy", army: this.king.army };
+      const why = applyArmyOrder(this, { ...order, ...body });
+      if (why) this.reject(order, why);
+      return;
+    }
+    if (isArmyOrder(order)) {
+      const why = applyArmyOrder(this, order as KingdomOrder & ArmyOrderBody);
+      if (why) this.reject(order, why);
+      return;
+    }
     switch (order.kind) {
       case "moveKing": {
         if (order.player !== KING_PLAYER) return this.reject(order, "only the king's seat commands the king");
@@ -332,7 +360,11 @@ export class KingdomWorld {
    */
   check(body: KingdomOrderBody, player: number = KING_PLAYER): string | null {
     if (body.kind === "resolveEvent") return checkResolve(this, player, body.site, body.choice);
-    if (body.kind === "moveKing") return targetRefusal(this, KING_PLAYER, body.to);
+    if (body.kind === "moveKing") {
+      if (this.king.army !== 0) return checkArmyOrder(this, { kind: "marchArmy", army: this.king.army, to: body.to }, player);
+      return targetRefusal(this, KING_PLAYER, body.to);
+    }
+    if (isArmyOrder(body)) return checkArmyOrder(this, body, player);
     if (!isEconomyOrder(body)) return null;
     return checkEconomyOrder(this, body as EconomyOrderBody, player);
   }
@@ -393,6 +425,9 @@ export class KingdomWorld {
    * nothing.
    */
   planKingRoute(to: number): { route: Route; etaTicks: number } | null {
+    // Riding with an army, the king goes at the army's pace.
+    const army = armyById(this, this.king.army);
+    if (army) return planArmyRoute(this, army, to);
     if (targetRefusal(this, KING_PLAYER, to)) return null;
     const route = findRoute(this.graph, this.king.mover, to, routeOptions(this, KING_PLAYER));
     if (!route) return null;

@@ -34,6 +34,7 @@ await import("../src/e2e/scenarios-k2fix.ts");
 await import("../src/e2e/scenarios-k3.ts");
 await import("../src/e2e/scenarios-k3a.ts");
 await import("../src/e2e/scenarios-k3b.ts");
+await import("../src/e2e/scenarios-k4.ts");
 const only = process.argv[2];
 const results = await runFromQuery(only ? "?only=" + only : "", out as unknown as HTMLElement);
 clearInterval(pump);

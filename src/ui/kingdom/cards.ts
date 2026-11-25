@@ -32,6 +32,10 @@ import { taxPerDay } from "../../sim/kingdom/economy.ts";
 import { BUILDINGS, type BuildingId } from "../../content/kingdom/buildings.ts";
 import { CROPS, type CropId } from "../../content/kingdom/crops.ts";
 import { C } from "../../content/kingdom/city-strings.ts";
+import { AC } from "../../content/kingdom/army-strings.ts";
+import { LEVY_MIN_MEN } from "../../content/kingdom/armies.ts";
+import { armyById } from "../../sim/kingdom/armies.ts";
+import { levyMenu, recruitTarget } from "./recruit-menu.ts";
 
 export type CardHooks = {
   /** Pop this card. */
@@ -52,9 +56,11 @@ export type CardHooks = {
 
 export type CardView = {
   readonly screen: Screen;
-  readonly kind: "region" | "king";
-  /** The holding shown, or 0 for the king card. */
+  readonly kind: "region" | "king" | "army";
+  /** The holding shown, or 0 for the king and army cards. */
   readonly holding: number;
+  /** The army shown (K4), or 0. */
+  readonly army?: number;
   refresh(): void;
 };
 
@@ -254,6 +260,8 @@ export function kingCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
   let doing: HTMLElement | null = null;
   let heading: HTMLElement | null = null;
   let why: HTMLElement | null = null;
+  let rides: HTMLElement | null = null;
+  let levy: HTMLElement | null = null;
   const work: { el: HTMLElement; order: () => KingdomOrderBody | null; always: boolean }[] = [];
 
   /** Show a button when its order applies here; move focus off it first if it is about to vanish. */
@@ -280,6 +288,17 @@ export function kingCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
       }
       if (body && body.kind === "claimHolding") setText(w.el, E.claim(world.holding(body.holding)?.name ?? "?"));
     }
+    // K4: the followers formed where he stands. On offer wherever he stands;
+    // refused (and saying why) until there are enough of them.
+    if (levy) {
+      const at = world.king.mover.road === 0 ? world.king.mover.node : 0;
+      offer(levy, at !== 0);
+      const refusal = at ? world.check({ kind: "recruit", at, army: recruitTarget(world, at), unit: "line", levy: true }) : null;
+      if (refusal) levy.setAttribute("aria-disabled", "true");
+      else levy.removeAttribute("aria-disabled");
+      if (refusal && !reason && doc.activeElement === levy) reason = E.notNow(refusal);
+    }
+    if (rides) setText(rides, armyById(world, world.king.army)?.name ?? AC.ridesAlone);
     setText(why, reason);
     why.style.display = reason ? "block" : "none";
     const m = world.king.mover;
@@ -313,6 +332,7 @@ export function kingCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
     where = row(doc, dl, K.kingWhere);
     going = row(doc, dl, K.kingGoing);
     doing = row(doc, dl, E.kingTask);
+    rides = row(doc, dl, AC.ridesWith);
     weather = row(doc, dl, K.weather);
     body.appendChild(dl);
     why = make(doc, "p", "k-why");
@@ -340,6 +360,21 @@ export function kingCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
       const h = at ? world.holding(at) : undefined;
       return h && h.owner === null ? { kind: "claimHolding", holding: h.id } : null;
     }, E.chosen, true);
+    // K4: "raise followers" -- the levy menu, where the king stands.
+    const lv = make(doc, "button", "k-btn", AC.raiseLevy);
+    lv.setAttribute("aria-haspopup", "dialog");
+    lv.style.display = "none";
+    lv.onclick = () => {
+      const at = world.king.mover.road === 0 ? world.king.mover.node : 0;
+      const refusal = at ? world.check({ kind: "recruit", at, army: recruitTarget(world, at), unit: "line", levy: true }) : null;
+      if (refusal && world.kingStocks.stocks.levy < LEVY_MIN_MEN) {
+        if (why) { why.textContent = E.notNow(refusal); why.style.display = "block"; }
+        return;
+      }
+      hooks.economy.openMenu(levyMenu(doc, world, hooks.economy));
+    };
+    levy = lv;
+    actions.appendChild(lv);
     halt = make(doc, "button", "k-btn", K.halt);
     const h = halt;
     // As in the HUD: a mouse press must not leave the button focused, or the

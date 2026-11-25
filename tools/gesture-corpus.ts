@@ -16,6 +16,8 @@ import { KingdomCamera, OPENING_MILES } from "../src/render/kingdom/camera.ts";
 import { kingdomContext } from "../src/input/kingdom-commander.ts";
 import type { KingdomGestureContext } from "../src/input/kingdom-gestures.ts";
 import { kingCounterAt } from "../src/render/kingdom/layout.ts";
+import { armyCounters, armyPointsOf } from "../src/input/kingdom-commander.ts";
+import { raiseArmy } from "../src/sim/kingdom/armies.ts";
 
 export type Case = {
   readonly expected: string;
@@ -843,11 +845,17 @@ function here2(): Point {
 // =============================================================================
 
 export type KingdomCase = {
-  /** tapToken, tapHolding:<name>, march:<name>, or none:<reason>. */
+  /**
+   * tapToken, tapHolding:<name>, march:<name>, none:<reason>; for K4 an army
+   * label names its army by handle: tapToken:A2, intercept:F1, merge:<into>,
+   * join:A2, split:A2, garrison:A2, recover:A2, patrol:A2:<name>,<name>.
+   */
   readonly expected: string;
   readonly points: Point[];
   readonly ctx: KingdomGestureContext;
   readonly note: string;
+  /** Army handles to ids, for the army scene's cases. */
+  readonly armies?: Readonly<Record<string, number>>;
 };
 
 /** The zooms (miles per pixel) the kingdom corpus is drawn at, for a 1280x720 window. */
@@ -974,13 +982,174 @@ export function buildKingdomCorpus(): KingdomCase[] {
       for (const r of [40, 60]) {
         const rr = r * px;
         const ring = circle(counter.x + rr, counter.y, rr, Math.PI, 1, 40);
-        add("none:closed-shape", stroke(ring, 48, jitter, rnd), "ring of " + r + " px drawn from the king");
+        add("none:closed-no-army", stroke(ring, 48, jitter, rnd), "ring of " + r + " px drawn from the king");
       }
       const h = heart(counter.x, counter.y + 40 * px, 40 * px, 0, 48);
-      add("none:closed-shape", stroke(h, 56, jitter, rnd), "heart drawn from the king");
+      add("none:closed-no-army", stroke(h, 56, jitter, rnd), "heart drawn from the king");
       const g = named(world, "Greyshaw");
-      add("none:closed-shape", stroke(circle(g.x, g.y, 30 * px, 0, 1, 36), 40, jitter, rnd), "ring round Greyshaw");
+      add("none:closed-no-army", stroke(circle(g.x, g.y, 30 * px, 0, 1, 36), 40, jitter, rnd), "ring round Greyshaw");
     }
+  }
+  out.push(...armyScene(rnd));
+  return out;
+}
+
+/**
+ * K4: the army scene. The real map with the whole army vocabulary live at
+ * once, at the same three zooms: two armies of yours fanned side by side at
+ * Cold Hearth under the king (A1 of three squads, A4 of one), A2 at
+ * Greyshaw, and at Fell End an army of yours (A3) beside another side's (F1)
+ * -- adjacent counters where an intercept, a merge and a tap must each be
+ * told apart from the others and from the holding under them.
+ */
+export function armyWorld(): { world: KingdomWorld; armies: Record<string, number> } {
+  const world = new KingdomWorld({ seed: 7 });
+  const at = (name: string): number => {
+    const h = world.holdings.find((x) => x.name === name);
+    if (!h) throw new Error("no holding " + name);
+    return h.id;
+  };
+  const a1 = raiseArmy(world, 0, at("Cold Hearth"), ["line", "slinger", "archer"]);
+  const a2 = raiseArmy(world, 0, at("Greyshaw"), ["line", "archer"]);
+  const a3 = raiseArmy(world, 0, at("Fell End"), ["line"]);
+  const a4 = raiseArmy(world, 0, at("Cold Hearth"), ["slinger"]);
+  const f1 = raiseArmy(world, 1, at("Fell End"), ["line", "line"]);
+  return { world, armies: { A1: a1.id, A2: a2.id, A3: a3.id, A4: a4.id, F1: f1.id } };
+}
+
+function armyScene(rnd: () => number): KingdomCase[] {
+  const out: KingdomCase[] = [];
+  const { world, armies } = armyWorld();
+  const named = (name: string): Point => {
+    const h = world.holdings.find((x) => x.name === name);
+    if (!h) throw new Error("no holding " + name);
+    return { x: h.x, y: h.y };
+  };
+  for (const zoom of kingdomZooms()) {
+    const px = zoom.pxToWorld;
+    const king = world.kingPosition();
+    const points = armyPointsOf(world);
+    const ctx = kingdomContext(world, king, px, points);
+    const counters = new Map(armyCounters(world, points, px).map((c) => [c.army.id, c.counter]));
+    const C = (handle: string): Point => {
+      const p = counters.get(armies[handle]);
+      if (!p) throw new Error("army " + handle + " is not drawn (not visible?)");
+      return p;
+    };
+    const kc = kingCounterAt(king, px);
+    const add = (expected: string, points: Point[], note: string): void => {
+      out.push({ expected, points, ctx, armies, note: note + " @" + zoom.name + " zoom, armies" });
+    };
+    const tapAt = (p: Point, n: number): Point[] => {
+      const pts: Point[] = [];
+      for (let i = 0; i < n; i++) pts.push({ x: p.x + rnd() * 0.8 * px, y: p.y + rnd() * 0.8 * px });
+      return pts;
+    };
+    const jitter = 1.5 * px;
+
+    // -- taps: each counter of a fanned pair, the foreign one, and the holdings under them
+    for (const hnd of ["A1", "A4", "A2", "A3", "F1"]) add("tapToken:" + hnd, tapAt(C(hnd), 3), "tap " + hnd + "'s counter");
+    add("tapToken", tapAt(kc, 2), "tap the king, armies below him");
+    add("tapHolding:Fell End", tapAt(named("Fell End"), 3), "tap Fell End, two armies under it");
+    add("tapHolding:Cold Hearth", tapAt(named("Cold Hearth"), 3), "tap Cold Hearth, between the king and two armies");
+
+    // -- marches: an army by road, and the king among armies
+    for (const n of [12, 40]) {
+      add("march:Thornwick", stroke([C("A2"), named("Thornwick")], n, jitter, rnd), "line A2 -> Thornwick, " + n + " samples");
+      add("march:Greyshaw", stroke([C("A1"), named("Greyshaw")], n, jitter, rnd), "line A1 -> Greyshaw (A2 stands there)");
+      add("march:Rookstead", stroke(bowed(C("A3"), named("Rookstead"), 0.2, 24), n, jitter, rnd), "curved line A3 -> Rookstead");
+      add("march:Thornwick", stroke([kc, named("Thornwick")], n, jitter, rnd), "line king -> Thornwick, past his armies");
+    }
+
+    // -- intercept, merge, join: lines between counters, near and far
+    add("intercept:F1", stroke([C("A3"), C("F1")], 10, 0.5 * px, rnd), "line A3 -> F1, adjacent counters");
+    add("intercept:F1", stroke([C("A2"), C("F1")], 30, jitter, rnd), "line A2 -> F1 across the map");
+    add("intercept:F1", stroke(bowed(C("A1"), C("F1"), -0.2, 24), 30, jitter, rnd), "curved line A1 -> F1");
+    add("merge:A4", stroke([C("A1"), C("A4")], 10, 0.5 * px, rnd), "line A1 -> A4, adjacent counters");
+    add("merge:A1", stroke([C("A2"), C("A1")], 30, jitter, rnd), "line A2 -> A1 across the map");
+    add("merge:A3", stroke(bowed(C("A2"), C("A3"), 0.25, 24), 30, jitter, rnd), "curved line A2 -> A3, beside F1");
+    add("join:A2", stroke([kc, C("A2")], 30, jitter, rnd), "line king -> A2");
+    add("join:A1", stroke([kc, C("A1")], 12, 0.5 * px, rnd), "line king -> A1 just below him");
+
+    // -- split: a line across a counter, starting and ending on nothing
+    // Across, not along, a fanned pair: a line along the fan crosses both
+    // counters, and the pen will not guess which (see the none case below).
+    const c2 = C("A2");
+    add("split:A2", stroke([{ x: c2.x - 45 * px, y: c2.y - 8 * px }, { x: c2.x + 45 * px, y: c2.y + 8 * px }], 20, 0.8 * px, rnd), "line across A2");
+    const c1 = C("A1");
+    add("split:A1", stroke([{ x: c1.x - 6 * px, y: c1.y - 40 * px }, { x: c1.x + 4 * px, y: c1.y + 40 * px }], 20, 0.8 * px, rnd), "line down across A1, beside A4");
+    const c4 = C("A4");
+    add("none:not-from-king", stroke([{ x: c1.x - 40 * px, y: c1.y }, { x: c4.x + 40 * px, y: c4.y }], 24, 0.5 * px, rnd), "line along the fan across A1 and A4");
+    add("split:A2", stroke([{ x: c2.x + 10 * px, y: c2.y + 50 * px }, { x: c2.x - 5 * px, y: c2.y - 50 * px }], 20, 0.8 * px, rnd), "upward line across A2");
+
+    // -- closed shapes: garrison rings, patrol rings, hearts
+    const g = named("Greyshaw");
+    add("garrison:A2", stroke(circle(g.x, g.y + 15 * px, 36 * px, 0, 1, 40), 48, jitter, rnd), "ring round Greyshaw and A2");
+    add("garrison:A2", stroke(circle(c2.x + 22 * px, c2.y, 22 * px, Math.PI, 1, 32), 40, 0.8 * px, rnd), "small ring from A2's counter");
+    const fe = named("Fell End");
+    add("garrison:A3", stroke(circle(fe.x, fe.y + 15 * px, 40 * px, 0.5, 1, 40), 48, jitter, rnd), "ring round Fell End, A3 and F1");
+    const r = named("Rookstead");
+    const th = named("Thornwick");
+    // Large rings. What a ring takes in depends on the zoom -- zoomed out, the
+    // same ring in miles holds more of the map -- so each case's label is read
+    // off the CLEAN circle (holdings and counters at least 8 px clear of its
+    // edge), and the recogniser must read the same off the jittered stroke.
+    const own = ["A1", "A2", "A3", "A4"];
+    const names = ["Cold Hearth", "Greyshaw", "Thornwick", "Fell End", "Rookstead"];
+    const bigRing = (cx: number, cy: number, rad: number, from: number, note: string, startOn: string | null): void => {
+      const clear = 8 * px;
+      const near = (p: Point): boolean => Math.abs(Math.hypot(p.x - cx, p.y - cy) - rad) < clear;
+      const inside = (p: Point): boolean => Math.hypot(p.x - cx, p.y - cy) < rad;
+      const pts = [...own.map(C), ...names.map(named)].filter((p) => startOn === null || p !== C(startOn));
+      if (pts.some(near)) return; // ambiguous by construction: not a fair case
+      const holds = names.filter((n) => inside(named(n)));
+      const armiesIn = own.filter((h) => inside(C(h)));
+      const subject = startOn ?? (armiesIn.length === 1 ? armiesIn[0] : null);
+      const expected = !subject ? (armiesIn.length > 1 ? "none:closed-many-armies" : "none:closed-no-army")
+        : holds.length >= 2 ? "patrol:" + subject + ":" + holds.join(",") : "garrison:" + subject;
+      add(expected, stroke(circle(cx, cy, rad, from, 1, 64), 72, jitter, rnd), note);
+    };
+    const mid = { x: (g.x + r.x) / 2, y: (g.y + r.y) / 2 };
+    const half = Math.hypot(g.x - r.x, g.y - r.y) / 2;
+    bigRing(mid.x, mid.y, half + 30 * px, 1, "large ring round Greyshaw and Rookstead", null);
+    const mid3 = { x: (g.x + r.x + th.x) / 3, y: (g.y + r.y + th.y) / 3 };
+    const rad3 = Math.max(...[g, r, th].map((p) => Math.hypot(p.x - mid3.x, p.y - mid3.y))) + 30 * px;
+    bigRing(mid3.x, mid3.y, rad3, 2, "large ring round Greyshaw, Rookstead and Thornwick", null);
+    // ...and rings that START on A2's counter and loop out round holdings:
+    // the subject is the army the ring begins on, whatever else it holds.
+    for (const [toward, extra] of [[[g, r], 20], [[g, r, th], 20], [[r, th], 30]] as const) {
+      const rel = toward.map((p) => ({ x: p.x - c2.x, y: p.y - c2.y }));
+      let ux = 0;
+      let uy = 0;
+      for (const q of rel) { const d = Math.hypot(q.x, q.y); ux += q.x / d; uy += q.y / d; }
+      const ul = Math.hypot(ux, uy);
+      ux /= ul; uy /= ul;
+      let rad = 0;
+      for (const q of rel) {
+        const dot = q.x * ux + q.y * uy;
+        if (dot > 0) rad = Math.max(rad, (q.x * q.x + q.y * q.y) / (2 * dot));
+      }
+      rad += extra * px;
+      const cx = c2.x + ux * rad;
+      const cy = c2.y + uy * rad;
+      bigRing(cx, cy, rad, Math.atan2(c2.y - cy, c2.x - cx), "large ring from A2's counter round " + toward.length + " holdings", "A2");
+    }
+    for (const [hnd, sz] of [["A2", 40], ["A1", 46], ["A3", 40]] as const) {
+      const c = C(hnd);
+      add("recover:" + hnd, stroke(heart(c.x, c.y, sz * px, 0, 48), 56, jitter, rnd), "heart on " + hnd);
+    }
+    add("none:closed-no-army", stroke(circle(r.x, r.y, 40 * px, 0, 1, 36), 40, jitter, rnd), "ring round Rookstead, no army there");
+    const ch = named("Cold Hearth");
+    const both = { x: (ch.x + g.x) / 2, y: (ch.y + g.y) / 2 };
+    add("none:closed-many-armies", stroke(circle(both.x, both.y, Math.hypot(ch.x - g.x, ch.y - g.y) / 2 + 60 * px, 0.3, 1, 60), 70, jitter, rnd),
+      "ring round Cold Hearth and Greyshaw, three armies inside");
+
+    // -- strokes that mean nothing, among armies
+    add("none:already-there", stroke([C("A2"), g], 12, 0.5 * px, rnd), "line A2 -> its own Greyshaw");
+    add("none:not-from-king", stroke([named("Thornwick"), r], 20, jitter, rnd), "line Thornwick -> Rookstead, no counter");
+    const empty = emptyCountry(world, 280, 240, 420, 360);
+    add("none:no-destination", stroke([C("A2"), empty], 30, jitter, rnd), "line A2 -> empty country");
+    add("none:nothing-there", tapAt(empty, 2), "tap empty country, armies about");
   }
   return out;
 }

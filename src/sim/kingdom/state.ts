@@ -17,6 +17,9 @@ import type { ProvinceId } from "../../content/kingdom/map.ts";
 import type { FarmEventId, StockId, TaxRateId } from "../../content/kingdom/economy.ts";
 import type { Knowledge } from "../../content/kingdom/exploration.ts";
 import type { UpgradeId } from "../../content/story/upgrades.ts";
+import type { UnitTypeId } from "../../content/unit-types.ts";
+import type { DoctrineId } from "../../content/doctrines.ts";
+import type { AbilityId } from "../../content/abilities.ts";
 
 /** The life of a field plot (PLAN.md §B.3; the transitions are in content/kingdom/crops.ts). */
 export type PlotStage = "empty" | "sown" | "growing" | "ripe" | "harvested" | "spoiled";
@@ -79,6 +82,12 @@ export type Holding = {
    * signal: K6 turns it into unrest, K4 into desertion of a garrison.
    */
   famine: number;
+  /**
+   * Days an army has lived off this holding's land this season (K4), reset at
+   * each season's turn. THE foraging signal: K6 turns it into unrest -- an
+   * army that strips the fields is supply bought with goodwill.
+   */
+  foraged: number;
 };
 
 /**
@@ -160,6 +169,108 @@ export type KingToken = {
   task: KingTask;
   /** Whole days spent on the task so far. */
   taskDays: number;
+  /**
+   * The army the king rides with (K4), or 0 when he travels alone. While he
+   * rides with one, his mover is a copy of the army's and his marches are its
+   * marches (docs/PROVISIONAL.md K4.1).
+   */
+  army: number;
+};
+
+/** What an army is doing where it stands (K4). Hash code is the index. Append only. */
+export type ArmyPosture = "none" | "hold" | "patrol" | "recover";
+export const ARMY_POSTURES: readonly ArmyPosture[] = ["none", "hold", "patrol", "recover"];
+
+/**
+ * One squad of a campaign army: a battle squad (content/unit-types.ts) that
+ * remembers what has happened to it. Its strength persists from day to day
+ * and, from K5, from battle to battle: `men` are alive and with the colours
+ * (never more than the type's `soldiers`), and `wounded` of them cannot fight
+ * yet (sick from hunger, hurt in battle) until they mend.
+ */
+export type ArmySquad = {
+  readonly id: number;
+  readonly unit: UnitTypeId;
+  men: number;
+  /** 0..men. */
+  wounded: number;
+  /** Raised from the king's followers without a barracks: serves for bread, takes no wage. */
+  readonly levy: boolean;
+};
+
+/**
+ * An army on the kingdom map (PLAN.md §B.4): a battle army list -- doctrine,
+ * squads, abilities -- wrapped in what the kingdom knows of it. Kept in
+ * world.armies in id order; ids from the world's one counter.
+ */
+export type Army = {
+  readonly id: number;
+  /** Faction index (FACTION_IDS). */
+  readonly owner: number;
+  /** "First Army": the lowest ordinal free when it was raised. */
+  name: string;
+  doctrine: DoctrineId;
+  /** In id order. Never empty while the army is on the map. */
+  squads: ArmySquad[];
+  /** Battle abilities earned by the kingdom for this army (§B.4), at most MAX_OF_ONE_ABILITY of each. */
+  abilities: AbilityId[];
+  /** Where it is, and the destination queue (route) it is working through. */
+  mover: Mover;
+  /** Grain carried in packs and wagons, in person-days. */
+  supply: number;
+  /** 0..100. A placeholder until K6 writes the rules that move it (§B.6); saved and hashed now. */
+  morale: number;
+  /** Who commands it when the king does not ride with it: a captain's name, "" for a sergeant. */
+  captain: string;
+  /** Consecutive days it went short of bread. 0 = fed. K6 reads it as a morale input. */
+  hunger: number;
+  /** Consecutive days it has had wages owed. 0 = paid up. "Late wages" is unpaid > 0. */
+  unpaid: number;
+  /** Coin owed in wages and not yet paid; paid first out of the next coin. */
+  arrears: number;
+  posture: ArmyPosture;
+  /** Whole days in the current posture (a hold counts as dug in from HOLD_DIG_IN_DAYS). */
+  postureDays: number;
+  /** Holdings a patrol walks between, in order (empty unless patrolling). */
+  patrol: number[];
+  /** The patrol stop it is walking to next. */
+  patrolIndex: number;
+  /** An army it is marching to meet (intercept or merge), or 0. */
+  target: number;
+  /** True when `target` is an own army to join on meeting, false for an intercept. */
+  mergeInto: boolean;
+  /** Per-mille remainders of the daily losses, so they are exact integers with no random draw. */
+  desertCarry: number;
+  dieCarry: number;
+  sickCarry: number;
+};
+
+/** Why an army left the map. */
+export type ArmyGoneReason = "starved" | "deserted" | "disbanded";
+
+/** One army's day, for the feed and the tests. */
+export type ArmyDayReport = {
+  readonly army: number;
+  readonly owner: number;
+  /** Coin owed today, and what was paid (arrears first). */
+  readonly wage: number;
+  readonly paid: number;
+  readonly arrears: number;
+  /** Grain it needed, and where it came from. */
+  readonly ration: number;
+  readonly fromWagons: number;
+  readonly fromStores: number;
+  readonly foraged: number;
+  /** Grain it went short. */
+  readonly short: number;
+  /** Grain loaded into its packs and wagons from the stores. */
+  readonly loaded: number;
+  readonly deserted: number;
+  readonly died: number;
+  readonly sickened: number;
+  readonly healed: number;
+  readonly replaced: number;
+  readonly iron: number;
 };
 
 /**
@@ -231,7 +342,27 @@ export type KingdomEvent =
   | { kind: "eventResolved"; faction: number; site: number; event: number; choice: number; failed: boolean }
   | { kind: "upgradeGained"; faction: number; upgrade: UpgradeId; site: number }
   /** An event's reveal marked these many holdings known. */
-  | { kind: "revealed"; faction: number; site: number; holdings: number[] };
+  | { kind: "revealed"; faction: number; site: number; holdings: number[] }
+  // -- K4: armies ------------------------------------------------------------------
+  | { kind: "armyRaised"; army: number; owner: number; at: number }
+  | { kind: "recruited"; army: number; squad: number; unit: UnitTypeId; men: number; levy: boolean }
+  | { kind: "armyDeparted"; army: number; from: number; to: number }
+  | { kind: "armyArrived"; army: number; at: number; destination: boolean }
+  | { kind: "armySplit"; army: number; into: number; squads: number[] }
+  | { kind: "armiesMerged"; army: number; into: number; owner: number; name: string }
+  | { kind: "armyGone"; army: number; owner: number; name: string; reason: ArmyGoneReason }
+  | { kind: "armyPosture"; army: number; posture: ArmyPosture }
+  /** The king now rides with this army (0: alone). */
+  | { kind: "kingJoined"; army: number }
+  | { kind: "doctrineSet"; army: number; doctrine: DoctrineId }
+  | { kind: "abilityUnlocked"; army: number; ability: AbilityId }
+  /** A chasing army reached the one it was sent to meet (K5 turns this into contact). */
+  | { kind: "intercepted"; army: number; target: number }
+  | ({ kind: "armyDay" } & ArmyDayReport)
+  /** Wages fell behind (days === 1) or were paid up (days === 0). */
+  | { kind: "wagesLate"; army: number; days: number }
+  /** The king's unformed followers walked home from a hungry party. */
+  | { kind: "followersDeserted"; faction: number; n: number };
 
 /** Why a plot changed stage, for the feed. */
-export type PlotCause = "sown" | "sprouted" | "ripened" | "harvested" | "overripe" | "weather" | "winter" | "regrew";
+export type PlotCause = "sown" | "sprouted" | "ripened" | "harvested" | "overripe" | "weather" | "winter" | "regrew" | "foraged";

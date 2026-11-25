@@ -22,3 +22,37 @@ export type MapPoint = { readonly x: number; readonly y: number };
 export function kingCounterAt(truePos: MapPoint, pxToWorld: number): MapPoint {
   return { x: truePos.x, y: truePos.y - KING_COUNTER_OFFSET_PX * pxToWorld };
 }
+
+/** Screen pixels from an army's true point DOWN to the centre of its counter (the king's is above). */
+export const ARMY_COUNTER_OFFSET_PX = 30;
+/** Half-width of an army counter, screen pixels. */
+export const ARMY_COUNTER_RADIUS_PX = 13;
+/** Screen pixels between the centres of counters fanned out at one place. */
+export const ARMY_FAN_PX = 30;
+
+/**
+ * The centre of an army's counter: below its true point, so it never sits on
+ * the holding's glyph or the king's counter, and fanned sideways, centred,
+ * when `count` armies stand at the same point (slot 0 leftmost).
+ */
+export function armyCounterAt(truePos: MapPoint, slot: number, count: number, pxToWorld: number): MapPoint {
+  return {
+    x: truePos.x + (slot - (count - 1) / 2) * ARMY_FAN_PX * pxToWorld,
+    y: truePos.y + ARMY_COUNTER_OFFSET_PX * pxToWorld,
+  };
+}
+
+/** For each item (in the order given), its slot among the items at exactly the same point, and how many share it. */
+export function fanSlots(items: readonly { id: number; x: number; y: number }[]): { slot: number; count: number }[] {
+  const groups = new Map<string, number[]>();
+  const keys = items.map((it) => it.x + "," + it.y);
+  items.forEach((_it, i) => {
+    const g = groups.get(keys[i]);
+    if (g) g.push(i);
+    else groups.set(keys[i], [i]);
+  });
+  return items.map((_it, i) => {
+    const g = groups.get(keys[i])!;
+    return { slot: g.indexOf(i), count: g.length };
+  });
+}

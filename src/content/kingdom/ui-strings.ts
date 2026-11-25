@@ -13,7 +13,8 @@ import type { HoldingKind, Season, WeatherId } from "./terrain.ts";
 /** Why a pen stroke on the kingdom map did nothing. Every reason is said. */
 export type KingdomNoneReason =
   | "nothing-there"
-  | "closed-shape"
+  | "closed-no-army"
+  | "closed-many-armies"
   | "not-from-king"
   | "no-destination"
   | "already-there"
@@ -21,8 +22,9 @@ export type KingdomNoneReason =
 
 export const NONE_REASON: Record<KingdomNoneReason, string> = {
   "nothing-there": "Nothing there to read about.",
-  "closed-shape": "Rings and hearts are orders for armies, which come later. To march, draw a line from the king to a holding.",
-  "not-from-king": "That line means nothing: start it on the king's counter.",
+  "closed-no-army": "Rings and hearts are orders for an army: start the ring on an army's counter, or draw it round one.",
+  "closed-many-armies": "That ring holds more than one army: start it on the counter of the army you mean.",
+  "not-from-king": "That line means nothing: start it on the king's or an army's counter, or draw it across an army to split it.",
   "no-destination": "That line means nothing: end it on a holding.",
   "already-there": "The king is already there.",
   "no-road": "No road leads there.",
@@ -31,8 +33,9 @@ export const NONE_REASON: Record<KingdomNoneReason, string> = {
 /** The short form shown on the ghost plate at the pen tip. */
 export const NONE_PLATE: Record<KingdomNoneReason, string> = {
   "nothing-there": "nothing here",
-  "closed-shape": "no order: rings come with armies",
-  "not-from-king": "no order: start on the king",
+  "closed-no-army": "no order: ring an army",
+  "closed-many-armies": "no order: which army?",
+  "not-from-king": "no order: start on a counter",
   "no-destination": "no order: end on a holding",
   "already-there": "no order: already there",
   "no-road": "no order: no road leads there",

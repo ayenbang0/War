@@ -18,6 +18,9 @@
 import type { BuildingId } from "../../content/kingdom/buildings.ts";
 import type { CropId } from "../../content/kingdom/crops.ts";
 import type { TaxRateId } from "../../content/kingdom/economy.ts";
+import type { UnitTypeId } from "../../content/unit-types.ts";
+import type { DoctrineId } from "../../content/doctrines.ts";
+import type { AbilityId } from "../../content/abilities.ts";
 
 export type KingdomOrderBody =
   /** March the king's retinue by road to a holding. Replaces any march, and ends a forage or rally. */
@@ -41,8 +44,38 @@ export type KingdomOrderBody =
   | { kind: "harvest"; plot: number }
   // -- K3a: exploration --
   /** Answer the letter waiting from a site: pick choice `choice` (0-based) of its event. */
-  | { kind: "resolveEvent"; site: number; choice: number };
-  // K4: recruit / march / merge / split.  K7: hire / pay.
+  | { kind: "resolveEvent"; site: number; choice: number }
+  // -- K4: armies (PLAN.md §B.4, §B.5; src/sim/kingdom/armies.ts) --
+  /**
+   * Raise one squad at holding `at` into army `army` (0: a new army there).
+   * `levy`: formed from the king's followers where he stands, no barracks,
+   * coin or iron; otherwise trained at a barracks of yours for followers,
+   * coin and iron by the battle rulebook's costs.
+   */
+  | { kind: "recruit"; at: number; army: number; unit: UnitTypeId; levy: boolean }
+  /** Stand an army down: at home its men rejoin the followers and its grain the stores. */
+  | { kind: "disband"; army: number }
+  /** March an army by road to a holding. Replaces any march, chase or patrol. */
+  | { kind: "marchArmy"; army: number; to: number }
+  | { kind: "haltArmy"; army: number }
+  /** Fold `army` into `into`: at once if they have met, else it marches to join it. */
+  | { kind: "merge"; army: number; into: number }
+  /** Part `squads` off `army` as a new army where it stands. */
+  | { kind: "split"; army: number; squads: number[] }
+  /** Dig in where it stands (a garrison, in a holding of yours). */
+  | { kind: "garrison"; army: number }
+  /** Walk between these holdings, in this order, round and round. */
+  | { kind: "patrol"; army: number; holdings: number[] }
+  /** Rest where it stands: the wounded mend, and at a barracks the gaps are filled. */
+  | { kind: "recover"; army: number }
+  | { kind: "setDoctrine"; army: number; doctrine: DoctrineId }
+  /** Spend coin and legitimacy so the army can call on a battle ability (§B.4). */
+  | { kind: "unlockAbility"; army: number; ability: AbilityId }
+  /** March to meet an army that is not yours (K8's enemies; any other side's army now). */
+  | { kind: "intercept"; army: number; target: number }
+  /** The king rides with `army` (both must stand in the same holding), or alone again (0). */
+  | { kind: "kingJoin"; army: number };
+  // K7: hire / pay.
   // Append new kinds; never renumber the existing ones.
 
 export type KingdomOrderKind = KingdomOrderBody["kind"];
@@ -50,7 +83,14 @@ export type KingdomOrderKind = KingdomOrderBody["kind"];
 export const KINGDOM_ORDER_KINDS: readonly KingdomOrderKind[] = [
   "moveKing", "haltKing", "forage", "rally", "claimHolding", "setTax", "build", "sow", "harvest",
   "resolveEvent",
+  // K4
+  "recruit", "disband", "marchArmy", "haltArmy", "merge", "split", "garrison", "patrol", "recover",
+  "setDoctrine", "unlockAbility", "intercept", "kingJoin",
 ];
+
+/** The K4 order kinds (src/sim/kingdom/armies.ts applies them). */
+export const ARMY_ORDER_KINDS: readonly KingdomOrderKind[] = KINGDOM_ORDER_KINDS.slice(KINGDOM_ORDER_KINDS.indexOf("recruit"));
+export const ARMY_ORDER_KIND_SET: ReadonlySet<KingdomOrderKind> = new Set(ARMY_ORDER_KINDS);
 
 export type KingdomOrder = KingdomOrderBody & {
   /** Kingdom tick at which this order takes effect. */

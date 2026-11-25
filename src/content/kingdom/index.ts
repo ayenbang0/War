@@ -13,3 +13,5 @@ export * from "./economy.ts";
 export * from "./buildings.ts";
 export * from "./crops.ts";
 export * from "./exploration.ts";
+export * from "./armies.ts";
+export * from "./army-strings.ts";

@@ -53,7 +53,7 @@ import { KING_COUNTER_OFFSET_PX, kingCounterAt } from "../src/render/kingdom/lay
 import { interpretStroke, kingdomContext } from "../src/input/kingdom-commander.ts";
 import { K, NONE_PLATE, NONE_REASON, WEATHER_LINE, dateLine, etaWords } from "../src/content/kingdom/ui-strings.ts";
 import { buildKingdomCorpus } from "./gesture-corpus.ts";
-import { printKingdomMatrix, runKingdomConfusionMatrix } from "./test-gestures.ts";
+import { KINGDOM_LABELS, printKingdomMatrix, runKingdomConfusionMatrix } from "./test-gestures.ts";
 
 let failures = 0;
 
@@ -908,7 +908,7 @@ section("K2 kingdom pen: confusion matrix");
     report.correct + "/" + report.total + (report.offDiagonal.length
       ? "; first miss: " + report.offDiagonal[0].note + " -> " + report.offDiagonal[0].actual : ""));
   const kinds = new Set([...report.matrix.entries()].filter(([, row]) => row.size > 0).map(([k]) => k));
-  check("every kingdom label has cases", kinds.size === 8, [...kinds].join(", "));
+  check("every kingdom label has cases", kinds.size === KINGDOM_LABELS.length, [...kinds].join(", "));
 }
 
 section("K2 kingdom pen: one function for preview and commit");
@@ -920,7 +920,8 @@ section("K2 kingdom pen: one function for preview and commit");
   let prefixesOk = true;
   let untouched = true;
   for (const c of corpus) {
-    if (!c.expected.startsWith("march:")) continue;
+    // The army scene's cases are held to the same rule in tools/kingdom-armies.ts.
+    if (!c.expected.startsWith("march:") || c.armies) continue;
     marches++;
     // The corpus contexts were built from fresh worlds of seed 7; rebuild the
     // world each case belongs to, so the plan is asked of the same state.

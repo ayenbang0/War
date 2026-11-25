@@ -32,7 +32,8 @@ import type { KingdomWorld } from "../../sim/kingdom/world.ts";
 import type { Holding } from "../../sim/kingdom/state.ts";
 import type { RoadTerrainId } from "../../content/kingdom/terrain.ts";
 import type { KingdomCamera } from "./camera.ts";
-import { KING_COUNTER_RADIUS_PX, type MapPoint } from "./layout.ts";
+import { ARMY_COUNTER_RADIUS_PX, KING_COUNTER_RADIUS_PX, type MapPoint } from "./layout.ts";
+import type { ArmyPosture } from "../../sim/kingdom/state.ts";
 import * as P from "./palette.ts";
 import { KING_PLAYER } from "../../content/kingdom/factions.ts";
 import { KNOW_SEEN, KNOW_UNKNOWN } from "../../content/kingdom/exploration.ts";
@@ -48,7 +49,38 @@ export type InkStroke = {
 export type GhostView =
   | { readonly kind: "march"; readonly route: readonly MapPoint[]; readonly dest: MapPoint; readonly label: string }
   | { readonly kind: "none"; readonly label: string }
-  | { readonly kind: "tap"; readonly label: string };
+  | { readonly kind: "tap"; readonly label: string }
+  | { readonly kind: "order"; readonly path: readonly MapPoint[]; readonly rings: readonly MapPoint[]; readonly label: string };
+
+/**
+ * One army counter as the layer hands it over (K4): the renderer reads no
+ * army state itself, so what is drawn is exactly what the pen was given.
+ * Identity is never colour alone: the king's armies are SHIELDS with their
+ * ordinal numeral, another side's are DIAMONDS with its initial.
+ */
+export type ArmyDraw = {
+  readonly id: number;
+  readonly own: boolean;
+  /** "I".."VIII" for the king's; a faction's initial for another's. */
+  readonly mark: string;
+  /** The true point (stem foot) and the counter's centre, in miles. */
+  readonly at: MapPoint;
+  readonly counter: MapPoint;
+  readonly men: number;
+  /** Another side's numbers are what scouts can count: rounded, and drawn as "~40". */
+  readonly about: boolean;
+  /** The king rides with this army: a crown tick on its shield. */
+  readonly kingRides: boolean;
+  /** Fit men as a percentage of a full army: the bar. */
+  readonly strengthPct: number;
+  /** Days of grain in its packs; -1 for another side's (unknown). */
+  readonly supplyDays: number;
+  readonly hungry: boolean;
+  readonly posture: ArmyPosture;
+  /** Its live march, from it through each holding still to reach (own armies only). */
+  readonly route: readonly MapPoint[];
+  readonly selected: boolean;
+};
 
 /** Short render-clock effects (game-feel small tier). Owned by the layer, drawn here. */
 export type Pulse = { readonly at: MapPoint; readonly start: number; readonly duration: number };
@@ -74,6 +106,8 @@ export type KingdomFrame = {
   /** The holding whose card is open, or 0. */
   readonly selectedHolding: number;
   readonly kingSelected: boolean;
+  /** K4: every army the king can see, in id order. */
+  readonly armies?: readonly ArmyDraw[];
   readonly paused: boolean;
   /** Real seconds, for the effects. */
   readonly clock: number;
@@ -96,7 +130,7 @@ function easeOutBack(t: number): number {
 
 export class KingdomRenderer {
   /** Frames drawn, and what the last one drew: read by the e2e harness. */
-  readonly stats = { frames: 0, holdings: 0, roads: 0, labels: 0, king: false, frontier: 0, hidden: 0 };
+  readonly stats = { frames: 0, holdings: 0, roads: 0, labels: 0, king: false, frontier: 0, hidden: 0, armies: 0 };
 
   private readonly ctx: CanvasRenderingContext2D;
   private grain: CanvasPattern | null = null;
@@ -256,8 +290,9 @@ export class KingdomRenderer {
         return ip - iq || LABEL_RANK[p.kind] - LABEL_RANK[q.kind] || p.id - q.id;
       });
     const taken: Rect[] = [];
-    // The king's counter is never covered by a name.
+    // The king's counter is never covered by a name, nor are the armies'.
     taken.push(circleRect(sx(f.counter.x), sy(f.counter.y), KING_COUNTER_RADIUS_PX + 4));
+    for (const a of f.armies ?? []) taken.push(circleRect(sx(a.counter.x), sy(a.counter.y), ARMY_COUNTER_RADIUS_PX + 6));
     let labels = 0;
     for (const h of order) {
       if (h.kind === "hamlet" && cam.zoom < HAMLET_LABEL_ZOOM && !important.has(h.id)) continue;
@@ -288,6 +323,11 @@ export class KingdomRenderer {
       ctx.fillText(h.name, tx, gy);
       labels++;
     }
+
+    // -- armies (K4): their marches under them, then the counters ----------------
+    const armies = f.armies ?? [];
+    for (const a of armies) if (a.own && a.route.length > 1) this.drawRoute(a.route, f.cam, "live");
+    for (const a of armies) this.drawArmy(a, sx(a.at.x), sy(a.at.y), sx(a.counter.x), sy(a.counter.y));
 
     // -- the king --------------------------------------------------------------
     this.drawKing(sx(f.king.x), sy(f.king.y), sx(f.counter.x), sy(f.counter.y), f.kingSelected);
@@ -322,6 +362,21 @@ export class KingdomRenderer {
       ctx.strokeStyle = P.marchInk;
       ctx.stroke();
     }
+    if (f.ghost && f.ghost.kind === "order" && f.stroke) {
+      if (f.ghost.path.length > 1) this.drawRoute(f.ghost.path, f.cam, "ghost");
+      for (const r of f.ghost.rings) {
+        ctx.beginPath();
+        ctx.arc(sx(r.x), sy(r.y), 17, 0, Math.PI * 2);
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = P.halo;
+        ctx.stroke();
+        ctx.setLineDash([6, 4]);
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = P.marchInk;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
     if (f.stroke) this.drawStroke(f.stroke, f.cam, 1);
     if (f.ghost && f.stroke && f.tip && f.ghost.kind !== "tap") {
       this.drawPlate(f.ghost.label, sx(f.tip.x), sy(f.tip.y), W, H, f.ghost.kind === "none");
@@ -333,6 +388,7 @@ export class KingdomRenderer {
     }
 
     this.stats.frames++;
+    this.stats.armies = armies.length;
     this.stats.holdings = holdings;
     this.stats.roads = roads;
     this.stats.labels = labels;
@@ -635,6 +691,135 @@ export class KingdomRenderer {
       for (const [w, c] of [[5, P.halo], [2.5, P.marchInk]] as const) {
         ctx.beginPath();
         ctx.arc(cx, cy, r + 8, 0, Math.PI * 2);
+        ctx.lineWidth = w;
+        ctx.strokeStyle = c;
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  /**
+   * An army counter (K4): a stem from its true point, the counter (shield or
+   * diamond, with its mark), a posture badge, and under it the men, a
+   * strength bar and the days of grain -- numbers in words, not a bar alone.
+   */
+  private drawArmy(a: ArmyDraw, tx: number, ty: number, cx: number, cy: number): void {
+    const { ctx } = this;
+    const r = ARMY_COUNTER_RADIUS_PX;
+    ctx.save();
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = P.halo;
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(cx, cy - r);
+    ctx.stroke();
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = P.ink;
+    ctx.stroke();
+    const shape = (grow: number): void => {
+      ctx.beginPath();
+      const g = r + grow;
+      if (a.own) {
+        // A shield: square shoulders, a point below.
+        ctx.moveTo(cx - g, cy - g);
+        ctx.lineTo(cx + g, cy - g);
+        ctx.lineTo(cx + g, cy + g * 0.25);
+        ctx.quadraticCurveTo(cx + g * 0.8, cy + g * 0.9, cx, cy + g * 1.2);
+        ctx.quadraticCurveTo(cx - g * 0.8, cy + g * 0.9, cx - g, cy + g * 0.25);
+        ctx.closePath();
+      } else {
+        ctx.moveTo(cx, cy - g * 1.15);
+        ctx.lineTo(cx + g * 1.15, cy);
+        ctx.lineTo(cx, cy + g * 1.15);
+        ctx.lineTo(cx - g * 1.15, cy);
+        ctx.closePath();
+      }
+    };
+    shape(3);
+    ctx.fillStyle = P.halo;
+    ctx.fill();
+    shape(0);
+    ctx.fillStyle = a.own ? P.kingColor : P.crownColor;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = P.ink;
+    ctx.stroke();
+    ctx.fillStyle = "#f2ead6";
+    ctx.font = "700 " + (a.mark.length > 2 ? 10 : 12) + "px " + P.MAP_FONT;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(a.mark, cx, cy + 0.5);
+    // Posture: a small badge at the top right (hold: a wall; patrol: a loop; recover: a cross).
+    if (a.posture !== "none") {
+      const bx = cx + r + 1;
+      const by = cy - r - 1;
+      ctx.beginPath();
+      ctx.arc(bx, by, 6.5, 0, Math.PI * 2);
+      ctx.fillStyle = P.plate;
+      ctx.fill();
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = P.ink;
+      ctx.stroke();
+      ctx.beginPath();
+      if (a.posture === "hold") {
+        ctx.rect(bx - 3.5, by - 1.5, 7, 4);
+        ctx.moveTo(bx - 3.5, by - 1.5); ctx.lineTo(bx - 3.5, by - 3.5);
+        ctx.moveTo(bx, by - 1.5); ctx.lineTo(bx, by - 3.5);
+        ctx.moveTo(bx + 3.5, by - 1.5); ctx.lineTo(bx + 3.5, by - 3.5);
+      } else if (a.posture === "patrol") {
+        ctx.arc(bx, by, 3.2, -Math.PI * 0.2, Math.PI * 1.5);
+        ctx.moveTo(bx + 3.2, by - 2.5); ctx.lineTo(bx + 3.2, by); ctx.lineTo(bx + 0.8, by - 0.6);
+      } else {
+        ctx.moveTo(bx - 3.5, by); ctx.lineTo(bx + 3.5, by);
+        ctx.moveTo(bx, by - 3.5); ctx.lineTo(bx, by + 3.5);
+      }
+      ctx.stroke();
+    }
+    // Under it: men and grain in words, and the strength bar.
+    if (a.kingRides) {
+      ctx.beginPath();
+      ctx.moveTo(cx - 5, cy - r - 1);
+      ctx.lineTo(cx - 5, cy - r - 6);
+      ctx.lineTo(cx - 2.5, cy - r - 3.5);
+      ctx.lineTo(cx, cy - r - 7.5);
+      ctx.lineTo(cx + 2.5, cy - r - 3.5);
+      ctx.lineTo(cx + 5, cy - r - 6);
+      ctx.lineTo(cx + 5, cy - r - 1);
+      ctx.closePath();
+      ctx.fillStyle = P.kingColor;
+      ctx.fill();
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = P.halo;
+      ctx.stroke();
+    }
+    const label = (a.about ? "~" : "") + a.men + (a.supplyDays >= 0 ? " · " + a.supplyDays + "d" : "");
+    ctx.font = "600 11px " + P.MAP_FONT;
+    const ly = cy + r * 1.2 + 9;
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = P.halo;
+    ctx.strokeText(label, cx, ly);
+    ctx.fillStyle = a.hungry ? P.crownColor : P.ink;
+    ctx.fillText(label, cx, ly);
+    if (a.hungry) {
+      // Hunger in a glyph as well as a colour: a mark after the numbers.
+      ctx.font = "700 11px " + P.MAP_FONT;
+      const w = ctx.measureText(label).width;
+      ctx.strokeText("!", cx + w / 2 + 5, ly);
+      ctx.fillText("!", cx + w / 2 + 5, ly);
+    }
+    const bw = 26;
+    const by2 = ly + 7;
+    ctx.fillStyle = P.halo;
+    ctx.fillRect(cx - bw / 2 - 1, by2 - 1, bw + 2, 6);
+    ctx.fillStyle = P.inkLight;
+    ctx.fillRect(cx - bw / 2, by2, bw, 4);
+    ctx.fillStyle = a.own ? P.kingColor : P.crownColor;
+    ctx.fillRect(cx - bw / 2, by2, Math.round((bw * Math.max(0, Math.min(100, a.strengthPct))) / 100), 4);
+    if (a.selected) {
+      for (const [w, c] of [[5, P.halo], [2.5, P.marchInk]] as const) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r + 9, 0, Math.PI * 2);
         ctx.lineWidth = w;
         ctx.strokeStyle = c;
         ctx.stroke();

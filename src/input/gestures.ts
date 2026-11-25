@@ -182,7 +182,7 @@ const PARALLEL_TOLERANCE = 0.35;
  * A closed shape filling less than this much of its convex hull has a real
  * notch cut into it, i.e. it is a heart rather than a ring. See hullFill.
  */
-const HEART_HULL_FILL = 0.96;
+export const HEART_HULL_FILL = 0.96;
 /** ...and point at least this much homeward, as a cosine (about 63 degrees). */
 const RETREAT_HOMEWARD = 0.45;
 
@@ -664,7 +664,7 @@ function convexHull(pts: readonly Point[]): Point[] {
  * 1.000 of their hull; hearts fill 0.926 to 0.932. The threshold sits in the
  * gap, with about five percentage points of margin on either side.
  */
-function hullFill(pts: readonly Point[]): number {
+export function hullFill(pts: readonly Point[]): number {
   const hull = convexHull(pts);
   if (hull.length < 3) return 1;
   const hullArea = enclosedAreaOfLocal(hull);
