@@ -28,6 +28,7 @@ const pump = setInterval(() => win.runFrames(1), 2);
 
 const { runFromQuery } = await import("../src/e2e/harness.ts");
 await import("../src/e2e/scenarios-k0.ts");
+await import("../src/e2e/scenarios-k2.ts");
 const only = process.argv[2];
 const results = await runFromQuery(only ? "?only=" + only : "", out as unknown as HTMLElement);
 clearInterval(pump);

@@ -13,6 +13,7 @@
 
 import type { App } from "./app.ts";
 import type { BattleLayer } from "./battle-layer.ts";
+import type { KingdomLayer } from "./kingdom-layer.ts";
 import type { StorageStatus } from "./progress-store.ts";
 
 export type TestHook = {
@@ -22,6 +23,8 @@ export type TestHook = {
   top(): string | null;
   /** The live battle, or null. */
   battle(): BattleLayer | null;
+  /** The live kingdom map, or null. */
+  kingdom(): KingdomLayer | null;
   storage(): StorageStatus;
   /** End the live battle now with this winner (0 is the player). */
   forceOutcome(winner: number): void;
@@ -34,6 +37,7 @@ export function testHook(app: App): TestHook {
     screens: () => app.stack.names(),
     top: () => app.stack.top?.name ?? null,
     battle,
+    kingdom: () => (app.live && app.live.kind === "kingdom" ? app.live : null),
     storage: () => app.store.status,
     forceOutcome: (winner) => {
       const b = battle();

@@ -19,10 +19,22 @@ import { TERRAIN_INFO } from "../sim/terrain.ts";
 import { ABILITY_IDS } from "../content/abilities.ts";
 import { CHAPTERS } from "../content/campaign.ts";
 
+import { K } from "../content/kingdom/ui-strings.ts";
+
 import { domScreen, el } from "./dom-screen.ts";
 import type { Screen } from "./screen-stack.ts";
 
-export type HomeChoice = "play" | "tutorial" | "campaign";
+export type HomeChoice = "play" | "tutorial" | "campaign" | "exile" | "exile-new";
+
+/**
+ * What the front screen says about the kingdom save (K2). Asked again every
+ * time Home comes back to the top, because leaving the kingdom saves it.
+ */
+export type ExileStatus =
+  | { readonly kind: "none" }
+  | { readonly kind: "saved"; readonly when: string }
+  /** A save is there but cannot be read; the Exile button asks before replacing it. */
+  | { readonly kind: "unreadable" };
 
 /** One counted figure with its label. */
 function figure(value: string, label: string): HTMLElement {
@@ -36,8 +48,21 @@ function figure(value: string, label: string): HTMLElement {
  * The front screen, as the bottom of the screen stack. It is never popped:
  * every other screen comes back here in the end.
  */
-export function homeScreen(root: HTMLElement, choose: (choice: HomeChoice) => void): Screen {
+export function homeScreen(
+  root: HTMLElement, choose: (choice: HomeChoice) => void, exile: () => ExileStatus = () => ({ kind: "none" }),
+): Screen {
   let play: HTMLButtonElement | null = null;
+  let exileNew: HTMLElement | null = null;
+  let exileLine: HTMLElement | null = null;
+  // Updated in place, never rebuilt: rebuilding would drop the focus the
+  // stack restores to the button the player left Home by.
+  const showExile = (): void => {
+    if (!exileNew || !exileLine) return;
+    const s = exile();
+    exileLine.textContent = s.kind === "saved" ? K.homeContinue(s.when)
+      : s.kind === "unreadable" ? K.homeUnreadable : K.homeFresh;
+    exileNew.style.display = s.kind === "saved" ? "inline-block" : "none";
+  };
   return domScreen({
     name: "home",
     kind: "full",
@@ -59,6 +84,19 @@ export function homeScreen(root: HTMLElement, choose: (choice: HomeChoice) => vo
       const teach = el("button", "home-teach", "Learn the gestures") as HTMLButtonElement;
       actions.append(play, chronicle, teach);
       panel.appendChild(actions);
+
+      // The Exile (K2): its own row, under the battle game's, until K9 makes
+      // it the campaign (docs/PROVISIONAL.md K2.1 keeps Campaign till then).
+      const exileRow = el("div", "home-actions home-exile");
+      const exileGo = el("button", "home-teach", K.homeButton) as HTMLButtonElement;
+      exileNew = el("button", "home-teach", K.homeNew);
+      exileRow.append(exileGo, exileNew);
+      panel.appendChild(exileRow);
+      exileLine = el("p", "home-note k-home-line");
+      panel.appendChild(exileLine);
+      exileGo.onclick = () => choose("exile");
+      exileNew.onclick = () => choose("exile-new");
+      showExile();
 
       panel.appendChild(el("p", "home-note",
         "New here? Learn the gestures first -- every order in this game is a stroke of the pen."));
@@ -98,5 +136,6 @@ export function homeScreen(root: HTMLElement, choose: (choice: HomeChoice) => vo
 
       root.appendChild(panel);
     },
+    revealed: () => showExile(),
   });
 }

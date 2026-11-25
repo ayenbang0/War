@@ -19,7 +19,7 @@
 
 import type { Chapter } from "../content/campaign.ts";
 import { levelById } from "../content/levels/index.ts";
-import { homeScreen, type HomeChoice } from "../ui/home.ts";
+import { homeScreen, type ExileStatus, type HomeChoice } from "../ui/home.ts";
 import { chronicleScreen, noteBattle } from "../ui/campaign.ts";
 import { menuScreen, type MenuPreset } from "../ui/menu.ts";
 import { afterActionScreen } from "../ui/after-action.ts";
@@ -31,6 +31,10 @@ import { BattleLayer, PLAYER, type BattleEnv } from "./battle-layer.ts";
 import { battleFromSetup, lessonConfig, type BattleConfig } from "./battle-config.ts";
 import type { Layer } from "./layers.ts";
 import { MEMORY_ONLY_NOTICE, ProgressStore, type KeyValueStore } from "./progress-store.ts";
+import { KingdomWorld } from "../sim/kingdom/world.ts";
+import { K, dateLine } from "../content/kingdom/ui-strings.ts";
+import { KingdomLayer, type KingdomOpening } from "./kingdom-layer.ts";
+import { clearKingdom, loadKingdom, type StorageLike } from "./kingdom-save.ts";
 
 export type AppEnv = {
   readonly win: Window;
@@ -127,6 +131,23 @@ export class App {
     setVisible: () => { /* the canvas is always under everything */ },
   };
 
+  /**
+   * The kingdom map's place on the stack, as `field` is the battle's. Unlike
+   * the battle it hides its HUD while a full screen covers it, because the
+   * kingdom HUD is its own DOM rather than the shared #hud.
+   */
+  private readonly realm: Screen = {
+    name: "kingdom",
+    kind: "full",
+    trapsFocus: false,
+    pausesSim: false,
+    inputs: ["pen", "camera", "ui"],
+    firstFocus: () => null,
+    mount: () => { /* the layer is started by enterRealm() */ },
+    unmount: () => this.leaveLayer(),
+    setVisible: (v) => { if (this.live?.kind === "kingdom") this.live.setShown(v); },
+  };
+
   constructor(env: AppEnv) {
     this.env = env;
     this.els = lookUp(env.doc);
@@ -136,7 +157,7 @@ export class App {
     this.detachKeys = attachKeyRouter(this.router, env.win, env.doc);
     // Whatever is on top decides which input contexts the live layer has.
     this.unwatchStack = this.stack.onChange(() => this.live?.setContexts(this.stack.activeInputs()));
-    this.home = homeScreen(this.els.home, (c) => this.choose(c));
+    this.home = homeScreen(this.els.home, (c) => this.choose(c), () => this.exileStatus());
     this.stack.push(this.home);
   }
 
@@ -152,7 +173,76 @@ export class App {
   private choose(choice: HomeChoice): void {
     if (choice === "play") this.openMenu(this.home, undefined, (menu) => ({ kind: "skirmish", menu }));
     else if (choice === "campaign") this.openChronicle();
+    else if (choice === "exile") this.openExile();
+    else if (choice === "exile-new") this.newExile();
     else this.launch(lessonConfig(), { kind: "lesson" });
+  }
+
+  // -- the kingdom (K2) ---------------------------------------------------------
+
+  /**
+   * The kingdom save's storage. Touching localStorage can itself throw, so
+   * the provider is asked inside a try; null means "nowhere to save", which
+   * the layer then says (U1-14) rather than pretending.
+   */
+  private kingdomStorage(): StorageLike | null {
+    try {
+      return (this.env.storage ?? (() => this.env.win.localStorage))();
+    } catch {
+      return null;
+    }
+  }
+
+  /** For the front screen. */
+  private exileStatus(): ExileStatus {
+    const r = loadKingdom(this.kingdomStorage());
+    if (r.ok) return r.world ? { kind: "saved", when: dateLine(r.world.date) } : { kind: "none" };
+    return r.reason === "corrupt" ? { kind: "unreadable" } : { kind: "none" };
+  }
+
+  /** Continue the saved realm, or begin one if there is none. */
+  private openExile(): void {
+    const storage = this.kingdomStorage();
+    const r = loadKingdom(storage);
+    if (r.ok) {
+      if (r.world) this.enterRealm(r.world, "resumed", storage);
+      else this.enterRealm(freshRealm(), "begun", storage);
+      return;
+    }
+    if (r.reason === "corrupt") {
+      // U1-15 (P0): an unreadable save is never overwritten without asking.
+      this.confirm({
+        title: K.unreadableTitle, body: K.unreadableBody(r.detail), yes: K.unreadableYes, no: K.unreadableNo,
+      }, () => this.enterRealm(freshRealm(), "begun", storage));
+      return;
+    }
+    // Storage could not even be read: play in memory, and say so.
+    this.enterRealm(freshRealm(), "begun", null, K.notSaved(r.detail));
+  }
+
+  /** "Begin a new exile": always behind a confirm, because it throws a realm away. */
+  private newExile(): void {
+    this.confirm({ title: K.newTitle, body: K.newBody, yes: K.newYes, no: K.newNo }, () => {
+      const storage = this.kingdomStorage();
+      const cleared = clearKingdom(storage);
+      this.enterRealm(freshRealm(), "begun", storage, cleared.ok ? null : K.notSaved(cleared.detail));
+    });
+  }
+
+  private enterRealm(world: KingdomWorld, opening: KingdomOpening, storage: StorageLike | null, notice: string | null = null): KingdomLayer {
+    if (this.live) throw new Error("a layer is already live");
+    const layer = new KingdomLayer(world, {
+      win: this.env.win, doc: this.env.doc, canvas: this.els.canvas, ctx: this.els.ctx, storage,
+    }, {
+      // Leaving the map needs no confirm: it saves, and Continue brings it back
+      // exactly (docs/PROVISIONAL.md K2.3).
+      requestLeave: () => this.stack.popTo(this.home),
+      simHeld: () => this.stack.pausesSim(),
+      pushScreen: (s) => this.stack.push(s),
+      popScreen: (s) => { if (this.stack.top === s) this.stack.pop(); },
+    }, opening, notice);
+    this.enterLayer(layer);
+    return layer;
   }
 
   private openChronicle(): void {
@@ -229,8 +319,12 @@ export class App {
         layer.setContexts(this.stack.activeInputs());
         return;
       case "kingdom":
-        // Typed, but not reachable until K1/K2 build it.
-        throw new Error("the kingdom layer is not available yet");
+        this.live = layer;
+        this.router.setLayer(layer);
+        this.stack.push(this.realm);
+        layer.start();
+        layer.setContexts(this.stack.activeInputs());
+        return;
     }
   }
 
@@ -314,6 +408,15 @@ export class App {
         return;
     }
   }
+}
+
+/**
+ * A new realm. The seed is the wall clock mixed with Math.random: the app may
+ * use both (only src/sim/ may not), and the seed is saved with the realm, so
+ * a continued game is the same game (docs/PROVISIONAL.md K2.7).
+ */
+function freshRealm(): KingdomWorld {
+  return new KingdomWorld({ seed: (Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) | 0 });
 }
 
 /** Boot the game on a page. main.ts and the e2e harness both call this. */

@@ -153,6 +153,7 @@ export class FakeElement extends Listeners {
   setAttribute(k: string, v: string): void { this.attrs.set(k, v); }
   getAttribute(k: string): string | null { return this.attrs.get(k) ?? null; }
   hasAttribute(k: string): boolean { return this.attrs.has(k); }
+  removeAttribute(k: string): void { this.attrs.delete(k); }
 
   get isConnected(): boolean {
     let n: FakeElement | null = this;

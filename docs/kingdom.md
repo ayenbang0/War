@@ -1,4 +1,4 @@
-# The kingdom layer — sim core (K1)
+# The kingdom layer — sim core (K1) and map (K2)
 
 For the agents building K2 onwards. PLAN.md Part B is the design; this file is
 what K1 actually built and the contracts later phases must keep.
@@ -216,3 +216,79 @@ garrisons (K4; the king is a retinue, not an army); no contact or battles (K5);
 no morale (K6); no mercenaries (K7); no AI (K8); no fog of war at the kingdom
 layer yet; no renderer or UI (K2). The log grows without bound; a K11 polish
 pass may checkpoint it.
+
+## K2 — the kingdom map
+
+K2 makes the sim above playable: a parchment map you read by tapping and
+order by pen, running in real time. The UX audit it was built against is
+`docs/audit/u1-kingdom-map.md`; the open choices are `K2.x` in
+`docs/PROVISIONAL.md`. The sim is unchanged — K2 only *reads* the
+`KingdomWorld`, and writes it only through `world.issue` (march, halt) and
+`world.tick()`.
+
+### Files
+
+| Path | What |
+|---|---|
+| `src/app/kingdom-layer.ts` | `KingdomLayer`: frame loop, clock → `world.tick()`, events → HUD, autosave, pen sink, keys, cards; `start()` / `teardown()` like `BattleLayer` |
+| `src/app/kingdom-clock.ts` | pause and 1× / 2× / 4×: 1× = one day per 2 s, fixed-step accumulator, ≤ 24 ticks a frame |
+| `src/render/kingdom/renderer.ts` | procedural parchment: grain, province washes, roads by surface, holding glyphs (owner by fill), culled labels, the king's counter, routes, ghost and ink |
+| `src/render/kingdom/camera.ts` | kingdom camera: zoom bounds from the viewport, zoom about a point, clamp, `flyTo` for F |
+| `src/render/kingdom/layout.ts` | where the king's counter is drawn (30 px above him) — shared by the renderer and the pen |
+| `src/render/kingdom/palette.ts` | map colours (contrast-checked in U1) |
+| `src/input/kingdom-gestures.ts` | the kingdom recogniser (pure; reuses `pathLength`/`simplify` from `gestures.ts`, which it does not modify) |
+| `src/input/kingdom-commander.ts` | `interpretStroke`: the ONE function that gives both the preview ghost and the committed order |
+| `src/input/kingdom-pen.ts` | left-button strokes in map miles |
+| `src/input/kingdom-camera-controls.ts` | middle/right drag, wheel about the cursor, WASD/arrows, -/=, edge push |
+| `src/ui/kingdom/hud.ts`, `cards.ts`, `kingdom.css` | top bar (stores, date + weather, speed group, Front screen), PAUSED banner, feed, result line, key hint; region and king cards |
+| `src/content/kingdom/ui-strings.ts` | every word the map shows, as a table and templates |
+| `src/e2e/scenarios-k2.ts` | browser scenarios (also run by `npm run e2e:fake`) |
+
+### The pen
+
+`recognizeKingdom(points, ctx)` reads, in this order and each on its own
+evidence: **tap** (short stroke → nearest token or holding, by normalised
+distance), **closed** (ends meet → `none: closed-shape`, reserved for K4's
+rings and hearts and never claimed by the king's anchor), **subject** (must
+start on the king's drawn counter), **target** (the holding it ends on →
+`march`; the king's own holding → `none: already-there`). Every stroke that
+orders nothing is `none` *with a reason*, and the result line says it.
+
+`interpretStroke` turns that into `{ghost, order, card, message}`. The pen
+calls it on every sample for the ghost (route along the roads from the sim's
+`planKingRoute`, ETA plate at the pen tip) and once more on release, issuing
+exactly `intent.order`. `tools/kingdom-headless.ts` checks that the last
+preview equals the commit for every march in the corpus and that the ghost is
+the sim's own plan.
+
+**Adding K4 gestures.** Each new meaning goes in exactly one step: an army as
+a token (`TokenView.kind`), intercept/merge as targets in step 3, split as a
+line *across* an army before step 2, garrison/patrol/recover as readings of a
+closed stroke in step 1 (which today answers `closed-shape`). Add the cases
+to `buildKingdomCorpus()` in the same commit; the matrix must stay diagonal.
+
+### Confusion matrix
+
+`buildKingdomCorpus()` (tools/gesture-corpus.ts) draws on the real map with
+every label live — the king beside his own holding, neighbours round him, and
+rings and hearts drawn from the king — at the widest, opening and closest
+zooms of a 1280 × 720 window, with the king standing and out on a road.
+`npm test` prints it (in the kingdom-headless output) and fails if any cell
+is off the diagonal. A tap or march on the *wrong* holding counts as a miss.
+
+### Time and saving
+
+The layer runs `clock.advance(dt)` ticks per frame (held at zero while a
+confirm is up). Space pauses, `.` runs one day while paused, 1/2/3 set the
+speed. The date line follows `world.now`. The realm is saved on every day
+boundary, on leaving the map and when the page is hidden; Home's Exile button
+then continues it. A failed save is shown, never swallowed; an unreadable save
+is never replaced without asking.
+
+### What K2 does not do
+
+No armies, garrisons or other K4 gestures (closed strokes say so); no stores
+(the box says the king has none); no fog of war; no chronicle of the map.
+The real-browser click-through and screenshots of the U1 re-audit are still
+to be done on a machine with a browser: `e2e.html` runs every scenario,
+the K2 ones included (their names start `k2-`).

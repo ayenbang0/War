@@ -11,6 +11,11 @@
 import type { Point, GestureContext, SquadView } from "../src/input/gestures.ts";
 import { formationSlots, formationRadius } from "../src/sim/formations.ts";
 import { UNIT_TYPES } from "../src/content/unit-types.ts";
+import { KingdomWorld } from "../src/sim/kingdom/world.ts";
+import { KingdomCamera, OPENING_MILES } from "../src/render/kingdom/camera.ts";
+import { kingdomContext } from "../src/input/kingdom-commander.ts";
+import type { KingdomGestureContext } from "../src/input/kingdom-gestures.ts";
+import { kingCounterAt } from "../src/render/kingdom/layout.ts";
 
 export type Case = {
   readonly expected: string;
@@ -823,4 +828,159 @@ export function splitAndRecoverCases(): Case[] {
 
 function here2(): Point {
   return { x: FRIEND_X, y: FRIEND_Y };
+}
+
+// =============================================================================
+// The KINGDOM map's corpus (K2). Its own recogniser (src/input/kingdom-
+// gestures.ts) and its own labels, so nothing here can move the battle matrix.
+//
+// The scene is the real campaign map with every label live at once: the king's
+// counter beside his own holding, holdings all round it, and the shapes K4
+// will claim (rings and hearts) drawn on top of the same king -- the competing
+// vocabulary the march has to be told apart from. It runs at the zoom limits a
+// 1280x720 window allows, and at the opening zoom, because the tolerances are
+// world bases clamped to pixel floors and ceilings and both ends must hold.
+// =============================================================================
+
+export type KingdomCase = {
+  /** tapToken, tapHolding:<name>, march:<name>, or none:<reason>. */
+  readonly expected: string;
+  readonly points: Point[];
+  readonly ctx: KingdomGestureContext;
+  readonly note: string;
+};
+
+/** The zooms (miles per pixel) the kingdom corpus is drawn at, for a 1280x720 window. */
+export function kingdomZooms(): { name: string; pxToWorld: number }[] {
+  const cam = new KingdomCamera(1000, 700);
+  cam.setViewport(1280, 720);
+  return [
+    { name: "min", pxToWorld: 1 / cam.minZoom },
+    { name: "open", pxToWorld: 1 / cam.zoomForSpan(OPENING_MILES) },
+    { name: "max", pxToWorld: 1 / cam.maxZoom },
+  ];
+}
+
+/** A quadratic curve from a to b, bowed sideways by `bow` (a fraction of its length). */
+function bowed(a: Point, b: Point, bow: number, steps: number): Point[] {
+  const mx = (a.x + b.x) / 2;
+  const my = (a.y + b.y) / 2;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const c = { x: mx - dy * bow, y: my + dx * bow };
+  const out: Point[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const u = 1 - t;
+    out.push({ x: u * u * a.x + 2 * u * t * c.x + t * t * b.x, y: u * u * a.y + 2 * u * t * c.y + t * t * b.y });
+  }
+  return out;
+}
+
+/** The emptiest point of a box: farthest from every holding (a place a stroke can end on nothing). */
+function emptyCountry(world: KingdomWorld, x0: number, y0: number, x1: number, y1: number): Point {
+  let best = { x: x0, y: y0 };
+  let bestD = -1;
+  for (let x = x0; x <= x1; x += 4) {
+    for (let y = y0; y <= y1; y += 4) {
+      let d = Infinity;
+      for (const h of world.holdings) d = Math.min(d, Math.hypot(h.x - x, h.y - y));
+      if (d > bestD) { bestD = d; best = { x, y }; }
+    }
+  }
+  return best;
+}
+
+export function buildKingdomCorpus(): KingdomCase[] {
+  const out: KingdomCase[] = [];
+  const rnd = makeRng(0x6b32);
+
+  // Two scenes: the king standing at Cold Hearth (as a new realm opens), and
+  // the king out on the road to Greyshaw, where "already there" cannot apply
+  // and the counter is between two holdings.
+  const standing = new KingdomWorld({ seed: 7 });
+  const onRoad = new KingdomWorld({ seed: 7 });
+  const grey = onRoad.holdings.find((h) => h.name === "Greyshaw");
+  if (!grey) throw new Error("Greyshaw missing from the map");
+  onRoad.issue({ kind: "moveKing", to: grey.id });
+  for (let i = 0; i < 12; i++) onRoad.tick();
+
+  const named = (w: KingdomWorld, name: string): Point => {
+    const h = w.holdings.find((x) => x.name === name);
+    if (!h) throw new Error("no holding " + name);
+    return { x: h.x, y: h.y };
+  };
+
+  for (const zoom of kingdomZooms()) {
+    const px = zoom.pxToWorld;
+    for (const [sceneName, world] of [["standing", standing], ["on the road", onRoad]] as const) {
+      const king = world.kingPosition();
+      const ctx = kingdomContext(world, king, px);
+      const counter = kingCounterAt(king, px);
+      const tag = (s: string): string => s + " @" + zoom.name + " zoom, king " + sceneName;
+      const add = (expected: string, points: Point[], note: string): void => {
+        out.push({ expected, points, ctx, note: tag(note) });
+      };
+      // A mouse tap wanders a pixel between down and up; never more than the tap tolerance.
+      const tapAt = (p: Point, n: number): Point[] => {
+        const pts: Point[] = [];
+        for (let i = 0; i < n; i++) pts.push({ x: p.x + rnd() * 0.8 * px, y: p.y + rnd() * 0.8 * px });
+        return pts;
+      };
+      const jitter = 1.5 * px;
+
+      // -- taps ---------------------------------------------------------------
+      for (const n of [1, 2, 4]) add("tapToken", tapAt(counter, n), "tap the king's counter, " + n + " samples");
+      add("tapToken", tapAt({ x: counter.x + 6 * px, y: counter.y - 5 * px }, 3), "tap the counter's rim");
+      for (const name of ["Greyshaw", "Thornwick", "Fell End", "Rookstead"]) {
+        add("tapHolding:" + name, tapAt(named(world, name), 3), "tap " + name);
+      }
+      if (sceneName === "standing") {
+        // Cold Hearth sits under the king: his counter is drawn 30 px above
+        // it precisely so the holding can still be tapped.
+        add("tapHolding:Cold Hearth", tapAt(named(world, "Cold Hearth"), 2), "tap Cold Hearth, under the king");
+      }
+      const empty = emptyCountry(world, 280, 240, 420, 360);
+      add("none:nothing-there", tapAt(empty, 2), "tap empty parchment");
+
+      // -- marches ------------------------------------------------------------
+      const dests = sceneName === "standing"
+        ? ["Greyshaw", "Thornwick", "Fell End", "Rookstead"]
+        : ["Greyshaw", "Thornwick", "Cold Hearth", "Fell End"];
+      for (const name of dests) {
+        const to = named(world, name);
+        for (const n of [8, 20, 60]) {
+          add("march:" + name, stroke([counter, to], n, jitter, rnd), "straight line king -> " + name + ", " + n + " samples");
+        }
+        for (const bow of [0.25, -0.3]) {
+          add("march:" + name, stroke(bowed(counter, to, bow, 24), 30, jitter, rnd), "curved line king -> " + name + " (bow " + bow + ")");
+        }
+        // Ending a little short of the holding's centre, as a quick hand does.
+        const short = { x: to.x + (counter.x - to.x) * (5 * px) / Math.hypot(counter.x - to.x, counter.y - to.y), y: to.y + (counter.y - to.y) * (5 * px) / Math.hypot(counter.x - to.x, counter.y - to.y) };
+        add("march:" + name, stroke([counter, short], 16, jitter, rnd), "line king -> just short of " + name);
+      }
+
+      // -- strokes that mean nothing ---------------------------------------
+      const fromEmpty = emptyCountry(world, 120, 220, 220, 300);
+      add("none:not-from-king", stroke([fromEmpty, named(world, "Greyshaw")], 20, jitter, rnd), "line from empty country to Greyshaw");
+      add("none:not-from-king", stroke([named(world, "Thornwick"), named(world, "Rookstead")], 20, jitter, rnd), "line between two holdings, not from the king");
+      add("none:no-destination", stroke([counter, empty], 30, jitter, rnd), "line from the king into empty country");
+      add("none:no-destination", stroke(bowed(counter, empty, 0.3, 24), 30, jitter, rnd), "curved line from the king into empty country");
+      if (sceneName === "standing") {
+        // Straight down from the counter onto his own holding.
+        add("none:already-there", stroke([counter, named(world, "Cold Hearth")], 12, 0.5 * px, rnd), "line from the king onto his own holding");
+      }
+      // The K4 vocabulary, live in the same scene: rings and hearts from the king.
+      for (const r of [40, 60]) {
+        const rr = r * px;
+        const ring = circle(counter.x + rr, counter.y, rr, Math.PI, 1, 40);
+        add("none:closed-shape", stroke(ring, 48, jitter, rnd), "ring of " + r + " px drawn from the king");
+      }
+      const h = heart(counter.x, counter.y + 40 * px, 40 * px, 0, 48);
+      add("none:closed-shape", stroke(h, 56, jitter, rnd), "heart drawn from the king");
+      const g = named(world, "Greyshaw");
+      add("none:closed-shape", stroke(circle(g.x, g.y, 30 * px, 0, 1, 36), 40, jitter, rnd), "ring round Greyshaw");
+    }
+  }
+  return out;
 }

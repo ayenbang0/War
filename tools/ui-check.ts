@@ -699,6 +699,38 @@ begin("app: screens and layers");
   press("Escape");
   check("Esc from the chronicle goes home", hook.top() === "home");
 
+  // The kingdom map (K2): reached from Home, and torn down as cleanly as a battle.
+  const docListeners = (): number => (doc as unknown as { count(): number }).count();
+  const winBefore = win.listenerCount();
+  const docBefore = docListeners();
+  const canvasBefore = canvas.count();
+  check("K2: Home offers the Exile", click("The Exile of Rimaros") && hook.top() === "kingdom");
+  const realm = hook.kingdom();
+  check("K2: a kingdom layer is live", realm !== null && realm.phase === "live");
+  win.runFrames(45);
+  check("K2: the realm runs in real time", (realm?.world.now ?? 0) > 0, "tick " + realm?.world.now);
+  check("K2: its HUD is on the page", doc.getElementById("kingdom-ui") !== null);
+  press("Space");
+  const kAt = realm?.world.now ?? -1;
+  win.runFrames(20);
+  check("K2: Space pauses the realm", realm?.world.now === kAt);
+  pointer("pointerdown", 600, 300, 0);
+  check("K2: the left button is the kingdom pen", realm?.intent !== null);
+  press("Escape");
+  check("K2: Esc cancels the stroke and stays", realm?.intent === null && hook.top() === "kingdom");
+  press("Escape");
+  check("K2: Esc again goes back to Home with no question", hook.top() === "home" && realm?.phase === "torn-down");
+  check("K2: its frame loop is gone", win.pendingFrames() === 0);
+  check("K2: every window listener it added is gone", win.listenerCount() === winBefore, String(win.listenerCount() - winBefore));
+  check("K2: every document listener too", docListeners() === docBefore, String(docListeners() - docBefore));
+  check("K2: and every canvas listener", canvas.count() === canvasBefore, String(canvas.count() - canvasBefore));
+  check("K2: its HUD is off the page", doc.getElementById("kingdom-ui") === null);
+  check("K2: leaving saved the realm", (mem.get("war.kingdom.v1") ?? "").length > 0);
+  check("K2: Home now offers a new exile too", btn("Begin a new exile") !== null);
+  click("The Exile of Rimaros");
+  check("K2: the Exile continues the saved realm", hook.kingdom()?.world.now === kAt);
+  press("Escape");
+
   app.dispose();
   check("dispose removes every window listener", win.listenerCount() === baseWin, String(win.listenerCount()));
   check("and every document listener", (doc as unknown as { count(): number }).count() === 0);

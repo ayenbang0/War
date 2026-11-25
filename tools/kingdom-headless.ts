@@ -47,6 +47,13 @@ import {
   saveKingdom, loadKingdom, clearKingdom, exportKingdom, importKingdom,
   KINGDOM_SAVE_KEY, KINGDOM_SAVE_TEMP_KEY, type StorageLike,
 } from "../src/app/kingdom-save.ts";
+import { KingdomClock, MAX_TICKS_PER_FRAME, type KingdomSpeed } from "../src/app/kingdom-clock.ts";
+import { KingdomCamera, OPENING_MILES, TABLE_MARGIN_MILES } from "../src/render/kingdom/camera.ts";
+import { KING_COUNTER_OFFSET_PX, kingCounterAt } from "../src/render/kingdom/layout.ts";
+import { interpretStroke, kingdomContext } from "../src/input/kingdom-commander.ts";
+import { K, NONE_PLATE, NONE_REASON, WEATHER_LINE, dateLine, etaWords } from "../src/content/kingdom/ui-strings.ts";
+import { buildKingdomCorpus } from "./gesture-corpus.ts";
+import { printKingdomMatrix, runKingdomConfusionMatrix } from "./test-gestures.ts";
 
 let failures = 0;
 
@@ -845,6 +852,173 @@ section("layer hash");
   let threw = false;
   try { layerHash("nope"); } catch { threw = true; }
   check("a malformed part is a loud error, not a quiet collision", threw);
+}
+
+// -- 12. the kingdom map (K2) ---------------------------------------------------
+//
+// What K2 adds that can be held without a browser: the kingdom pen's own
+// confusion matrix, the single preview/commit function, the real-time clock's
+// rates, the camera's zoom bounds, and the strings the map shows.
+
+section("K2 kingdom pen: confusion matrix");
+{
+  const report = runKingdomConfusionMatrix();
+  printKingdomMatrix(report);
+  console.log("");
+  check("the kingdom confusion matrix is diagonal", report.correct === report.total,
+    report.correct + "/" + report.total + (report.offDiagonal.length
+      ? "; first miss: " + report.offDiagonal[0].note + " -> " + report.offDiagonal[0].actual : ""));
+  const kinds = new Set([...report.matrix.entries()].filter(([, row]) => row.size > 0).map(([k]) => k));
+  check("every kingdom label has cases", kinds.size === 8, [...kinds].join(", "));
+}
+
+section("K2 kingdom pen: one function for preview and commit");
+{
+  const corpus = buildKingdomCorpus();
+  let marches = 0;
+  let same = 0;
+  let planned = 0;
+  let prefixesOk = true;
+  let untouched = true;
+  for (const c of corpus) {
+    if (!c.expected.startsWith("march:")) continue;
+    marches++;
+    // The corpus contexts were built from fresh worlds of seed 7; rebuild the
+    // world each case belongs to, so the plan is asked of the same state.
+    const w = new KingdomWorld({ seed: 7 });
+    if (c.note.includes("on the road")) {
+      const g = w.holdings.find((h) => h.name === "Greyshaw");
+      if (g) w.issue({ kind: "moveKing", to: g.id });
+      for (let i = 0; i < 12; i++) w.tick();
+    }
+    const before = kingdomHash(w);
+    const king = w.kingPosition();
+    // Preview: every sample as the pen sees it; the last preview is what the player saw on release.
+    let preview = null as ReturnType<typeof interpretStroke> | null;
+    for (let n = 1; n <= c.points.length; n++) {
+      try { preview = interpretStroke(c.points.slice(0, n), c.ctx, w, king); } catch { prefixesOk = false; }
+    }
+    const commit = interpretStroke(c.points, c.ctx, w, king);
+    if (preview && JSON.stringify(preview) === JSON.stringify(commit)) same++;
+    if (commit.order && commit.order.kind === "moveKing" && commit.ghost.kind === "march") {
+      const plan = w.planKingRoute(commit.order.to);
+      const ghostEnd = commit.ghost.route[commit.ghost.route.length - 1];
+      const dest = w.holding(commit.order.to);
+      if (plan && dest && ghostEnd.x === dest.x && ghostEnd.y === dest.y &&
+        commit.ghost.route.length === plan.route.nodes.length + 1 &&
+        commit.march?.etaTicks === plan.etaTicks) planned++;
+    }
+    if (kingdomHash(w) !== before) untouched = false;
+  }
+  check("every march case was interpreted", marches > 0, marches + " march strokes");
+  check("the last preview equals the commit, every time", same === marches, same + "/" + marches);
+  check("the ghost's route and ETA are the sim's own plan", planned === marches, planned + "/" + marches);
+  check("interpreting a stroke at every sample never throws", prefixesOk);
+  check("interpreting never writes the world (hash unchanged)", untouched);
+
+  // And release really issues that order: issue it, tick, and the mover has the route.
+  const w = new KingdomWorld({ seed: 7 });
+  const c = corpus.find((x) => x.expected === "march:Thornwick" && x.note.includes("standing"));
+  if (c) {
+    const intent = interpretStroke(c.points, kingdomContext(w, w.kingPosition(), c.ctx.pxToWorld), w, w.kingPosition());
+    if (intent.order) w.issue(intent.order);
+    w.tick();
+    const r = w.king.mover.route;
+    const th = w.holdings.find((h) => h.name === "Thornwick");
+    check("the committed order sets the king's route on the next tick", !!th && r[r.length - 1] === th.id, r.join(","));
+  } else check("the committed order sets the king's route on the next tick", false, "no Thornwick case");
+}
+
+section("K2 real-time clock");
+{
+  const run = (speed: KingdomSpeed, hz: number, seconds: number, paused = false, held = false): number => {
+    const c = new KingdomClock();
+    c.setSpeed(speed);
+    if (paused) c.togglePause();
+    let ticks = 0;
+    const frames = Math.round(seconds * hz);
+    for (let i = 0; i < frames; i++) ticks += c.advance(1 / hz, held);
+    return ticks;
+  };
+  check("1x: one day every two seconds", run(1, 60, 2) === TICKS_PER_DAY, run(1, 60, 2) + " ticks in 2 s");
+  check("2x: two days every two seconds", run(2, 60, 2) === 2 * TICKS_PER_DAY, String(run(2, 60, 2)));
+  check("4x: four days every two seconds", run(4, 60, 2) === 4 * TICKS_PER_DAY, String(run(4, 60, 2)));
+  check("the rate does not depend on the frame rate",
+    run(1, 30, 10) === run(1, 144, 10) && run(4, 30, 10) === run(4, 144, 10),
+    run(1, 30, 10) + "/" + run(1, 144, 10) + ", " + run(4, 30, 10) + "/" + run(4, 144, 10));
+  check("paused: no ticks", run(4, 60, 5, true) === 0);
+  check("held by a screen (a confirm): no ticks", run(4, 60, 5, false, true) === 0);
+  const c = new KingdomClock();
+  check("'.' steps nothing while running", c.stepDay() === 0);
+  c.togglePause();
+  check("'.' steps one day (eight ticks) while paused", c.stepDay() === TICKS_PER_DAY);
+  c.setSpeed(2);
+  check("choosing a speed also resumes", c.run === "running" && c.speed === 2);
+  const slept = new KingdomClock();
+  check("a tab that slept an hour does not run a season in one frame", slept.advance(3600, false) <= MAX_TICKS_PER_FRAME);
+}
+
+section("K2 kingdom camera");
+{
+  const cam = new KingdomCamera(RIMAROS.width, RIMAROS.height);
+  cam.setViewport(1280, 720);
+  cam.cut(500, 350, cam.minZoom);
+  const b = cam.bounds();
+  check("at the widest zoom the whole realm is in view",
+    b.x0 <= 0 && b.y0 <= 0 && b.x1 >= RIMAROS.width && b.y1 >= RIMAROS.height,
+    [b.x0, b.y0, b.x1, b.y1].map((v) => v.toFixed(0)).join(","));
+  check("the closest zoom is at least three times the widest", cam.maxZoom >= cam.minZoom * 3,
+    cam.minZoom.toFixed(3) + " .. " + cam.maxZoom.toFixed(3) + " px/mile");
+  cam.cut(300, 300, cam.zoomForSpan(OPENING_MILES));
+  const wx = cam.screenToWorldX(400);
+  const wy = cam.screenToWorldY(250);
+  cam.zoomAt(400, 250, 1.5);
+  check("wheel zoom keeps the point under the cursor",
+    Math.abs(cam.screenToWorldX(400) - wx) < 1e-6 && Math.abs(cam.screenToWorldY(250) - wy) < 1e-6);
+  cam.zoomAt(400, 250, 1e6);
+  check("zoom stops at the closest bound", cam.zoom === cam.maxZoom);
+  cam.zoomAt(400, 250, 1e-6);
+  check("and at the widest", cam.zoom === cam.minZoom);
+  cam.cut(-5000, -5000, cam.maxZoom);
+  const c2 = cam.bounds();
+  check("panning cannot leave the table", c2.x0 >= -TABLE_MARGIN_MILES - 1e-6 && c2.y0 >= -TABLE_MARGIN_MILES - 1e-6);
+  const small = new KingdomCamera(RIMAROS.width, RIMAROS.height);
+  small.setViewport(500, 600);
+  check("a small window still has sane bounds", small.minZoom > 0 && small.maxZoom > small.minZoom);
+  const flying = new KingdomCamera(RIMAROS.width, RIMAROS.height);
+  flying.setViewport(1280, 720);
+  flying.cut(100, 100, flying.zoomForSpan(OPENING_MILES));
+  flying.flyTo(400, 300, flying.zoom, 0.5);
+  for (let i = 0; i < 40; i++) flying.update(1 / 60);
+  check("F's flight lands where it was sent", Math.abs(flying.x - 400) < 1e-6 && Math.abs(flying.y - 300) < 1e-6 && !flying.flying);
+  for (const z of [cam.minZoom, cam.maxZoom]) {
+    const at = kingCounterAt({ x: 100, y: 70 }, 1 / z);
+    check("the king's counter is drawn 30 px above him at " + z.toFixed(2) + " px/mile",
+      Math.abs((70 - at.y) * z - KING_COUNTER_OFFSET_PX) < 1e-9);
+  }
+}
+
+section("K2 strings");
+{
+  // The king is never given a pronoun the player did not choose (A.7.3: the
+  // king is named at the start). Every string the map can show is checked.
+  const sample = {
+    name: "Greyshaw", eta: "about 2 days", from: "Cold Hearth", to: "Greyshaw", surface: "cart track", miles: 4,
+    garrison: 1, buildings: 2, fields: 3, kind: "Village", owner: "unclaimed",
+  };
+  const all: string[] = [...Object.values(NONE_REASON), ...Object.values(NONE_PLATE), ...Object.values(WEATHER_LINE)];
+  for (const v of Object.values(K)) {
+    if (typeof v === "string") all.push(v);
+    else if (Array.isArray(v)) all.push(...v);
+    else if (typeof v === "function") all.push(String((v as (a: unknown) => string)(sample)), String((v as (a: unknown) => string)("x")));
+  }
+  const gendered = all.filter((s) => /\b(he|him|his|she|her|hers|himself|herself)\b/i.test(s));
+  check("no map string genders the king", gendered.length === 0, gendered.slice(0, 2).join(" | "));
+  check("ETA in hours under a day", etaWords(3, TICKS_PER_DAY) === "about 9 hours", etaWords(3, TICKS_PER_DAY));
+  check("ETA in half days beyond", etaWords(36, TICKS_PER_DAY) === "about 4½ days", etaWords(36, TICKS_PER_DAY));
+  check("ETA of one day", etaWords(8, TICKS_PER_DAY) === "about 1 day", etaWords(8, TICKS_PER_DAY));
+  const d = calendar(0);
+  check("the date line counts days from 1", dateLine(d).startsWith("Day 1 · "), dateLine(d));
 }
 
 // -- summary ---------------------------------------------------------------------
