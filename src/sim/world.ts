@@ -19,7 +19,7 @@
  *   3. Each soldier steers toward its own slot, pushing off neighbours.
  */
 
-import { atan2, clamp, cos, dist, max, min, PI, rotateToward, sin, sqrt, TAU } from "./math.ts";
+import { atan2, clamp, cos, dist, max, min, PI, rotateToward, round, sin, sqrt, TAU } from "./math.ts";
 import { Rng, Stream } from "./rng.ts";
 import { OrderQueue, type Order } from "./orders.ts";
 import { generateTerrain, Terrain, TerrainGrid, TERRAIN_INFO, TILE_SIZE } from "./terrain.ts";
@@ -858,7 +858,7 @@ export class World {
    */
   private landReinforcements(): void {
     for (const r of this.reinforcements) {
-      if (this.tick !== Math.round(r.atSeconds * TICK_RATE)) continue;
+      if (this.tick !== round(r.atSeconds * TICK_RATE)) continue;
       const ids: number[] = [];
       for (let i = 0; i < r.count; i++) {
         ids.push(this.spawnSoldier(

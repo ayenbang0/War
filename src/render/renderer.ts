@@ -18,6 +18,8 @@ import { FOG_CELL } from "../sim/vision.ts";
 import { RECOVER_LOCK_SECONDS, TICK_RATE } from "../sim/world.ts";
 import { UNIT_TYPE_IDS } from "../content/unit-types.ts";
 import { SIZE, bodyPath, detailPath, gait, offsetBrush, type Brush } from "./soldier-art.ts";
+import { JUMP, isMoving, presenceOf } from "./presence.ts";
+import { Fallen } from "./fallen.ts";
 
 const GRID_TILES = 8;
 /** Below this zoom individual soldiers stop reading and become blocks. */
@@ -38,6 +40,8 @@ export class Renderer {
   /** Where each enemy group was last seen, so a lost group leaves a report
    *  behind rather than either vanishing or being tracked through the fog. */
   private readonly lastSeen = new Map<number, { x: number; y: number; at: number; n: number }>();
+  /** The dead, left where they fell. See fallen.ts. */
+  readonly fallen = new Fallen();
 
   constructor(ctx: CanvasRenderingContext2D, terrain: TerrainGrid) {
     this.ctx = ctx;
@@ -66,19 +70,20 @@ export class Renderer {
       if (g.player === viewer) this.drawOrder(g, cam, world.tick);
     }
     for (const g of world.groups) {
-      if (selected.includes(g.id)) this.drawSelection(g, cam);
+      if (selected.includes(g.id)) this.drawSelection(world, g, cam, viewer);
     }
 
     // Zoomed out far enough that individual men are a smear, groups get a
     // halo. Both armies: knowing roughly where an enemy body of troops is, once
     // you have seen it, is the whole reason to pull the camera back.
+    this.fallen.draw(this.ctx, cam, world, viewer, now);
     if (cam.zoom < GROUP_HALO_ZOOM) this.drawGroupHalos(world, cam, viewer, now / 1000);
     else this.drawLastSeen(world, cam, viewer, now / 1000);
     this.drawSoldiers(world, cam, prev, alpha, now, viewer);
     this.drawWorkings(world, cam, viewer, now);
     this.drawFields(world, cam, now);
     this.drawRecovering(world, cam, viewer);
-    this.drawSpecials(world, cam, now);
+    this.drawSpecials(world, cam, now, viewer, prev);
     this.drawWorks(world, cam, now);
     this.drawFog(world, cam, viewer);
   }
@@ -109,10 +114,13 @@ export class Renderer {
     );
   }
 
-  private drawSelection(g: Group, cam: Camera): void {
+  private drawSelection(world: World, g: Group, cam: Camera, viewer: number): void {
     const ctx = this.ctx;
-    const sx = cam.worldToScreenX(g.anchorX);
-    const sy = cam.worldToScreenY(g.anchorY);
+    // Ring the men, not the anchor that walks ahead of them.
+    const p = presenceOf(world, g, viewer);
+    if (p.n === 0) return;
+    const sx = cam.worldToScreenX(p.x);
+    const sy = cam.worldToScreenY(p.y);
     ctx.save();
     ctx.strokeStyle = playerColor[g.player] ?? ink;
     ctx.lineWidth = 1.5;
@@ -258,12 +266,17 @@ export class Renderer {
     const px = prev.x[id];
     const py = prev.y[id];
     const pf = prev.facing[id];
-    let wx = px + (s.x[id] - px) * alpha;
-    let wy = py + (s.y[id] - py) * alpha;
-    const facing = pf + shortestArc(pf, s.facing[id]) * alpha;
+    // A man who blinked, or who has only just been raised (a levy, a landing
+    // reinforcement), has a stale or zeroed previous point. Interpolating from
+    // it drew him streaking in from the map corner for a frame. Snap instead.
+    const jump = Math.abs(s.x[id] - px) + Math.abs(s.y[id] - py);
+    const snap = jump >= JUMP;
+    let wx = snap ? s.x[id] : px + (s.x[id] - px) * alpha;
+    let wy = snap ? s.y[id] : py + (s.y[id] - py) * alpha;
+    const facing = snap ? s.facing[id] : pf + shortestArc(pf, s.facing[id]) * alpha;
 
     const phase = id * 0.618;
-    const moved = Math.abs(s.x[id] - px) + Math.abs(s.y[id] - py) > 0.05;
+    const moved = !snap && jump > 0.05;
 
     if (!moved) {
       // Standing men fidget. Perfect stillness reads as a screenshot.
@@ -395,13 +408,15 @@ export class Renderer {
         continue;
       }
       const own = g.player === viewer;
-      let x = g.anchorX;
-      let y = g.anchorY;
+      const p = presenceOf(world, g, viewer);
+      let x = p.x;
+      let y = p.y;
       let fade = 1;
+      if (own && p.n === 0) continue;
 
       if (!own) {
-        if (g.seenBy[viewer]) {
-          this.lastSeen.set(g.id, { x: g.anchorX, y: g.anchorY, at: now, n });
+        if (g.seenBy[viewer] && p.n > 0) {
+          this.lastSeen.set(g.id, { x: p.x, y: p.y, at: now, n: p.n });
         }
         const seen = this.lastSeen.get(g.id);
         if (!seen) continue;
@@ -688,8 +703,10 @@ export class Renderer {
       if (g.player !== viewer || g.recoverUntil <= world.tick) continue;
       const total = RECOVER_LOCK_SECONDS * 20;
       const frac = (g.recoverUntil - world.tick) / total;
-      const sx = cam.worldToScreenX(g.anchorX);
-      const sy = cam.worldToScreenY(g.anchorY);
+      const p = presenceOf(world, g, viewer);
+      if (p.n === 0) continue;
+      const sx = cam.worldToScreenX(p.x);
+      const sy = cam.worldToScreenY(p.y);
       const r = Math.max(14, (g.radius + 14) * cam.zoom);
       ctx.strokeStyle = RECOVER_COLOR;
       ctx.globalAlpha = 0.3;
@@ -714,15 +731,22 @@ export class Renderer {
    * damage it takes should look different from one that has not, or the player
    * has no way to read the fight.
    */
-  private drawSpecials(world: World, cam: Camera, now: number): void {
+  private drawSpecials(world: World, cam: Camera, now: number, viewer: number, prev: Snapshot): void {
     const ctx = this.ctx;
     ctx.save();
     ctx.lineCap = "round";
     for (const g of world.groups) {
-      if (g.specialUntil <= world.tick || world.liveCount(g) === 0) continue;
-      const sx = cam.worldToScreenX(g.anchorX);
-      const sy = cam.worldToScreenY(g.anchorY);
-      const r = Math.max(12, (g.radius + 10) * cam.zoom);
+      if (g.specialUntil <= world.tick) continue;
+      // Drawn on the men who are actually there and actually visible. At the
+      // anchor, a gallop kept streaking across the field after the riders
+      // under it had been stopped or killed, and an enemy brace ring showed
+      // through the fog over a company you could not see.
+      const p = presenceOf(world, g, viewer, prev);
+      if (p.n === 0) continue;
+      const sx = cam.worldToScreenX(p.x);
+      const sy = cam.worldToScreenY(p.y);
+      const body = Math.min(g.radius, p.spread * 1.5 + 6);
+      const r = Math.max(12, (body + 10) * cam.zoom);
       if (sx < -r * 3 || sy < -r * 3 || sx > cam.viewW + r * 3 || sy > cam.viewH + r * 3) continue;
       const tint = playerColor[g.player] ?? ink;
       const kind = world.specialKind(g);
@@ -784,12 +808,12 @@ export class Renderer {
         // The heading now comes from the route the company is actually walking,
         // and the streaks start beyond the rear edge of the formation, so
         // nothing is ever drawn in front of a horse.
-        let head = g.facing;
-        if (g.path.length >= 2) {
-          const ax = g.path[0] - g.anchorX;
-          const ay = g.path[1] - g.anchorY;
-          if (ax * ax + ay * ay > 1) head = Math.atan2(ay, ax);
-        }
+        //
+        // And they are drawn only while the riders are really moving, along
+        // the way they are really moving. A charge that has hit home, or whose
+        // horses are down, leaves no streaks behind it.
+        if (!isMoving(p, 0.8)) continue;
+        const head = Math.atan2(p.vy, p.vx);
         const back = head + Math.PI;
         const cb = Math.cos(back);
         const sb = Math.sin(back);
@@ -830,7 +854,8 @@ export class Renderer {
     for (const g of world.groups) {
       if (g.player === viewer || world.liveCount(g) === 0) continue;
       if (g.seenBy[viewer]) {
-        this.lastSeen.set(g.id, { x: g.anchorX, y: g.anchorY, at: now, n: world.liveCount(g) });
+        const p = presenceOf(world, g, viewer);
+        if (p.n > 0) this.lastSeen.set(g.id, { x: p.x, y: p.y, at: now, n: p.n });
         continue;
       }
       const seen = this.lastSeen.get(g.id);

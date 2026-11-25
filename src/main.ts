@@ -46,6 +46,7 @@ import { Camera } from "./render/camera.ts";
 import { Renderer, type Snapshot } from "./render/renderer.ts";
 import { drawInk } from "./render/ink.ts";
 import { Effects } from "./render/effects.ts";
+import { isMoving, presenceOf } from "./render/presence.ts";
 import { CameraControls } from "./input/camera-controls.ts";
 import { Commander } from "./input/commander.ts";
 import { Pen } from "./input/pen.ts";
@@ -301,8 +302,13 @@ function frame(now: number): void {
       world.step();
       // Events are cleared at the top of every tick, so a frame running several
       // ticks would otherwise see only the last one's blows.
-      effects.ingest(world.events, now / 1000);
-      effects.ingestSpecials(world.specialEvents, now / 1000);
+      // Blows you could not see leave nothing above the fog either.
+      effects.ingest(world.events, now / 1000, (x, y) => world.fog[PLAYER].at(x, y) === 1);
+      renderer.fallen.ingest(world, world.events, PLAYER, now / 1000);
+      effects.ingestSpecials(
+        world.specialEvents.filter((m) => m.player === PLAYER || world.fog[PLAYER].at(m.x, m.y) === 1),
+        now / 1000,
+      );
       // A company that has just ceased to exist leaves nothing behind: no dust
       // from men who are no longer marching, no halo over empty ground.
       for (const id of world.disbanded) effects.forgetGroup(id);
@@ -378,8 +384,12 @@ function frame(now: number): void {
     lastDust = now;
     for (const g of world.groups) {
       if (g.stance !== "move" && g.stance !== "attack" && g.stance !== "retreat") continue;
-      if (world.liveCount(g) === 0) continue;
-      effects.kickDust(g.anchorX, g.anchorY, clock, Math.max(24, g.radius), g.id);
+      // Dust rises from the men, and only from men who are really moving and
+      // really in view. Kicked at the anchor, it ran ahead of the column and
+      // went on rising from empty ground after the riders were cut down.
+      const p = presenceOf(world, g, PLAYER, prev);
+      if (!isMoving(p)) continue;
+      effects.kickDust(p.x, p.y, clock, Math.max(18, Math.min(g.radius, p.spread * 2 + 8)), g.id);
     }
   }
   effects.draw(ctx, cam, clock);

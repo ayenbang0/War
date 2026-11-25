@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "check:sim": "node tools/check-sim-purity.mjs",
-    "test": "node tools/check-sim-purity.mjs && node tools/headless.ts && node tools/lockstep.ts",
+    "test": "node tools/check-sim-purity.mjs && node tools/headless.ts && node tools/lockstep.ts && node tools/render-check.ts",
     "lockstep": "node tools/lockstep.ts"
   },
   "devDependencies": {

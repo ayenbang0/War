@@ -106,9 +106,15 @@ export class Effects {
   }
 
   /** Take one tick's worth of blows. Call after every world.step(). */
-  ingest(events: readonly CombatEvent[], now: number): void {
+  ingest(
+    events: readonly CombatEvent[], now: number,
+    visible?: (x: number, y: number) => boolean,
+  ): void {
     for (const e of events) {
       if (this.shots.length + this.impacts.length > MAX_EFFECTS) return;
+      // Effects are drawn above the fog, so a blow struck where you cannot see
+      // must not be drawn at all, or every enemy volley lights up its archers.
+      if (visible && !visible(e.x0, e.y0) && !visible(e.x1, e.y1)) continue;
       if (e.kind === "shot") {
         this.shots.push({
           x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1,
