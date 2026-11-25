@@ -46,3 +46,14 @@ The container has no local browser (browser downloads are disabled in this envir
 - AI fairness: the battle AI judges strength and aims from what it can see, not from the player's orders (RF-07, RF-08). This moves the `world` golden hash.
 
 P2 and P3 findings are batched into K11 as the plan says.
+
+## K2 status
+
+Findings fixed by K2 (branch `k2fix`). Anything not listed keeps its original owner.
+
+| id | status | how |
+|---|---|---|
+| RT-02 | fixed in K2 (91ac90c) | one scroll region: overlays scroll, panels do not |
+| RT-04 | fixed in K2 (91ac90c) | opening camera frames the army in the band above the ability bar; bar slots are one line |
+
+The whole K2 fix list above is done in 91ac90c: BS-06, BS-07, BS-08, RT-02, RT-04, PC-02, PC-03, PC-04, PC-05, PC-07, RF-01 to RF-09 (see each sheet's K2 status). Also fixed in passing: FL-01, RF-10, RF-14, RF-19, BS-10, BS-30, and the `lang` part of BS-11. The `world` golden did not move after all, because neither golden scenario runs an AI player.

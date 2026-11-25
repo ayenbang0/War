@@ -100,3 +100,15 @@
 - Contrast of ink over every terrain type at each zoom (PC-16); selection vs hold ring legibility (PC-15).
 - Stylus and touch: second finger, barrel button, pressure (PC-29).
 - Frame-rate independence by eye at 30/144 Hz (expected fine by static reading).
+
+## K2 status
+
+Findings fixed by K2 (branch `k2fix`). Anything not listed keeps its original owner.
+
+| id | status | how |
+|---|---|---|
+| PC-02 | fixed in K2 (91ac90c) | refused stroke stays as grey dashed ink with its reason for 900 ms; the ghost says why nothing will happen while drawing |
+| PC-03 | fixed in K2 (91ac90c) | an armed ability previews its name and footprint; no order ghost |
+| PC-04 | fixed in K2 (91ac90c) | a stroke that starts on a company carries it and reports "placed"; never read as a glyph |
+| PC-05 | fixed in K2 (91ac90c) | new `place` setup order through `world.orders`, drained while deploying at a tick boundary; replay test in headless |
+| PC-07 | fixed in K2 (91ac90c) | lasso ghost counts the men inside ("group N men" / "split off N men") |
