@@ -13,6 +13,12 @@
  *
  * You only see bodies where you could see the death. An enemy who died in the
  * fog leaves nothing for you to find, or the dead would map the enemy for you.
+ * "Could see" is the same per-soldier sight the counters use (perception.ts):
+ * the fog disc alone lit ground behind woods, where a man you could not see
+ * still left you his body (audit RF-04).
+ *
+ * Times are SIM seconds (world.tick / TICK_RATE), so a paused battle does not
+ * age its dead.
  */
 
 import type { CombatEvent, World } from "../sim/world.ts";
@@ -20,6 +26,7 @@ import type { UnitTypeId } from "../content/unit-types.ts";
 import { UNIT_TYPE_IDS } from "../content/unit-types.ts";
 import type { Camera } from "./camera.ts";
 import { SIZE, bodyPath, type Brush } from "./soldier-art.ts";
+import { soldierSeen } from "./perception.ts";
 
 /** Seconds a body lies at full strength before it starts to fade. */
 const LIE = 20;
@@ -45,14 +52,13 @@ export class Fallen {
   /** Take one tick's killing blows. Call after every world.step(). */
   ingest(world: World, events: readonly CombatEvent[], viewer: number, now: number): void {
     const s = world.soldiers;
-    const fog = world.fog[viewer];
     for (const e of events) {
       if (!e.lethal || e.victim < 0 || s.alive[e.victim] === 1) continue;
       const id = e.victim;
       const x = Number.isFinite(s.x[id]) ? s.x[id] : e.x1;
       const y = Number.isFinite(s.y[id]) ? s.y[id] : e.y1;
       const player = s.player[id];
-      if (player !== viewer && fog.at(x, y) !== 1) continue;
+      if (!soldierSeen(world, viewer, id)) continue;
       this.bodies.push({
         x, y,
         // Fallen across the way he faced, a little askew.

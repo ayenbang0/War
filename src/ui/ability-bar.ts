@@ -109,6 +109,9 @@ export class AbilityBar {
       s.root.classList.toggle("armed", commander.armed === s.id);
       // Spent or cooling reads as unavailable rather than merely unhelpful.
       s.root.classList.toggle("spent", left <= 0 || cooling > 0);
+      // None left is struck through as well, so "gone" does not rest on a
+      // faded fill alone (the faded fill is shared with cooling).
+      s.root.classList.toggle("exhausted", left <= 0);
     }
   }
 

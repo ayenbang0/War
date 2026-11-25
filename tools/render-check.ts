@@ -18,6 +18,8 @@ import { UNIT_TYPES, type UnitTypeId } from "../src/content/unit-types.ts";
 import { Renderer, type Snapshot } from "../src/render/renderer.ts";
 import { Camera } from "../src/render/camera.ts";
 import { presenceOf, isMoving } from "../src/render/presence.ts";
+import { Effects } from "../src/render/effects.ts";
+import type { CombatEvent } from "../src/sim/world.ts";
 
 type Call = { op: string; args: unknown[] };
 
@@ -150,7 +152,7 @@ console.log("\n== Render glitches ==");
   w.soldiers.alive[deadFoe] = 0;
   const ev = (victim: number) => ({
     kind: "melee" as const, player: 0, type: "line" as UnitTypeId,
-    x0: 0, y0: 0, x1: w.soldiers.x[victim], y1: w.soldiers.y[victim], lethal: true, victim,
+    attacker: -1, x0: 0, y0: 0, x1: w.soldiers.x[victim], y1: w.soldiers.y[victim], lethal: true, victim,
   });
   // Put the enemy's death in unlit ground for player 0.
   const fog = w.fog[0];
@@ -160,9 +162,56 @@ console.log("\n== Render glitches ==");
   r.fallen.ingest(w, [ev(deadFoe)], 0, 1);
   check("an enemy who dies in the fog leaves nothing to find", !lit && r.fallen.count === 1, lit ? "was lit" : "fog");
   const seenFoe = near.members[0];
+  // The dead are kept only for men the viewer actually saw (RF-04): give this
+  // one player 0's sight bit, as the sight sweep would for a man in view.
+  // (This world has already ended -- setup() stepped it with one side only --
+  // so it will not run another sweep by itself.)
+  w.soldiers.seen[seenFoe] |= 1;
   w.soldiers.alive[seenFoe] = 0;
   r.fallen.ingest(w, [ev(seenFoe)], 0, 1);
   check("an enemy who dies in view lies there", r.fallen.count === 2);
+}
+
+console.log("\n== Fog honesty (K2: RF-04, RF-06) ==");
+
+{
+  // RF-04: effects are drawn above the fog, so they must obey the same sight
+  // rule as the men. A blow between two men the viewer cannot see -- in a
+  // lit disc behind a wood, say -- leaves nothing; a shot whose archer is
+  // hidden lands on its (seen) victim without drawing a streak back to him.
+  const fx = new Effects(0);
+  const shot: CombatEvent = {
+    kind: "shot", player: 1, type: "line" as UnitTypeId, attacker: 3, victim: 4,
+    x0: 10, y0: 10, x1: 200, y1: 10, lethal: false,
+  };
+  fx.ingest([shot], 0, () => ({ attacker: false, victim: false }));
+  check("a blow between two unseen men leaves no effect", fx.count === 0, fx.count + " effects");
+  const priv = fx as unknown as { shots: unknown[]; impacts: unknown[] };
+  fx.ingest([shot], 0, () => ({ attacker: false, victim: true }));
+  check("a shot from a hidden archer draws no streak back to him", priv.shots.length === 0 && priv.impacts.length === 1);
+  fx.ingest([shot], 0, () => ({ attacker: true, victim: true }));
+  check("a shot in plain view still streaks", priv.shots.length === 1);
+}
+
+{
+  // RF-06: last-seen marks age on the SIM clock. A paused battle (tick
+  // constant) drawn at very different wall-clock times keeps every mark at the
+  // same strength; only ticks age it.
+  const { w, cam, r } = setup();
+  const hidden = unit(w, 1, "line", 2200, 1200);
+  const marks = (r as unknown as { lastSeen: Map<number, unknown> }).lastSeen;
+  marks.set(hidden.id, {
+    x: 2200, y: 1200, tick: w.tick - 5 * 20, n: 20, radius: hidden.radius, player: 1, emptySince: -1,
+  });
+  const prev = snap(w);
+  r.draw(w, cam, prev, 1, [], 1, 0);
+  const before = r.lastSeenFade(w, hidden.id);
+  r.draw(w, cam, prev, 1, [], 500, 0);
+  const after = r.lastSeenFade(w, hidden.id);
+  check("a last-seen mark is aging", before > 0 && before < 1, "fade " + before.toFixed(2));
+  check("a last-seen mark does not fade while the battle is paused", before === after, before + " -> " + after);
+  (w as unknown as { tick: number }).tick += 40;
+  check("it fades as the battle runs", r.lastSeenFade(w, hidden.id) < before);
 }
 
 if (failures > 0) {

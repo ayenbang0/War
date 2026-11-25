@@ -28,6 +28,7 @@ import { Renderer, type Snapshot } from "../render/renderer.ts";
 import { drawInk } from "../render/ink.ts";
 import { Effects } from "../render/effects.ts";
 import { isMoving, presenceOf } from "../render/presence.ts";
+import { watchReducedMotion } from "../render/motion.ts";
 import { CameraControls } from "../input/camera-controls.ts";
 import { Commander } from "../input/commander.ts";
 import { Pen } from "../input/pen.ts";
@@ -108,9 +109,25 @@ export class BattleLayer implements LayerKeys {
 
   private raf = 0;
   private last = 0;
+  /** Undo for the reduced-motion listener. */
+  private unwatchMotion: () => void = () => {};
   private accumulator = 0;
   private fps = 0;
   private hudTimer = 0;
+
+  /**
+   * How strongly the map still shows where an enemy company was last seen,
+   * 0 to 1. Read by the e2e harness to check that marks age on the sim clock
+   * and hold still while the battle is paused (RF-06).
+   */
+  lastSeenFade(group: number): number {
+    return this.renderer.lastSeenFade(this.world, group);
+  }
+
+  /** For the e2e harness: record a sighting as if the company had just been seen at (x, y) `ageTicks` ago. */
+  noteSightingForTest(group: number, x: number, y: number, ageTicks: number): void {
+    this.renderer.noteSighting(this.world, group, x, y, ageTicks);
+  }
   private cachedHash = "";
   private deployFogTick = 0;
   private lastDust = 0;
@@ -199,9 +216,13 @@ export class BattleLayer implements LayerKeys {
     }
     this.cam.zoom = 1.1;
 
-    this.renderer = new Renderer(env.ctx, world.terrain);
-    this.effects = new Effects();
+    this.renderer = new Renderer(env.ctx, world.terrain, PLAYER);
+    this.effects = new Effects(PLAYER);
     this.commander = new Commander(world, PLAYER);
+    // Men may be set down only inside the player's own deployment zone. The
+    // zone is level data, so the battle supplies the test; the order itself
+    // (`place`) is checked again by the world for ground nobody can stand on.
+    this.commander.placeable = (x, y) => this.inDeploymentZone(x, y);
     // Attached now but switched off until start(), and removed by teardown()
     // whether or not the battle was ever started.
     this.controls = new CameraControls(env.canvas, this.cam);
@@ -226,6 +247,8 @@ export class BattleLayer implements LayerKeys {
     this.phase = "live";
     this.env.win.addEventListener("resize", this.resize);
     this.resize();
+    this.frameOpening();
+    this.unwatchMotion = watchReducedMotion(this.env.win);
     this.pen.setEnabled(true);
     this.controls.setEnabled(true);
     if (DEV) {
@@ -250,6 +273,7 @@ export class BattleLayer implements LayerKeys {
     this.phase = "torn-down";
     this.env.win.cancelAnimationFrame(this.raf);
     this.env.win.removeEventListener("resize", this.resize);
+    this.unwatchMotion();
     this.pen.dispose();
     this.controls.dispose();
     this.abilityBar.dispose();
@@ -356,6 +380,52 @@ export class BattleLayer implements LayerKeys {
     this.cam.setViewport(w, h);
   };
 
+  /**
+   * Open on the player's own army, in the part of the window the HUD furniture
+   * leaves clear (audit RT-04). The ability bar runs along the bottom and can
+   * be two rows deep; centring the army on the whole window put its rear
+   * companies under the bar. The army is centred in the band above the bar,
+   * and the camera pulls back (to no wider than 0.6) if it would not fit.
+   */
+  private frameOpening(): void {
+    const { world, cam } = this;
+    const s = world.soldiers;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (let i = 0; i < s.count; i++) {
+      if (s.alive[i] !== 1 || s.player[i] !== PLAYER) continue;
+      x0 = Math.min(x0, s.x[i]);
+      y0 = Math.min(y0, s.y[i]);
+      x1 = Math.max(x1, s.x[i]);
+      y1 = Math.max(y1, s.y[i]);
+    }
+    if (!Number.isFinite(x0)) return;
+    const bar = this.env.abilityRoot;
+    // Plain-object hosts (tools/ui-check.ts) have no layout; treat as no bar.
+    const rect = typeof bar.getBoundingClientRect === "function"
+      ? bar.getBoundingClientRect()
+      : { top: cam.viewH, height: 0 };
+    const barShown = bar.style.display !== "none" && rect.height > 0;
+    // The usable band, in screen px: clear of the bar, with a margin.
+    const margin = 36;
+    const bandBottom = barShown ? Math.min(cam.viewH, rect.top) - margin : cam.viewH - margin;
+    const bandTop = margin;
+    const band = Math.max(120, bandBottom - bandTop);
+    const span = 60; // world-unit pad so the outermost men are not on the edge
+    const fitY = band / Math.max(1, y1 - y0 + span * 2);
+    const fitX = (cam.viewW - margin * 2) / Math.max(1, x1 - x0 + span * 2);
+    cam.zoom = Math.max(0.6, Math.min(cam.zoom, fitX, fitY));
+    const cx = (x0 + x1) / 2;
+    const cy = (y0 + y1) / 2;
+    // Put the army's centre in the middle of the band rather than the window.
+    const bandMid = (bandTop + bandBottom) / 2;
+    cam.x = cx;
+    cam.y = cy - (bandMid - cam.viewH / 2) / cam.zoom;
+    cam.setViewport(cam.viewW, cam.viewH);
+  }
+
   private snapshotInto(t: Snapshot): void {
     t.x.set(this.world.soldiers.x);
     t.y.set(this.world.soldiers.y);
@@ -388,7 +458,15 @@ export class BattleLayer implements LayerKeys {
     commander.flushPending(now);
 
     const held = this.held();
-    if (!held) {
+    if (world.deploying && !this.hooks.simHeld()) {
+      // Setting out: the clock stands still, but every frame is a tick
+      // boundary for the setup orders -- a company being carried, ranks being
+      // dressed -- which the world applies in step() (audit PC-05). Running
+      // under the player's own pause too: pausing stops a battle, and this is
+      // not one yet.
+      world.step();
+      this.snapshotInto(prev);
+    } else if (!held) {
       this.accumulator += dtReal;
       let steps = 0;
       while (this.accumulator >= TICK_DT && steps < MAX_STEPS_PER_FRAME) {
@@ -397,10 +475,15 @@ export class BattleLayer implements LayerKeys {
         // Events are cleared at the top of every tick, so a frame running
         // several ticks would otherwise see only the last one's blows. Blows
         // you could not see leave nothing above the fog either.
-        effects.ingest(world.events, now / 1000, (x, y) => world.fog[PLAYER].at(x, y) === 1);
-        renderer.fallen.ingest(world, world.events, PLAYER, now / 1000);
+        // One perception predicate for everything drawn over the map (RF-04):
+        // a blow by who can be seen in it, a body by whether its man could
+        // be, a moment by whether its ground is truly in view.
+        const sees = renderer.perception;
+        sees.refresh(world, now);
+        effects.ingest(world.events, now / 1000, (e) => sees.event(world, e));
+        renderer.fallen.ingest(world, world.events, PLAYER, world.tick / TICK_RATE);
         effects.ingestSpecials(
-          world.specialEvents.filter((m) => m.player === PLAYER || world.fog[PLAYER].at(m.x, m.y) === 1),
+          world.specialEvents.filter((m) => m.player === PLAYER || sees.ground(m.x, m.y)),
           now / 1000,
         );
         // A company that has just ceased to exist leaves nothing behind.
@@ -416,6 +499,14 @@ export class BattleLayer implements LayerKeys {
     // information the fog is meant to be keeping.
     while (this.breaksSeen < world.breakages.length) {
       const b = world.breakages[this.breaksSeen++];
+      // On the map, for any company the player can see break -- theirs or the
+      // enemy's, whose flight is in plain view (RF-09). A company wiped out
+      // has no men left to mark.
+      const g = world.groupById(b.group);
+      if (g) {
+        const p = presenceOf(world, g, PLAYER);
+        if (p.n > 0) effects.ingestBreak(p.x, p.y, g.player, now / 1000);
+      }
       if (b.player !== PLAYER) continue;
       this.lastBreak = b.name + " broke - " + b.cause;
       this.lastBreakAt = now;
@@ -440,31 +531,6 @@ export class BattleLayer implements LayerKeys {
     this.tutorial?.update();
     this.abilityBar.update(world, PLAYER, commander, TICK_RATE);
 
-    // During deployment the pen drags men into position instead of ordering them.
-    if (world.deploying && pen.drawing && pen.points.length > 1 && commander.selected.length > 0) {
-      const tip = pen.points[pen.points.length - 1];
-      if (this.inDeploymentZone(tip.x, tip.y)) {
-        for (const handle of commander.selected) {
-          const g = world.groupById(handle);
-          const men = g ? g.members : [];
-          if (men.length === 0) continue;
-          let cx = 0;
-          let cy = 0;
-          for (const id of men) {
-            cx += world.soldiers.x[id];
-            cy += world.soldiers.y[id];
-          }
-          cx /= men.length;
-          cy /= men.length;
-          for (const id of men) {
-            world.soldiers.x[id] += tip.x - cx;
-            world.soldiers.y[id] += tip.y - cy;
-          }
-        }
-        this.snapshotInto(prev);
-      }
-    }
-
     const alpha = held ? 1 : Math.min(this.accumulator / TICK_DT, 1);
     const clock = now / 1000;
     renderer.draw(world, cam, prev, alpha, commander.selected, clock, PLAYER);
@@ -480,7 +546,7 @@ export class BattleLayer implements LayerKeys {
       }
     }
     effects.draw(ctx, cam, clock);
-    drawInk(ctx, cam, pen.points, commander.preview, commander.pendingRail);
+    drawInk(ctx, cam, pen.points, commander.ghost, commander.pendingRail, pen.rejected, now);
     if (this.run === "paused") {
       // BH-01: a paused field must not look like a frozen one. Dimmed, and the
       // HUD says so in words.
