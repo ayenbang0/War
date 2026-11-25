@@ -173,7 +173,11 @@ scenario("k3b-zoom-through", "zoom in past the map's closest zoom to enter a cit
 
   // Two taps far apart in time do not.
   tap(t, onScreen(t, k, g.x, g.y));
+  // Far apart on the layer's own clock: frames for the fake DOM, real time
+  // for a browser, where 20 frames is only a third of a second.
   await t.frames(20);
+  await t.sleep(700);
+  await t.frames(2);
   t.key("Escape");
   tap(t, onScreen(t, k, g.x, g.y));
   t.expect(t.hook.top() === "region-card", "two slow taps only open the card");
