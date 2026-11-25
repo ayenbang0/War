@@ -13,6 +13,7 @@
 
 import type { App } from "./app.ts";
 import type { BattleLayer } from "./battle-layer.ts";
+import type { CityLayer } from "./city-layer.ts";
 import type { KingdomLayer } from "./kingdom-layer.ts";
 import type { StorageStatus } from "./progress-store.ts";
 
@@ -25,6 +26,10 @@ export type TestHook = {
   battle(): BattleLayer | null;
   /** The live kingdom map, or null. */
   kingdom(): KingdomLayer | null;
+  /** K3b: the live city view, or null. */
+  city(): CityLayer | null;
+  /** K3b: the realm, live on the map or suspended under a city; null with neither. */
+  realm(): KingdomLayer | null;
   storage(): StorageStatus;
   /** End the live battle now with this winner (0 is the player). */
   forceOutcome(winner: number): void;
@@ -38,6 +43,8 @@ export function testHook(app: App): TestHook {
     top: () => app.stack.top?.name ?? null,
     battle,
     kingdom: () => (app.live && app.live.kind === "kingdom" ? app.live : null),
+    city: () => (app.live && app.live.kind === "city" ? app.live : null),
+    realm: () => (app.live?.kind === "kingdom" ? app.live : app.live?.kind === "city" ? app.live.realm : null),
     storage: () => app.store.status,
     forceOutcome: (winner) => {
       const b = battle();

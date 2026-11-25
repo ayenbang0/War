@@ -13,6 +13,10 @@
  *
  * The values are refreshed in place when the layer says something changed
  * (the king moved, a day passed), so focus and the reader's place survive.
+ *
+ * K3b: the region card of one of the king's own holdings shows a SUMMARY of
+ * its economy and an "Enter the city" button; the full economy panels (tax,
+ * lots, fields and the build and sow menus) are in the city view now.
  */
 
 import { domScreen } from "../dom-screen.ts";
@@ -21,9 +25,13 @@ import type { KingdomWorld } from "../../sim/kingdom/world.ts";
 import { TICKS_PER_DAY } from "../../sim/kingdom/clock.ts";
 import { BIOMES, ROAD_TERRAIN, WEATHER_IDS } from "../../content/kingdom/terrain.ts";
 import { FACTIONS } from "../../content/kingdom/factions.ts";
-import { E, K, KIND_NAME, TASK_NAME, WEATHER_LINE, etaWords } from "../../content/kingdom/ui-strings.ts";
+import { E, K, KIND_NAME, STAGE_NAME, TASK_NAME, TAX_NAME, WEATHER_LINE, etaWords } from "../../content/kingdom/ui-strings.ts";
 import type { KingdomOrderBody } from "../../sim/kingdom/orders.ts";
-import { economyPanel, type EconomyHooks } from "./economy-panel.ts";
+import type { EconomyHooks } from "./economy-panel.ts";
+import { taxPerDay } from "../../sim/kingdom/economy.ts";
+import { BUILDINGS, type BuildingId } from "../../content/kingdom/buildings.ts";
+import { CROPS, type CropId } from "../../content/kingdom/crops.ts";
+import { C } from "../../content/kingdom/city-strings.ts";
 
 export type CardHooks = {
   /** Pop this card. */
@@ -38,6 +46,8 @@ export type CardHooks = {
   issue(body: KingdomOrderBody, said: string): void;
   /** Menus opened from the region card's economy panel (K3). */
   readonly economy: EconomyHooks;
+  /** K3b: open the city view of one of the king's holdings (the economy panels live there now). */
+  enterCity?(holding: number): void;
 };
 
 export type CardView = {
@@ -48,7 +58,7 @@ export type CardView = {
   refresh(): void;
 };
 
-function make(doc: Document, tag: string, cls?: string, text?: string): HTMLElement {
+export function make(doc: Document, tag: string, cls?: string, text?: string): HTMLElement {
   const n = doc.createElement(tag);
   if (cls) n.className = cls;
   if (text !== undefined) n.textContent = text;
@@ -60,14 +70,14 @@ function capital(s: string): string {
 }
 
 /** A labelled row whose value can be refreshed. */
-function row(doc: Document, dl: HTMLElement, label: string): HTMLElement {
+export function row(doc: Document, dl: HTMLElement, label: string): HTMLElement {
   dl.appendChild(make(doc, "dt", undefined, label));
   const dd = make(doc, "dd");
   dl.appendChild(dd);
   return dd;
 }
 
-function setText(el: HTMLElement, text: string): void {
+export function setText(el: HTMLElement, text: string): void {
   if (el.textContent !== text) el.textContent = text;
 }
 
@@ -76,8 +86,11 @@ function setText(el: HTMLElement, text: string): void {
  * described above. `back` names where focus goes when a menu opened from the
  * card closes (the control that opened it), before the heading.
  */
-function cardFrame(
-  name: string, root: HTMLElement, doc: Document, hooks: CardHooks,
+/** What the shared card frame needs of its owner (K3b: the city's cards use it too). */
+export type FrameHooks = Pick<CardHooks, "close" | "strokeInProgress" | "closed">;
+
+export function cardFrame(
+  name: string, root: HTMLElement, doc: Document, hooks: FrameHooks,
   build: (body: HTMLElement, actions: HTMLElement) => void, refresh: () => void,
   back: () => HTMLElement | null = () => null,
 ): Screen {
@@ -122,6 +135,33 @@ function cardFrame(
   });
 }
 
+/**
+ * The holding's economy in three short lines, for the region card (K3b: the
+ * full panels moved into the city view; the card keeps a summary and the way in).
+ */
+function summaryLines(world: KingdomWorld, holdingId: number): { tax: string; lots: string; fields: string; famine: string } {
+  const h = world.holding(holdingId)!;
+  const built: string[] = [];
+  let used = 0;
+  h.buildings.forEach((b, i) => {
+    if (b === null) return;
+    used++;
+    const name = BUILDINGS[b as BuildingId]?.name ?? b;
+    built.push(h.works[i] > 0 ? E.slotBuilding({ name, days: h.works[i] }) : h.idle[i] ? E.slotIdle(name) : name);
+  });
+  const fields = h.plots.map((p) => {
+    const crop = p.crop ? CROPS[p.crop as CropId] : null;
+    if (!crop || p.stage === "empty") return STAGE_NAME.empty;
+    return crop.name + " " + STAGE_NAME[p.stage] + (p.stage === "growing" ? " " + Math.floor(p.progress * 100) + "%" : "");
+  });
+  return {
+    tax: C.summaryTax({ rate: TAX_NAME[h.tax], coin: E.coinAmount(taxPerDay(h.population, h.tax)) }),
+    lots: C.summaryLots({ built: built.join(", "), used, total: h.buildings.length }),
+    fields: C.summaryFields(fields),
+    famine: h.famine > 0 ? C.famineSummary(h.famine) : "",
+  };
+}
+
 export function regionCard(root: HTMLElement, doc: Document, world: KingdomWorld, holdingId: number, hooks: CardHooks): CardView {
   const h = world.holding(holdingId);
   if (!h) throw new Error("no holding " + holdingId);
@@ -130,11 +170,13 @@ export function regionCard(root: HTMLElement, doc: Document, world: KingdomWorld
   let owner: HTMLElement | null = null;
   let people: HTMLElement | null = null;
   let fromKing: HTMLElement | null = null;
-  const economy = economyPanel(doc, world, holdingId, hooks.economy);
+  let summary: HTMLElement | null = null;
+  let enter: HTMLElement | null = null;
+  let heading: HTMLElement | null = null;
+  let shownSummary = "";
 
   const refresh = (): void => {
-    if (!owner || !people || !fromKing) return;
-    economy.refresh();
+    if (!owner || !people || !fromKing || !summary || !enter) return;
     setText(owner, h.owner === null ? capital(K.unclaimed) : capital(FACTIONS[h.owner].name));
     setText(people, String(h.population));
     const m = world.king.mover;
@@ -143,10 +185,34 @@ export function regionCard(root: HTMLElement, doc: Document, world: KingdomWorld
       const plan = world.planKingRoute(h.id);
       setText(fromKing, plan ? capital(etaWords(plan.etaTicks, TICKS_PER_DAY)) + " by road" : "No road leads here");
     }
+    // The holding's economy, for the king's own: a summary; the panels are in the city.
+    const mine = h.owner === "king";
+    const lines = mine ? summaryLines(world, h.id) : null;
+    const sig = lines ? lines.tax + "|" + lines.lots + "|" + lines.fields + "|" + lines.famine : "";
+    if (sig !== shownSummary) {
+      shownSummary = sig;
+      summary.textContent = "";
+      summary.style.display = lines ? "block" : "none";
+      if (lines) {
+        summary.appendChild(make(doc, "h3", "k-section", E.economy));
+        const dl = make(doc, "dl", "k-rows");
+        row(doc, dl, C.taxRow).textContent = lines.tax;
+        row(doc, dl, C.lotsRow).textContent = lines.lots;
+        row(doc, dl, C.fieldsRow).textContent = lines.fields;
+        summary.appendChild(dl);
+        if (lines.famine) summary.appendChild(make(doc, "p", "k-warn", lines.famine));
+      }
+    }
+    const want = mine && hooks.enterCity ? "inline-block" : "none";
+    if (enter.style.display !== want) {
+      if (want === "none" && doc.activeElement === enter) heading?.focus();
+      enter.style.display = want;
+    }
   };
 
-  const screen = cardFrame("region-card", root, doc, hooks, (body) => {
+  const screen = cardFrame("region-card", root, doc, hooks, (body, actions) => {
     const title = root.querySelector(".k-card-title") as HTMLElement;
+    heading = title;
     title.textContent = h.name;
     body.appendChild(make(doc, "p", "k-sub",
       (province ? province.name : "") + (def?.seat ? " · " + K.seat : "")));
@@ -167,8 +233,16 @@ export function regionCard(root: HTMLElement, doc: Document, world: KingdomWorld
     row(doc, dl, K.roads).textContent = roads.join(", ");
     fromKing = row(doc, dl, K.fromKing);
     body.appendChild(dl);
-    body.appendChild(economy.root);
-  }, refresh, () => economy.focusTarget());
+    summary = make(doc, "section", "k-economy");
+    shownSummary = "-";
+    body.appendChild(summary);
+    enter = make(doc, "button", "k-btn k-enter", C.enter);
+    enter.setAttribute("type", "button");
+    enter.setAttribute("aria-label", C.enterAria(h.name));
+    enter.style.display = "none";
+    enter.onclick = () => hooks.enterCity?.(h.id);
+    actions.appendChild(enter);
+  }, refresh);
   return { screen, kind: "region", holding: holdingId, refresh };
 }
 
