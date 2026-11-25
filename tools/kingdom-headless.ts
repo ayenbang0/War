@@ -721,16 +721,18 @@ section("save / load");
     return !r.ok;
   })());
 
-  // The migration machinery, before any real migration exists.
+  // The migration machinery itself, with a stand-in table (K3 added the
+  // first real step, 1 -> 2; tools/kingdom-economy.ts tests that one).
   const fake = {
     1: (s: Record<string, unknown>) => ({ ...s, version: 2, stockpiles: { coin: 0 } }),
     2: (s: Record<string, unknown>) => ({ ...s, version: 3 }),
   };
-  const m = migrate(JSON.parse(JSON.stringify(good)), fake, 3);
+  const v1 = (): Record<string, unknown> => ({ ...JSON.parse(JSON.stringify(good)), version: 1 });
+  const m = migrate(v1(), fake, 3);
   check("migrate steps a save up one version at a time",
     m.ok && m.value.version === 3 && (m.value.stockpiles as { coin: number }).coin === 0);
-  check("migrate refuses a gap in the table", !migrate(JSON.parse(JSON.stringify(good)), { 1: fake[1] }, 3).ok);
-  check("migrate refuses a step that does not advance", !migrate(JSON.parse(JSON.stringify(good)),
+  check("migrate refuses a gap in the table", !migrate(v1(), { 1: fake[1] }, 3).ok);
+  check("migrate refuses a step that does not advance", !migrate(v1(),
     { 1: (s: Record<string, unknown>) => s }, 2).ok);
   check("a current save needs no migration", migrate(JSON.parse(JSON.stringify(good))).ok);
   check("the save names its map and fingerprint", good.map === "rimaros" &&

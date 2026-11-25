@@ -787,6 +787,20 @@ begin("ui policy (BS-06, BS-07, BS-10, BS-11, RT-02)");
   }
   check("no font size under 1rem in the stylesheet", small.length === 0, small.join(" | "));
   check("no font size in px (sizes follow the player's text setting)", pxFonts.length === 0, pxFonts.join(" | "));
+  // The kingdom's own stylesheet is held to the same floor (U2-01: K2 had px labels there).
+  {
+    const kcss = read("../src/ui/kingdom/kingdom.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const bad: string[] = [];
+    for (const m of kcss.matchAll(/font(?:-size)?\s*:\s*([^;}]+)/g)) {
+      const v = m[1];
+      for (const n of v.matchAll(/(\d*\.?\d+)(px|rem|em)\b/g)) {
+        if (v.slice(0, n.index ?? 0).trimEnd().endsWith("/")) continue;
+        if (n[2] === "px" || parseFloat(n[1]) < 1) bad.push(m[0].trim());
+      }
+    }
+    check("kingdom.css: no font size in px or under 1rem", bad.length === 0, bad.join(" | "));
+    check("kingdom.css: an authored focus ring", /:focus-visible[^{]*\{[^}]*outline:\s*3px/.test(kcss));
+  }
   const token = /--text:\s*(\d*\.?\d+)rem/.exec(css);
   check("the body text token is at least 1rem", token !== null && parseFloat(token[1]) >= 1, token ? token[0] : "missing");
 

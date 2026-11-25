@@ -12,11 +12,11 @@
  *   - No DOM, no wall clock, no Math outside sim/math.ts. It runs headless,
  *     which is how tools/kingdom-headless.ts drives ten years of it.
  *
- * What K1 actually simulates is small on purpose: the day clock, the weather,
- * the region graph with its owners, and the exiled king's retinue marching by
- * road. Everything else in §B is a later phase; the state already has room
- * for it (state.ts) so the save format and the hash do not change shape when
- * it arrives. The tick body below lists where each phase plugs in.
+ * K1 simulated the day clock, the weather, the region graph with its owners,
+ * and the exiled king's retinue marching by road. K3 adds the economy
+ * (economy.ts): stockpiles and their ledger, taxes, buildings, field plots and
+ * crops, famine, and the orders that start it from nothing. The tick body
+ * below lists where each later phase plugs in.
  */
 
 import { ceil } from "../math.ts";
@@ -34,7 +34,14 @@ import {
   advanceMover, buildGraph, findRoute, moverAt, moverPosition, roadLength, setRoute,
   type RoadGraph, type Route,
 } from "./graph.ts";
-import type { FieldPlot, Holding, KingToken, KingdomEvent, Road } from "./state.ts";
+import type { FactionEconomy, FieldPlot, Holding, KingToken, KingdomEvent, Road } from "./state.ts";
+import { DEFAULT_TAX } from "../../content/kingdom/economy.ts";
+import type { FactionBook } from "./ledger.ts";
+import { snapshotStocks } from "./ledger.ts";
+import {
+  applyEconomyOrder, checkEconomyOrder, dailyNeed, isEconomyOrder, newBook, newFactionEconomy, runEconomyDay, setTask,
+  type EconomyOrderBody,
+} from "./economy.ts";
 
 /** Default name of the exiled king (docs/PROVISIONAL.md A.7.3). */
 export const DEFAULT_KING_NAME = "Aldric of Rimaros";
@@ -86,6 +93,10 @@ export class KingdomWorld {
   readonly king: KingToken;
   /** Today's weather, rolled on the first tick of each day. */
   weather: WeatherId = "clear";
+  /** Every faction's stores, in FACTION_IDS order (K3). */
+  readonly economy: FactionEconomy[];
+  /** Every faction's ledger, in FACTION_IDS order (K3). */
+  readonly books: FactionBook[];
 
   readonly rng: KingdomRng;
   readonly orders = new KingdomOrderQueue();
@@ -136,7 +147,13 @@ export class KingdomWorld {
         garrisonSlots: kind.garrisonSlots,
         garrison: [],
         buildings: new Array<string | null>(kind.buildingSlots).fill(null),
+        works: new Array<number>(kind.buildingSlots).fill(0),
+        idle: new Array<boolean>(kind.buildingSlots).fill(false),
         plots: [],
+        tax: DEFAULT_TAX,
+        taxCarry: 0,
+        doleCarry: 0,
+        famine: 0,
       };
       this.holdings.push(h);
       this.byKey.set(h.key, h);
@@ -157,7 +174,7 @@ export class KingdomWorld {
     for (const h of this.holdings) {
       const n = HOLDING_KINDS[h.kind].fieldPlots;
       for (let i = 0; i < n; i++) {
-        const plot: FieldPlot = { id: this.nextId++, crop: null, stage: "empty", progress: 0 };
+        const plot: FieldPlot = { id: this.nextId++, crop: null, stage: "empty", progress: 0, days: 0, health: 100 };
         h.plots.push(plot);
       }
     }
@@ -167,9 +184,15 @@ export class KingdomWorld {
       name: config.kingName ?? DEFAULT_KING_NAME,
       companions: ["Brother Aldous"],
       mover: moverAt(start.id),
+      task: "none",
+      taskDays: 0,
     };
 
     this.graph = buildGraph(this.holdings, this.roads);
+    // Stores are not entities and take no ids: the id sequence above is the
+    // same as K1's, which keeps old saves' fingerprints valid (save.ts v1 -> v2).
+    this.economy = FACTION_IDS.map((f) => newFactionEconomy(f));
+    this.books = this.economy.map((e) => newBook(e));
   }
 
   // -- orders ------------------------------------------------------------------
@@ -202,8 +225,12 @@ export class KingdomWorld {
     for (const o of orders) this.submit(o);
     this.events = [];
 
-    if (isDayStart(this.now)) this.beginDay();
-    // K3: economy (taxes, harvest, consumption) at the day boundary.
+    if (isDayStart(this.now)) {
+      this.beginDay();
+      // K3: the economy's day -- farm weather, seasons, plots, buildings,
+      // taxes, foraging and rallying, bread, spoilage (economy.ts).
+      runEconomyDay(this);
+    }
     // K8: captains' AI issues orders here, through this.orders, before draining.
     for (const order of this.orders.drain(this.now)) {
       this.log.push(order);
@@ -251,14 +278,36 @@ export class KingdomWorld {
         const route = findRoute(this.graph, this.king.mover, order.to);
         if (!route) return this.reject(order, "no road leads there");
         setRoute(this.graph, this.king.mover, route);
+        // A party on the march neither forages nor rallies.
+        setTask(this, "none");
         return;
       }
       case "haltKing": {
         if (order.player !== KING_PLAYER) return this.reject(order, "only the king's seat commands the king");
         this.king.mover.route = [];
+        setTask(this, "none");
+        return;
+      }
+      default: {
+        const f = order.player;
+        const before = f >= 0 && f < this.economy.length ? snapshotStocks(this.economy[f]).join() : "";
+        const why = applyEconomyOrder(this, order);
+        if (why) return this.reject(order, why);
+        if (snapshotStocks(this.economy[f]).join() !== before) this.events.push({ kind: "stocksChanged", faction: f });
         return;
       }
     }
+  }
+
+  /**
+   * Why an economy order would be refused right now, or null if it would be
+   * applied -- the SAME check the tick makes when the order lands. The panels
+   * use it to offer only what will work and to say why the rest will not.
+   * (A queued order is checked again when it applies, against the world then.)
+   */
+  check(body: KingdomOrderBody, player: number = KING_PLAYER): string | null {
+    if (!isEconomyOrder(body)) return null;
+    return checkEconomyOrder(this, body as EconomyOrderBody, player);
   }
 
   private reject(order: KingdomOrder, reason: string): void {
@@ -315,6 +364,16 @@ export class KingdomWorld {
     if (!route) return null;
     const etaTicks = ceil((route.effort * WEATHER[this.weather].travel) / this.retinueEffortPerTick());
     return { route, etaTicks };
+  }
+
+  /** Grain a faction must find today: its party and its towns' dole. */
+  dailyNeed(faction: number = KING_PLAYER): number {
+    return dailyNeed(this, faction);
+  }
+
+  /** The king's stores. */
+  get kingStocks(): FactionEconomy {
+    return this.economy[KING_PLAYER];
   }
 
   /** Holdings a faction owns, in id order. `null` lists the unclaimed ones. */

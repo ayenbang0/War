@@ -1,7 +1,8 @@
 /**
- * The kingdom map's HUD (docs/audit/u1-kingdom-map.md): the top bar (stores
- * placeholder, date and weather, speed control, front-screen button), the
- * PAUSED banner, the alerts feed, the pen's result line and the key hint.
+ * The kingdom map's HUD (docs/audit/u1-kingdom-map.md, u2-economy-panels.md):
+ * the top bar (the resources bar, date and weather, speed control,
+ * front-screen button), the PAUSED banner, the alerts feed, the pen's result
+ * line and the key hint; and the roots the cards and the economy menus draw in.
  *
  * DRIVEN BY EVENTS, not by the frame loop (U1-09, game-ui-ux §5): the layer
  * calls `setDate` on a day boundary, `setRun` when the speed or pause changes,
@@ -18,6 +19,7 @@ import { K, SEASON_NAME, WEATHER_LINE, dateLine } from "../../content/kingdom/ui
 import type { CalendarDate } from "../../sim/kingdom/clock.ts";
 import type { WeatherId } from "../../content/kingdom/terrain.ts";
 import { KINGDOM_SPEEDS, type KingdomRun, type KingdomSpeed } from "../../app/kingdom-clock.ts";
+import { ResourcesBar } from "./resources.ts";
 
 export type HudActions = {
   setSpeed(s: KingdomSpeed): void;
@@ -49,6 +51,10 @@ export class KingdomHud {
   readonly root: HTMLElement;
   /** Where the cards are drawn; the card screens own its contents. */
   readonly cardRoot: HTMLElement;
+  /** Where the economy's choice menus are drawn (modal; K3). */
+  readonly menuRoot: HTMLElement;
+  /** The king's stocks (K3), in the top bar. */
+  readonly resources: ResourcesBar;
   private readonly date: HTMLElement;
   private readonly weather: HTMLElement;
   private readonly speedButtons: HTMLElement[] = [];
@@ -72,9 +78,8 @@ export class KingdomHud {
     // -- top bar -----------------------------------------------------------
     const top = make(doc, "div", "k-top");
     this.interactive = top;
-    const stores = make(doc, "div", "k-box k-stores");
-    stores.appendChild(make(doc, "span", "k-label", "Stores"));
-    stores.appendChild(make(doc, "span", "k-value", K.storesNone));
+    this.resources = new ResourcesBar(doc);
+    const stores = this.resources.root;
     const when = make(doc, "div", "k-box k-date");
     this.date = make(doc, "span", "k-value k-date-line");
     this.weather = make(doc, "span", "k-weather");
@@ -120,8 +125,10 @@ export class KingdomHud {
 
     this.cardRoot = make(doc, "aside", "k-card");
     this.cardRoot.style.display = "none";
+    this.menuRoot = make(doc, "div", "k-menu-backdrop");
+    this.menuRoot.style.display = "none";
 
-    this.root.append(top, this.banner, this.cardRoot, foot, keys);
+    this.root.append(top, this.banner, this.cardRoot, foot, keys, this.menuRoot);
   }
 
   /** Buttons are live exactly while the map's pen is (a card leaves them usable, a dialog does not). */

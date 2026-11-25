@@ -20,8 +20,12 @@
 import { FNV_OFFSET, mixF64, mixU32 } from "../hash.ts";
 import { FACTION_IDS, type FactionId } from "../../content/kingdom/factions.ts";
 import { ROAD_TERRAIN_IDS, WEATHER_IDS } from "../../content/kingdom/terrain.ts";
+import { BUILDING_IDS } from "../../content/kingdom/buildings.ts";
+import { CROP_IDS } from "../../content/kingdom/crops.ts";
+import { STOCK_IDS, TAX_RATE_IDS } from "../../content/kingdom/economy.ts";
 import { KINGDOM_ORDER_KINDS, type KingdomOrder } from "./orders.ts";
-import { PLOT_STAGES, type Mover } from "./state.ts";
+import { KING_TASKS, PLOT_STAGES, type Mover } from "./state.ts";
+import type { LedgerDay } from "./ledger.ts";
 import { KINGDOM_STREAMS, type KingdomWorld } from "./world.ts";
 
 function mixStr(h: number, s: string | null): number {
@@ -55,7 +59,24 @@ export function mixOrder(h: number, o: KingdomOrder): number {
   switch (o.kind) {
     case "moveKing": return mixU32(h, o.to);
     case "haltKing": return h;
+    case "forage": return h;
+    case "rally": return h;
+    case "claimHolding": return mixU32(h, o.holding);
+    case "setTax": return mixU32(mixU32(h, o.holding), TAX_RATE_IDS.indexOf(o.rate));
+    case "build": return mixU32(mixU32(h, o.holding), BUILDING_IDS.indexOf(o.building));
+    case "sow": return mixU32(mixU32(h, o.plot), CROP_IDS.indexOf(o.crop));
+    case "harvest": return mixU32(h, o.plot);
   }
+}
+
+function mixLedgerDay(h: number, d: LedgerDay | null): number {
+  if (d === null) return mixU32(h, 0xffffffff);
+  h = mixU32(h, d.day);
+  h = mixU32(h, d.start.length);
+  for (const v of d.start) h = mixF64(h, v);
+  h = mixU32(h, d.flow.length);
+  for (const v of d.flow) h = mixF64(h, v);
+  return h;
 }
 
 export function kingdomHash(world: KingdomWorld): string {
@@ -80,13 +101,21 @@ export function kingdomHash(world: KingdomWorld): string {
     for (const g of x.garrison) h = mixU32(h, g);
     h = mixU32(h, x.buildings.length);
     for (const b of x.buildings) h = mixStr(h, b);
+    for (const w of x.works) h = mixU32(h, w);
+    for (const i of x.idle) h = mixU32(h, i ? 1 : 0);
     h = mixU32(h, x.plots.length);
     for (const p of x.plots) {
       h = mixU32(h, p.id);
       h = mixStr(h, p.crop);
       h = mixU32(h, PLOT_STAGES.indexOf(p.stage));
       h = mixF64(h, p.progress);
+      h = mixU32(h, p.days);
+      h = mixU32(h, p.health);
     }
+    h = mixU32(h, TAX_RATE_IDS.indexOf(x.tax));
+    h = mixU32(h, x.taxCarry);
+    h = mixU32(h, x.doleCarry);
+    h = mixU32(h, x.famine);
   }
 
   h = mixU32(h, world.roads.length);
@@ -105,6 +134,19 @@ export function kingdomHash(world: KingdomWorld): string {
   h = mixU32(h, k.companions.length);
   for (const c of k.companions) h = mixStr(h, c);
   h = mixMover(h, k.mover);
+  h = mixU32(h, KING_TASKS.indexOf(k.task));
+  h = mixU32(h, k.taskDays);
+
+  // K3: every faction's stores, soft stats and ledger pages.
+  h = mixU32(h, world.economy.length);
+  world.economy.forEach((e, f) => {
+    for (const s of STOCK_IDS) h = mixF64(h, e.stocks[s]);
+    h = mixF64(h, e.legitimacy);
+    h = mixU32(h, e.hunger);
+    h = mixU32(h, TAX_RATE_IDS.indexOf(e.defaultTax));
+    h = mixLedgerDay(h, world.books[f].open);
+    h = mixLedgerDay(h, world.books[f].closed);
+  });
 
   const queued = world.orders.queued();
   h = mixU32(h, queued.length);

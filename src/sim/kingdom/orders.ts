@@ -15,17 +15,38 @@
  * tick(), which a replay does not care about.
  */
 
+import type { BuildingId } from "../../content/kingdom/buildings.ts";
+import type { CropId } from "../../content/kingdom/crops.ts";
+import type { TaxRateId } from "../../content/kingdom/economy.ts";
+
 export type KingdomOrderBody =
-  /** March the king's retinue by road to a holding. Replaces any march. */
+  /** March the king's retinue by road to a holding. Replaces any march, and ends a forage or rally. */
   | { kind: "moveKing"; to: number }
-  /** Stop where the retinue stands, even halfway along a road. */
-  | { kind: "haltKing" };
-  // K3: plant / build / setTax.  K4: recruit / march / merge / split.
-  // K7: hire / pay.  Append new kinds; never renumber the existing ones.
+  /** Stop where the retinue stands, even halfway along a road; also ends a forage or rally. */
+  | { kind: "haltKing" }
+  // -- K3: the economy, from nothing (PLAN.md §A.5, §B.3) --
+  /** The king's party gathers food and deadwood where it stands, each day until told otherwise. */
+  | { kind: "forage" }
+  /** At an unclaimed hamlet: spend days winning followers to the levy. */
+  | { kind: "rally" }
+  /** Take an unowned holding with no garrison and no army, without a battle (§B.8). The king must be there. */
+  | { kind: "claimHolding"; holding: number }
+  /** Set the tax of one owned holding, or of every one (holding 0, which also sets the default for new claims). */
+  | { kind: "setTax"; holding: number; rate: TaxRateId }
+  /** Start a building in a free slot (or over the building it upgrades) of an owned holding. */
+  | { kind: "build"; holding: number; building: BuildingId }
+  /** Sow a crop in a plot of an owned holding: empty, harvested or spoiled. */
+  | { kind: "sow"; plot: number; crop: CropId }
+  /** Reap a ripe plot. */
+  | { kind: "harvest"; plot: number };
+  // K4: recruit / march / merge / split.  K7: hire / pay.
+  // Append new kinds; never renumber the existing ones.
 
 export type KingdomOrderKind = KingdomOrderBody["kind"];
 
-export const KINGDOM_ORDER_KINDS: readonly KingdomOrderKind[] = ["moveKing", "haltKing"];
+export const KINGDOM_ORDER_KINDS: readonly KingdomOrderKind[] = [
+  "moveKing", "haltKing", "forage", "rally", "claimHolding", "setTax", "build", "sow", "harvest",
+];
 
 export type KingdomOrder = KingdomOrderBody & {
   /** Kingdom tick at which this order takes effect. */

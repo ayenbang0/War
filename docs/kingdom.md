@@ -1,4 +1,4 @@
-# The kingdom layer — sim core (K1) and map (K2)
+# The kingdom layer — sim core (K1), map (K2) and economy (K3)
 
 For the agents building K2 onwards. PLAN.md Part B is the design; this file is
 what K1 actually built and the contracts later phases must keep.
@@ -51,8 +51,9 @@ ticks. None of this is an order and none of it is saved.
 `tick(orders = [])`, in this order:
 
 1. queue the given orders (`submit`);
-2. on the first tick of a day: roll the day's weather (`weather` stream) —
-   *K3: economy at the day boundary goes here*;
+2. on the first tick of a day: roll the day's weather (`weather` stream),
+   then run the day's economy (`runEconomyDay`, K3: see "K3 — economy and
+   farming" below for its own order);
 3. *K8: captains' AI issues orders here, through the same queue*;
 4. drain every order due at `now`, sort by `(tick, player, seq)`, append each
    to `world.log`, apply it;
@@ -292,3 +293,158 @@ No armies, garrisons or other K4 gestures (closed strokes say so); no stores
 The real-browser click-through and screenshots of the U1 re-audit are still
 to be done on a machine with a browser: `e2e.html` runs every scenario,
 the K2 ones included (their names start `k2-`).
+
+## K3 — economy and farming
+
+PLAN §B.3 and §C K3. Everything below is pure sim (`src/sim/kingdom/`) or
+content (`src/content/kingdom/`); the UI only reads it and sends orders.
+
+### Files
+
+| Path | What |
+|---|---|
+| `src/content/kingdom/economy.ts` | stocks, ledger categories, the exile's start, tax rates, dole, storage and spoilage, foraging, rally, claim, farm-event odds and harm, field sizes; `validateEconomy` |
+| `src/content/kingdom/buildings.ts` | the 13 buildings: cost, build days, upkeep, slots, economic effect, and battle/defence/vision/morale as data for later phases (`later`); `validateBuildings` |
+| `src/content/kingdom/crops.ts` | wheat/barley, rye, flax, herbs/poppy, orchard: sowing and growing seasons, hardiness, days, seed, yield; `validateCrops` |
+| `src/sim/kingdom/ledger.ts` | the ONLY way to change a stock (`credit`/`debit`), the per-faction per-day pages, `adjustLegitimacy` |
+| `src/sim/kingdom/economy.ts` | `checkEconomyOrder` / `applyEconomyOrder`, `runEconomyDay`, queries (`storageOf`, `dailyNeed`, `taxPerDay`, `seedCost`, `expectedYield`, `famineDeaths`), `changeLegitimacy` (K6's entry point) |
+| `tools/kingdom-economy.ts` | the K3 suite (in `npm test`) |
+| `tools/kingdom-strategies.ts` | scripted players (careful, careless, idle, forager, builder) shared by the suite and the sweep |
+| `tools/kingdom-sweep.ts` | `node tools/kingdom-sweep.ts [days] [seed]`: stock trajectories for every strategy over three years (not in `npm test`) |
+| `tools/fixtures/kingdom-save-v1.json` | a real K2 save, for the v1 → v2 migration test |
+| `src/ui/kingdom/resources.ts`, `economy-panel.ts`, `icons.ts` | resources bar, region-card economy panel, build and sow menus, stock icons (audit: `docs/audit/u2-economy-panels.md`) |
+
+### Stocks and units
+
+Per faction (`world.economy[f]`, `FACTION_IDS` order): `coin` (pennies),
+`grain` (**person-days**: one ration feeds one person a day), `timber`
+(cartloads), `iron` (bars), `levy` (followers), all whole numbers ≥ 0; and
+`legitimacy` 0..100, a soft stat with one entry point (`changeLegitimacy` →
+`adjustLegitimacy`, ledger categories `deeds`/`disgrace`) that K6 fills with
+rules. Only the king's economy runs in K3 (`ECONOMY_FACTIONS`); the captains'
+are kept at zero until K8 gives them hands. The king starts with nothing but
+12 days of bread: no holding, no coin, no followers.
+
+Each stock feeds a decision: coin pays for buildings, seed and upkeep; grain
+is everyone's bread and the seed of wheat and rye; timber builds; iron is
+made by a forge from timber and built into walls and keeps; followers claim a
+holding (`CLAIM_MIN_LEVY` 3), eat, carry (`CARRY_PER_PERSON`) and forage.
+
+### The ledger
+
+`credit(e, book, stock, n, category)` / `debit(...)` are the only writers of a
+stock. Each category has a direction (source or sink); a debit below zero, a
+non-integer amount or a wrong-direction category throws (a sim bug, never a
+state). A faction's book holds two pages: the day being written (`open`) and
+the last day closed (`closed`); a page is `{ day, start[], flow[] }` with flow
+per stock × category. So, for every faction, stock and day:
+
+    end = start + Σ sources − Σ sinks     (end = the next page's start)
+
+`tools/kingdom-economy.ts` holds three years of four strategies to that on
+every day. Categories already present for later phases: `plunder` (K5),
+`rations`, `wages`, `recruitment`, `desertion` (K4), `deeds`, `disgrace` (K6).
+Older pages are not kept (the save would grow without bound); a test that
+wants history reads each page as it closes.
+
+### The economy's day (`runEconomyDay`, first tick of a day, after the weather)
+
+1. turn every faction's ledger page;
+2. one farm-weather draw from the `weather` stream (always one draw, so sowing
+   never moves the weather): drought, frost or flood by season and weather,
+   harming crops in the ground by `FARM_EVENT_HARM` (hardy crops less; floods
+   only in low country); a crop beaten to 0 health is `spoiled`;
+3. on the first day of a season (not day 0): winter kills tender crops in the
+   ground; a harvested orchard regrows in spring; each owned holding not in
+   famine grows or shrinks by its tax rate's `growthPct`, then musters
+   `MUSTER_PCT` of its people (more with a barracks) into the levy;
+4. crops grow (counting only days of a season they grow in): `sown` →
+   `growing` after `GERMINATION_DAYS`, `progress` = days / `growDays`, then
+   `ripe`; ripe left longer than `ripeDays` spoils;
+5. per active faction: buildings (works count down to `built`; a standing
+   building pays its upkeep or goes idle; workshops consume and produce;
+   markets trade), taxes (pop × rate per 100, remainder carried), the king's
+   task (forage or rally, below), everyone eats (below), spoilage;
+6. a `stocksChanged` event for a faction whose stocks moved.
+
+Orders then apply as in K1 (drain by `(tick, player, seq)`).
+
+### Eating, storage, famine
+
+Each day the king's party eats `PARTY_RATION` each (king, companions,
+followers) and each owned holding draws its dole (`DOLE_PER_100` per season:
+peasants feed themselves most of the year; winter's 10 per 100 is the
+pressure). Short grain is shared in proportion to need; a short day is a
+famine day for every owned holding (`holding.famine` counts the days: the
+signal K6 unrest and K4 desertion read) and a hungry day for the party
+(`economy.hunger`). A holding in famine pays no tax, does not grow, and loses
+`FAMINE_LOSS_PCT` (2 %) of its people a day (`famineDeaths`, spread evenly
+with no stored carry). Grain is kept in granaries (`SPOIL_PERMILLE.granary`
+3 ‰ a day), then loose (cellars of owned holdings + what the party carries,
+15 ‰), then heaped (25 % a day): so autumn's gleanings rot without a granary.
+
+### Orders (appended to `KINGDOM_ORDER_KINDS`, in this order)
+
+| Order | Applies when | Effect |
+|---|---|---|
+| `forage` | the king is at a holding, not marching | task: each day, grain = people × `FORAGE_PER_PERSON[season]` × fertility, timber = people × wood / 400 |
+| `rally` | at an unclaimed hamlet above 60 % of its people | task: each day 1 per 25 people (≥ 1) leaves the hamlet for the levy, bringing 3 grain and 1 coin each; ends itself when the hamlet is spent |
+| `claimHolding {holding}` | the king stands there, it is unowned and ungarrisoned, ≥ 3 followers | the holding is the king's, taxed at his default rate; no battle |
+| `setTax {holding, rate}` | the holding is the king's (0 = every holding, and the default for later claims) | sets the rate |
+| `build {holding, building}` | owned; the country allows it; a free slot (or the building it upgrades, standing); affordable; not a second unique one | pays the cost, works count down `days` |
+| `sow {plot, crop}` | owned; the field is empty, harvested or spoiled (a harvested orchard needs no sowing); in the crop's sowing season; seed affordable | pays the seed (× `FIELD_SIZE`), `sown` |
+| `harvest {plot}` | owned; ripe | the yield × health × (farm bonus), ±`HARVEST_VARIANCE_PCT` from the `economy` stream, `harvested` |
+
+Marching or halting ends the king's task. `world.check(body, player)` is the
+same function the sim applies (`checkEconomyOrder`): the panels call it to
+decide what to offer, so a button never promises what the sim refuses.
+Sowing and harvesting need no king present (the steward does it).
+
+### Save format version 2
+
+Adds, per holding, `works`, `idle`, `tax`, `taxCarry`, `doleCarry`, `famine`
+and, per plot, `days`, `health`; on the king, `task`, `taskDays`; and
+`economy[]` per faction (stocks, legitimacy, hunger, default tax, the open
+and closed ledger pages). `MIGRATIONS[1]` gives a K2 save the exile's
+starting stores as of the save's day, default taxes and empty works; the
+order log is kept, and replaying it runs K3's rules (the honest meaning of an
+old log under new rules). The map fingerprint is unchanged (K3 adds no ids).
+
+### Determinism and the golden
+
+The economy draws only from the `economy` stream (harvest luck) and the
+`weather` stream (one farm draw a day). Iteration is in holding/plot/slot id
+order. The kingdom golden moved in K3 (expected): every day now runs the
+economy, takes one more weather draw, and hashes the new state. The battle
+tiers do not move.
+
+### The proof (tools/kingdom-economy.ts, "first winter")
+
+From the same start (seed `0x6b1d0001`), two scripted order logs:
+
+- **careful**: rally four followers at Cold Hearth, forage to a full pack,
+  march to Greyshaw, claim it, build a granary (standing by day 20, before the
+  first winter's day 30), sow rye, keep foraging. Grain never reaches zero, no
+  hungry day, no famine through day 60.
+- **careless**: rally everyone Cold Hearth will give, claim it, forage a
+  little, build nothing. The autumn's grain rots in heaps; famine by day ~40.
+
+The same holds on eight other seeds. Both logs replay to the same realm.
+
+### UI
+
+The resources bar (top bar), the economy panel of an owned holding's region
+card (tax, bread, building slots with **Build…**, fields with **Sow…** /
+**Harvest**), the build and sow menus (modal, trap Tab, hold the clock), and
+the king card's **Forage here**, **Rally followers** and **Claim …**. Feed lines
+for buildings, harvests, ripe and spoiled fields, farm weather, rallies, claims
+and famine. Scenarios `k3-exile-economy` and `k3-menu-esc-and-refusal`.
+Audit: `docs/audit/u2-economy-panels.md` (no open P0/P1; runtime pass pending
+a real browser).
+
+### What K3 does not do
+
+No armies, rations or wages (K4: the categories exist); no plunder (K5); no
+morale or unrest rules (K6: legitimacy and the famine signal are ready); no
+captains' economies (K8); building battle/defence/vision values are data only.
+Timber and coin have no storage cap.

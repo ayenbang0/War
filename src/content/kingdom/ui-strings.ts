@@ -89,7 +89,6 @@ export function etaWords(ticks: number, ticksPerDay: number): string {
 
 export const K = {
   title: "The Exile of Rimaros",
-  storesNone: "No stores yet: the king has no coin, grain or followers.",
   speedGroup: "Game speed",
   pause: "Pause",
   speeds: ["1×", "2×", "4×"] as const,
@@ -155,3 +154,170 @@ export const K = {
   begun: "The exile begins at Cold Hearth: the king, Brother Aldous, and nothing else.",
   resumed: (when: string) => "The chronicle resumes: " + when + ".",
 } as const;
+
+// -- K3: the economy --------------------------------------------------------------
+
+/**
+ * Why the sim refuses an economy order. The sim's own checker
+ * (src/sim/kingdom/economy.ts checkEconomyOrder) returns these, and the panels
+ * show the same words beside a button that is not on offer, so the reason the
+ * player reads is the reason the sim acts on.
+ */
+export const REFUSAL = {
+  noSuchFaction: "no such faction",
+  onlyKing: "only the king's party can do that",
+  onTheRoad: "the party is out on the road; it can only do that at a holding",
+  marching: "the party is marching; halt or arrive first",
+  alreadyForaging: "the party is already foraging",
+  alreadyRallying: "the party is already rallying",
+  rallyOwned: "followers are rallied only at unclaimed hamlets",
+  rallyNotHamlet: "followers are rallied only at hamlets",
+  rallySpent: "no one else here will leave home for an exile",
+  noSuchHolding: "there is no such holding",
+  alreadyYours: "it is already the king's",
+  heldByOther: "it is held by another, and taking it means a fight",
+  garrisoned: "it has a garrison",
+  claimFromThere: "the king must be there to claim it",
+  claimNeedsFollowers: (n: number) => "a holding needs hands: the king needs " + n + " followers to claim it",
+  noSuchRate: "there is no such tax rate",
+  notYours: "it is not the king's",
+  noSuchBuilding: "there is no such building",
+  wrongCountry: "it cannot be built in this country",
+  alreadyBuilt: "there is one here already",
+  needsFirst: (name: string) => "it is built over a " + name.toLowerCase() + ", and there is none standing here",
+  noSlot: "every building slot here is taken",
+  cannotAfford: "the stores cannot pay for it",
+  noSuchPlot: "there is no such field",
+  noSuchCrop: "there is no such crop",
+  orchardStands: "the orchard will fruit again next year; it needs no sowing",
+  plotInUse: "the field is already sown",
+  wrongSeason: (crop: string) => crop + " cannot be sown in this season",
+  notRipe: "it is not ripe",
+} as const;
+
+/** Stocks, as the resources bar and the panels name them. */
+export const STOCK_NAME = {
+  coin: "Coin", grain: "Grain", timber: "Timber", iron: "Iron", levy: "Followers", legitimacy: "Legitimacy",
+} as const;
+
+/** What each stock is, for the bar's tooltip and its accessible name. */
+export const STOCK_ABOUT = {
+  coin: "pennies, from taxes and trade; pays for building",
+  grain: "days of bread for one person; everyone eats",
+  timber: "cartloads, from foraging and woodcutters; for building",
+  iron: "bars from a forge; for arms and stone works",
+  levy: "people following the king's banner; they eat, carry and forage",
+  legitimacy: "how far the realm believes the king is its king",
+} as const;
+
+export const TAX_NAME = { none: "None", low: "Low", normal: "Normal", high: "High", harsh: "Harsh" } as const;
+
+export const STAGE_NAME = {
+  empty: "lying fallow", sown: "sown", growing: "growing", ripe: "ripe", harvested: "harvested", spoiled: "spoiled",
+} as const;
+
+export const FARM_EVENT_LINE = {
+  drought: "Drought: the fields parch.",
+  frost: "A hard frost on the fields.",
+  flood: "Floods in the low fields.",
+} as const;
+
+export const TASK_NAME = { none: "resting", forage: "foraging", rally: "rallying followers" } as const;
+
+function signed(n: number): string {
+  return n > 0 ? "+" + n : n < 0 ? "−" + -n : "±0";
+}
+
+/** Every word of the economy UI (K3), as K is for the map (K2). */
+export const E = {
+  resourcesGroup: "The king's stores",
+  sinceYesterday: (n: number) => signed(n) + " since yesterday",
+  deltaShort: (n: number) => signed(n),
+  noChange: "no change",
+  grainLasts: (days: number) => days >= 999 ? "nothing eats it" : "lasts about " + days + (days === 1 ? " day" : " days"),
+  grainStore: (n: number) => "stores hold " + n,
+  hungry: (days: number) => "Hungry: the party has gone short " + days + (days === 1 ? " day" : " days"),
+  famineAt: (p: { name: string; days: number }) => "Famine at " + p.name + " (" + p.days + (p.days === 1 ? " day" : " days") + ")",
+  // The economy panel.
+  economy: "The holding",
+  tax: "Tax",
+  taxGroup: "Tax rate",
+  taxLine: (p: { coin: string; growth: string }) => p.coin + " a day; people " + p.growth + " each season",
+  taxRealm: "Same rate everywhere",
+  taxRealmDone: (rate: string) => "Every holding of the king's is now taxed at " + rate + ".",
+  taxSetDone: (p: { name: string; rate: string }) => p.name + " is now taxed at " + p.rate + ".",
+  growth: (pct: number) => (pct > 0 ? "grow " + pct + "%" : pct < 0 ? "leave, " + -pct + "%" : "hold steady"),
+  bread: "Bread",
+  breadLine: (n: number) => n + " grain a day from the king's stores",
+  famineNow: (days: number) => "Famine: " + days + (days === 1 ? " day" : " days") + " short of bread",
+  buildings: "Buildings",
+  slotEmpty: "empty slot",
+  slotBuilding: (p: { name: string; days: number }) => p.name + ": being built, " + p.days + (p.days === 1 ? " day" : " days") + " left",
+  slotIdle: (name: string) => name + ": idle, upkeep unpaid",
+  slotStanding: (name: string) => name,
+  build: "Build…",
+  buildTitle: (name: string) => "Build at " + name,
+  buildIntro: "Each takes one slot. Costs are paid when the work starts.",
+  fields: "Fields",
+  field: (n: number) => "Field " + n,
+  plotLine: (p: { crop: string; stage: string; pct: number; health: number }) =>
+    p.crop + ", " + p.stage + (p.stage === "growing" ? " (" + p.pct + "%)" : "") + (p.health < 100 ? ", " + p.health + "% left after the weather" : ""),
+  plotEmpty: "lying fallow",
+  coinAmount: (n: number) => (Math.round(n * 10) / 10) + " coin",
+  sow: "Sow…",
+  sowField: (n: number) => "Sow field " + n,
+  harvestField: (n: number) => "Harvest field " + n,
+  buildAt: (name: string) => "Build at " + name,
+  seasons: (names: readonly string[]) => names.join(" or "),
+  unavailable: "not now",
+  menuGroup: "Choices",
+  sowTitle: (p: { field: string; name: string }) => "Sow " + p.field + " at " + p.name,
+  sowIntro: "What can be sown now. Seed is paid when it goes in.",
+  harvest: "Harvest",
+  harvestDone: (p: { name: string; gains: string }) => "Harvested at " + p.name + ": " + p.gains + ".",
+  cancel: "Cancel",
+  costLine: (s: string) => "Costs " + s,
+  free: "nothing",
+  daysLine: (p: { days: number; upkeep: string }) => p.days + (p.days === 1 ? " day" : " days") + " to build" + (p.upkeep ? "; upkeep " + p.upkeep + " a day" : ""),
+  yieldLine: (s: string) => "Yields about " + s,
+  seasonLine: (s: string) => "Sow in " + s,
+  notNow: (why: string) => "Not now: " + why + ".",
+  chosen: "Ordered.",
+  queued: (said: string) => said + " (Time is paused: it is done when time runs again.)",
+  // The king card.
+  kingTask: "Doing",
+  forage: "Forage here",
+  rally: "Rally followers",
+  claim: (name: string) => "Claim " + name,
+  forageDone: "The party forages where it stands, each day, until it moves.",
+  rallyDone: "The king speaks in the hamlet, each day, to win followers.",
+  claimDone: (name: string) => name + " is the king's.",
+  legitimacy: "Legitimacy",
+  // Feed lines.
+  built: (p: { building: string; name: string }) => p.building + " stands at " + p.name + ".",
+  buildingStarted: (p: { building: string; name: string; days: number }) =>
+    "Work begins on a " + p.building.toLowerCase() + " at " + p.name + ": " + p.days + (p.days === 1 ? " day." : " days."),
+  upkeepUnpaid: (p: { building: string; name: string }) => "The " + p.building.toLowerCase() + " at " + p.name + " stands idle: no coin for its upkeep.",
+  famineBegins: (name: string) => "Famine at " + name + ": there is not bread enough.",
+  famineEnds: (name: string) => "The famine at " + name + " is over.",
+  hungerBegins: "The king's party goes hungry.",
+  hungerEnds: "The king's party eats again.",
+  rallied: (p: { n: number; name: string }) => p.n + (p.n === 1 ? " follower joins" : " followers join") + " the king at " + p.name + ".",
+  rallySpent: (name: string) => "No one else at " + name + " will follow; the rally ends.",
+  claimed: (name: string) => "The king claims " + name + ".",
+  ripe: (p: { crop: string; name: string }) => p.crop + " is ripe at " + p.name + ": harvest it before it spoils.",
+  spoiled: (p: { crop: string; name: string; cause: string }) => p.crop + " at " + p.name + " is lost (" + p.cause + ").",
+  causeWeather: "the weather",
+  causeWinter: "killed by the winter",
+  causeOverripe: "left too long",
+} as const;
+
+/** "12 coin, 6 timber" -- a cost or a gain, in stock order, in words. */
+export function amountsLine(c: Readonly<Partial<Record<"coin" | "grain" | "timber" | "iron" | "levy", number>>>): string {
+  const parts: string[] = [];
+  for (const s of ["coin", "grain", "timber", "iron", "levy"] as const) {
+    const v = c[s];
+    if (v) parts.push(v + " " + (s === "levy" ? (v === 1 ? "follower" : "followers") : s));
+  }
+  return parts.length ? parts.join(", ") : E.free;
+}

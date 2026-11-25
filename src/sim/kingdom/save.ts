@@ -25,15 +25,24 @@ import type { RngState } from "../rng.ts";
 import { FACTIONS, type FactionId } from "../../content/kingdom/factions.ts";
 import { KINGDOM_MAPS } from "../../content/kingdom/map.ts";
 import { WEATHER_IDS, type WeatherId } from "../../content/kingdom/terrain.ts";
+import { BUILDING_IDS, type BuildingId } from "../../content/kingdom/buildings.ts";
+import { CROP_IDS, type CropId } from "../../content/kingdom/crops.ts";
+import { FACTION_IDS } from "../../content/kingdom/factions.ts";
+import {
+  DEFAULT_TAX, KING_START, KING_START_LEGITIMACY, LEDGER_CATEGORY_IDS, LEDGER_STOCK_IDS, LEGITIMACY_MAX, STOCK_IDS,
+  TAX_RATE_IDS, type StockId, type TaxRateId,
+} from "../../content/kingdom/economy.ts";
 import { KINGDOM_ORDER_KINDS, type KingdomOrder } from "./orders.ts";
-import { PLOT_STAGES, type Mover, type PlotStage } from "./state.ts";
+import { KING_TASKS, PLOT_STAGES, type KingTask, type Mover, type PlotStage } from "./state.ts";
+import type { LedgerDay } from "./ledger.ts";
+import { calendar } from "./clock.ts";
 import { roadBetween } from "./graph.ts";
 import { KINGDOM_STREAMS, KingdomWorld } from "./world.ts";
 
 export const KINGDOM_SAVE_FORMAT = "war.kingdom";
-export const KINGDOM_SAVE_VERSION = 1;
+export const KINGDOM_SAVE_VERSION = 2;
 
-export type SavedPlot = { id: number; crop: string | null; stage: PlotStage; progress: number };
+export type SavedPlot = { id: number; crop: string | null; stage: PlotStage; progress: number; days: number; health: number };
 export type SavedHolding = {
   id: number;
   key: string;
@@ -41,12 +50,32 @@ export type SavedHolding = {
   population: number;
   garrison: number[];
   buildings: (string | null)[];
+  works: number[];
+  idle: boolean[];
   plots: SavedPlot[];
+  tax: TaxRateId;
+  taxCarry: number;
+  doleCarry: number;
+  famine: number;
+};
+export type SavedEconomy = {
+  faction: FactionId;
+  stocks: Record<StockId, number>;
+  legitimacy: number;
+  hunger: number;
+  defaultTax: TaxRateId;
+  open: LedgerDay;
+  closed: LedgerDay | null;
 };
 
-export type KingdomSaveV1 = {
+/**
+ * Version 2 (K3): version 1 plus the economy -- every faction's stores and
+ * ledger pages, and the new fields on holdings (works, idle, tax and its
+ * remainders, famine), plots (days, health) and the king (task).
+ */
+export type KingdomSaveV2 = {
   format: typeof KINGDOM_SAVE_FORMAT;
-  version: 1;
+  version: 2;
   map: string;
   /** Fingerprint of the static map; see mapFingerprint. */
   mapFingerprint: string;
@@ -60,23 +89,68 @@ export type KingdomSaveV1 = {
     seqs: number[];
     pending: KingdomOrder[];
     holdings: SavedHolding[];
-    king: { id: number; companions: string[]; mover: Mover };
+    king: { id: number; companions: string[]; mover: Mover; task: KingTask; taskDays: number };
+    economy: SavedEconomy[];
   };
   log: KingdomOrder[];
 };
 
 /** The current save shape. */
-export type KingdomSave = KingdomSaveV1;
+export type KingdomSave = KingdomSaveV2;
 
 export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
 
+/** A ledger page with nothing on it yet, as a v1 save's economy begins. */
+function blankPage(day: number, start: number[]): LedgerDay {
+  return { day, start, flow: new Array<number>(LEDGER_STOCK_IDS.length * LEDGER_CATEGORY_IDS.length).fill(0) };
+}
+
+/**
+ * Version 1 (K1/K2) -> 2 (K3): the realm had no economy, so it gets the one
+ * a new exile starts with -- the king's few days of bread, nobody's coin --
+ * as of the save's own day. Every holding is taxed at the default rate, no
+ * building is under way, every plot is as K1 left it (empty, full health).
+ * The order log is kept as it was: replaying it now runs K3's economy from
+ * day one, which is the honest meaning of an old log under new rules.
+ */
+function migrate1to2(save: Record<string, unknown>): Record<string, unknown> {
+  const snap = { ...(save.snapshot as Record<string, unknown>) };
+  const now = typeof snap.now === "number" ? snap.now : 0;
+  const day = calendar(now).day;
+  const holdings = Array.isArray(snap.holdings) ? snap.holdings : [];
+  snap.holdings = holdings.map((v) => {
+    const h = { ...(v as Record<string, unknown>) };
+    const slots = Array.isArray(h.buildings) ? h.buildings.length : 0;
+    h.works = new Array<number>(slots).fill(0);
+    h.idle = new Array<boolean>(slots).fill(false);
+    h.tax = DEFAULT_TAX;
+    h.taxCarry = 0;
+    h.doleCarry = 0;
+    h.famine = 0;
+    h.plots = (Array.isArray(h.plots) ? h.plots : []).map((p) => ({ ...(p as Record<string, unknown>), days: 0, health: 100 }));
+    return h;
+  });
+  snap.king = { ...(snap.king as Record<string, unknown>), task: "none", taskDays: 0 };
+  snap.economy = FACTION_IDS.map((f) => {
+    const king = f === "king";
+    const stocks: Record<string, number> = {};
+    for (const st of STOCK_IDS) stocks[st] = king ? KING_START[st] : 0;
+    const legitimacy = king ? KING_START_LEGITIMACY : 0;
+    return {
+      faction: f, stocks, legitimacy, hunger: 0, defaultTax: DEFAULT_TAX,
+      open: blankPage(day, [...STOCK_IDS.map((st) => stocks[st]), legitimacy]), closed: null,
+    };
+  });
+  return { ...save, version: 2, snapshot: snap };
+}
+
 /**
  * Upgrades, one per version: MIGRATIONS[n] turns a version-n save into a
- * version-(n+1) save. Empty while there is only version 1. When K3 adds
- * stockpiles, bump KINGDOM_SAVE_VERSION to 2 and add MIGRATIONS[1] that fills
- * them with their starting values -- never edit an old save's meaning in place.
+ * version-(n+1) save. Never edit an old save's meaning in place: add a step.
  */
-export const MIGRATIONS: Readonly<Record<number, (save: Record<string, unknown>) => Record<string, unknown>>> = {};
+export const MIGRATIONS: Readonly<Record<number, (save: Record<string, unknown>) => Record<string, unknown>>> = {
+  1: migrate1to2,
+};
 
 /**
  * Bring a parsed save up to `current`, one step at a time.
@@ -142,9 +216,10 @@ function cloneMover(m: Mover): Mover {
 export function serialize(world: KingdomWorld): KingdomSave {
   const rng: Record<string, RngState> = {};
   for (const name of KINGDOM_STREAMS) rng[name] = world.rng[name].snapshot();
+  const page = (d: LedgerDay | null): LedgerDay | null => (d === null ? null : { day: d.day, start: [...d.start], flow: [...d.flow] });
   return {
     format: KINGDOM_SAVE_FORMAT,
-    version: 1,
+    version: 2,
     map: world.map.id,
     mapFingerprint: mapFingerprint(world),
     seed: world.seed,
@@ -163,9 +238,27 @@ export function serialize(world: KingdomWorld): KingdomSave {
         population: h.population,
         garrison: [...h.garrison],
         buildings: [...h.buildings],
-        plots: h.plots.map((p) => ({ id: p.id, crop: p.crop, stage: p.stage, progress: p.progress })),
+        works: [...h.works],
+        idle: [...h.idle],
+        plots: h.plots.map((p) => ({ id: p.id, crop: p.crop, stage: p.stage, progress: p.progress, days: p.days, health: p.health })),
+        tax: h.tax,
+        taxCarry: h.taxCarry,
+        doleCarry: h.doleCarry,
+        famine: h.famine,
       })),
-      king: { id: world.king.id, companions: [...world.king.companions], mover: cloneMover(world.king.mover) },
+      king: {
+        id: world.king.id, companions: [...world.king.companions], mover: cloneMover(world.king.mover),
+        task: world.king.task, taskDays: world.king.taskDays,
+      },
+      economy: world.economy.map((e, f) => ({
+        faction: FACTION_IDS[f],
+        stocks: { ...e.stocks },
+        legitimacy: e.legitimacy,
+        hunger: e.hunger,
+        defaultTax: e.defaultTax,
+        open: page(world.books[f].open) as LedgerDay,
+        closed: page(world.books[f].closed),
+      })),
     },
     log: world.log.map((o) => ({ ...o })),
   };
@@ -216,15 +309,51 @@ function readOrder(v: unknown, what: string): KingdomOrder {
   const tick = int(o.tick, what + ".tick");
   const player = int(o.player, what + ".player");
   const seq = int(o.seq, what + ".seq", 1);
+  // An order may name a holding or plot that does not exist -- the sim
+  // rejects it when applied, and must reject it identically after a load.
+  // An id from a content TABLE (rate, building, crop) must be known, though:
+  // its hash code is its index there.
   switch (kind) {
-    case "moveKing": {
-      // An order may name a holding that does not exist -- the sim rejects it
-      // when applied, and must reject it identically after a load.
+    case "moveKing":
       return { kind, to: int(o.to, what + ".to"), tick, player, seq };
-    }
+    case "haltKing":
+    case "forage":
+    case "rally":
+      return { kind, tick, player, seq };
+    case "claimHolding":
+      return { kind, holding: int(o.holding, what + ".holding"), tick, player, seq };
+    case "setTax":
+      return { kind, holding: int(o.holding, what + ".holding"), rate: oneOf(o.rate, TAX_RATE_IDS, what + ".rate"), tick, player, seq };
+    case "build":
+      return {
+        kind, holding: int(o.holding, what + ".holding"), building: oneOf(o.building, BUILDING_IDS, what + ".building"),
+        tick, player, seq,
+      };
+    case "sow":
+      return { kind, plot: int(o.plot, what + ".plot"), crop: oneOf(o.crop, CROP_IDS, what + ".crop"), tick, player, seq };
     default:
-      return { kind: "haltKing", tick, player, seq };
+      return { kind: "harvest", plot: int(o.plot, what + ".plot"), tick, player, seq };
   }
+}
+
+function oneOf<T extends string>(v: unknown, ids: readonly T[], what: string): T {
+  const s = str(v, what);
+  if (!(ids as readonly string[]).includes(s)) throw new Bad(what + " is unknown: " + s);
+  return s as T;
+}
+
+function bool(v: unknown, what: string): boolean {
+  if (typeof v !== "boolean") throw new Bad(what + " is not true or false");
+  return v;
+}
+
+function readPage(v: unknown, what: string): LedgerDay {
+  const o = obj(v, what);
+  const start = arr(o.start, what + ".start").map((n, i) => int(n, what + ".start[" + i + "]"));
+  const flow = arr(o.flow, what + ".flow").map((n, i) => int(n, what + ".flow[" + i + "]"));
+  if (start.length !== LEDGER_STOCK_IDS.length) throw new Bad(what + ".start has the wrong number of stocks");
+  if (flow.length !== LEDGER_STOCK_IDS.length * LEDGER_CATEGORY_IDS.length) throw new Bad(what + ".flow has the wrong shape");
+  return { day: int(o.day, what + ".day"), start, flow };
 }
 
 function readMover(v: unknown, what: string, world: KingdomWorld): Mover {
@@ -321,28 +450,69 @@ function build(save: Record<string, unknown>): KingdomWorld {
     if (owner !== null && !(owner in FACTIONS)) throw new Bad(what + " has unknown owner " + owner);
     const garrison = arr(h.garrison, what + ".garrison").map((g, j) => int(g, what + ".garrison[" + j + "]", 1));
     if (garrison.length > live.garrisonSlots) throw new Bad(what + " has more garrison than slots");
-    const buildings = arr(h.buildings, what + ".buildings").map((b, j) => strOrNull(b, what + ".buildings[" + j + "]"));
+    const buildings = arr(h.buildings, what + ".buildings").map((b, j) => {
+      const id = strOrNull(b, what + ".buildings[" + j + "]");
+      if (id !== null && !(BUILDING_IDS as readonly string[]).includes(id)) throw new Bad(what + " has unknown building " + id);
+      return id as BuildingId | null;
+    });
     if (buildings.length !== live.buildings.length) throw new Bad(what + " has the wrong number of building slots");
+    const works = arr(h.works, what + ".works").map((n, j) => int(n, what + ".works[" + j + "]"));
+    const idle = arr(h.idle, what + ".idle").map((b, j) => bool(b, what + ".idle[" + j + "]"));
+    if (works.length !== buildings.length || idle.length !== buildings.length) throw new Bad(what + "'s slot records do not match its slots");
+    if (works.some((w, j) => w > 0 && buildings[j] === null)) throw new Bad(what + " has work under way in an empty slot");
     const plots = arr(h.plots, what + ".plots").map((p, j) => {
       const pw = what + ".plots[" + j + "]";
       const po = obj(p, pw);
       const stage = str(po.stage, pw + ".stage");
       if (!(PLOT_STAGES as readonly string[]).includes(stage)) throw new Bad(pw + " has unknown stage " + stage);
+      const crop = strOrNull(po.crop, pw + ".crop");
+      if (crop !== null && !(CROP_IDS as readonly string[]).includes(crop)) throw new Bad(pw + " has unknown crop " + crop);
+      if (stage !== "empty" && crop === null) throw new Bad(pw + " is " + stage + " with no crop");
+      const health = int(po.health, pw + ".health");
+      if (health > 100) throw new Bad(pw + ".health is over 100");
+      const progress = num(po.progress, pw + ".progress");
+      if (!(progress >= 0 && progress <= 1)) throw new Bad(pw + ".progress is outside 0..1");
       return {
-        id: int(po.id, pw + ".id"), crop: strOrNull(po.crop, pw + ".crop"),
-        stage: stage as PlotStage, progress: num(po.progress, pw + ".progress"),
+        id: int(po.id, pw + ".id"), crop: crop as CropId | null,
+        stage: stage as PlotStage, progress, days: int(po.days, pw + ".days"), health,
       };
     });
     if (plots.length !== live.plots.length || plots.some((p, j) => p.id !== live.plots[j].id)) {
       throw new Bad(what + "'s field plots do not match the map");
     }
-    return { owner: owner as FactionId | null, population: num(h.population, what + ".population"), garrison, buildings, plots };
+    return {
+      owner: owner as FactionId | null, population: int(h.population, what + ".population"), garrison, buildings, works, idle, plots,
+      tax: oneOf(h.tax, TAX_RATE_IDS, what + ".tax"),
+      taxCarry: int(h.taxCarry, what + ".taxCarry"), doleCarry: int(h.doleCarry, what + ".doleCarry"),
+      famine: int(h.famine, what + ".famine"),
+    };
   });
 
   const k = obj(s.king, "snapshot.king");
   if (int(k.id, "snapshot.king.id") !== world.king.id) throw new Bad("snapshot.king.id does not match the map");
   const companions = arr(k.companions, "snapshot.king.companions").map((c, i) => str(c, "companion[" + i + "]"));
   const mover = readMover(k.mover, "snapshot.king.mover", world);
+  const task = oneOf(k.task, KING_TASKS, "snapshot.king.task");
+  const taskDays = int(k.taskDays, "snapshot.king.taskDays");
+
+  const eco = arr(s.economy, "snapshot.economy");
+  if (eco.length !== FACTION_IDS.length) throw new Bad("snapshot.economy has the wrong number of factions");
+  const economy = eco.map((v, i) => {
+    const what = "economy[" + i + "]";
+    const o = obj(v, what);
+    if (str(o.faction, what + ".faction") !== FACTION_IDS[i]) throw new Bad(what + " is not " + FACTION_IDS[i] + "'s");
+    const so = obj(o.stocks, what + ".stocks");
+    const stocks = {} as Record<StockId, number>;
+    for (const st of STOCK_IDS) stocks[st] = int(so[st], what + ".stocks." + st);
+    const legitimacy = int(o.legitimacy, what + ".legitimacy");
+    if (legitimacy > LEGITIMACY_MAX) throw new Bad(what + ".legitimacy is over " + LEGITIMACY_MAX);
+    return {
+      stocks, legitimacy, hunger: int(o.hunger, what + ".hunger"),
+      defaultTax: oneOf(o.defaultTax, TAX_RATE_IDS, what + ".defaultTax"),
+      open: readPage(o.open, what + ".open"),
+      closed: o.closed === null ? null : readPage(o.closed, what + ".closed"),
+    };
+  });
 
   const seqs = arr(s.seqs, "snapshot.seqs").map((n, i) => int(n, "snapshot.seqs[" + i + "]"));
   const pending = arr(s.pending, "snapshot.pending").map((o, i) => readOrder(o, "pending[" + i + "]"));
@@ -363,10 +533,27 @@ function build(save: Record<string, unknown>): KingdomWorld {
     live.population = h.population;
     live.garrison = h.garrison;
     live.buildings = h.buildings;
+    live.works = h.works;
+    live.idle = h.idle;
     live.plots = h.plots;
+    live.tax = h.tax;
+    live.taxCarry = h.taxCarry;
+    live.doleCarry = h.doleCarry;
+    live.famine = h.famine;
   });
   world.king.companions = companions;
   world.king.mover = mover;
+  world.king.task = task;
+  world.king.taskDays = taskDays;
+  economy.forEach((e, i) => {
+    const live = world.economy[i];
+    for (const st of STOCK_IDS) live.stocks[st] = e.stocks[st];
+    live.legitimacy = e.legitimacy;
+    live.hunger = e.hunger;
+    live.defaultTax = e.defaultTax;
+    world.books[i].open = e.open;
+    world.books[i].closed = e.closed;
+  });
   world.orders.restore(pending, seqs);
   world.log.push(...log);
   return world;

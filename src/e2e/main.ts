@@ -7,6 +7,7 @@ import { runFromQuery } from "./harness.ts";
 import "./scenarios-k0.ts";
 import "./scenarios-k2.ts";
 import "./scenarios-k2fix.ts";
+import "./scenarios-k3.ts";
 
 const out = document.getElementById("e2e-results") as HTMLElement;
 document.title = "E2E RUNNING";
