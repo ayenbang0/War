@@ -2,7 +2,7 @@
  * Layer 2, the battle: everything main.ts used to do for its one battle, as an
  * object with a beginning and an end.
  *
- * Built from a plain BattleConfig, so the setup screen, the lesson and (from
+ * Built from a plain BattleConfig, so the lesson, the test launch and (from
  * K5) the kingdom map's descent all launch it the same way. `start()` attaches
  * the listeners and the frame loop; `teardown()` cancels the loop, removes every
  * listener it added, clears the canvas and the HUD, and hands back what

@@ -5,32 +5,30 @@
  * This is what main.ts used to be as a linear script -- home, then campaign,
  * then menu, then exactly one World, then an after-action report whose every
  * button called `location.reload()`. Now each of those is a screen on the stack
- * and the battle is a layer with a start and a teardown, so:
+ * and each layer has a start and a teardown, so:
  *
- *  - "Fight again" pops back to the setup screen, still holding the setup;
- *  - "Continue the chronicle" pops back to the chronicle, which redraws with
- *    the new entry -- from memory if the browser refused storage (BS-01);
+ *  - the kingdom map, and the city below it, are entered from Home and leave
+ *    back to it, saving on the way;
  *  - leaving the lesson or a battle goes through a confirm on the stack;
  *  - a second battle is built without a reload, because the first one tore
  *    down every listener and loop it had.
  *
- * Layers (plan §B.1) are a typed union; only the battle is reachable for now.
+ * The game is the story only (the owner's amendment to PLAN.md): the old
+ * skirmish setup and the Marchwarden chronicle are gone as modes. A battle is
+ * reached from the lesson today, from the story when armies meet (K5), and in
+ * tests through `launch` with the "test" origin (test-hook.ts).
+ *
+ * Layers (plan §B.1) are a typed union: kingdom, city and battle.
  */
 
-import type { Chapter } from "../content/campaign.ts";
-import { levelById } from "../content/levels/index.ts";
 import { homeScreen, type ExileStatus, type HomeChoice } from "../ui/home.ts";
-import { chronicleScreen, noteBattle } from "../ui/campaign.ts";
-import { menuScreen, type MenuPreset } from "../ui/menu.ts";
 import { afterActionScreen } from "../ui/after-action.ts";
 import { confirmScreen, type ConfirmSpec } from "../ui/dialog.ts";
 import { ScreenStack, type FocusHost, type Focusable, type Screen } from "../ui/screen-stack.ts";
 import { KeyRouter, attachKeyRouter, classifyFocus } from "../ui/keys.ts";
-import type { Outcome } from "../sim/victory.ts";
 import { BattleLayer, PLAYER, type BattleEnv } from "./battle-layer.ts";
-import { battleFromSetup, lessonConfig, type BattleConfig } from "./battle-config.ts";
+import { lessonConfig, type BattleConfig } from "./battle-config.ts";
 import type { Layer } from "./layers.ts";
-import { MEMORY_ONLY_NOTICE, ProgressStore, type KeyValueStore } from "./progress-store.ts";
 import { KingdomWorld } from "../sim/kingdom/world.ts";
 import { K, dateLine } from "../content/kingdom/ui-strings.ts";
 import { KingdomLayer, type KingdomOpening } from "./kingdom-layer.ts";
@@ -41,23 +39,27 @@ import { clearKingdom, loadKingdom, type StorageLike } from "./kingdom-save.ts";
 export type AppEnv = {
   readonly win: Window;
   readonly doc: Document;
-  /** Where the chronicle is kept. Defaults to the window's localStorage. */
-  readonly storage?: () => KeyValueStore | null;
+  /** Where the realm is saved. Defaults to the window's localStorage. */
+  readonly storage?: () => StorageLike | null;
 };
 
-/** Where a battle was launched from, so its end knows where to go back to. */
+/**
+ * Where a battle was launched from, so its end knows where to go back to.
+ *
+ * "lesson" is Home's Learn the gestures (until K9 folds it into the story's
+ * opening). "test" is the e2e and ui-check launch (TestHook.launchBattle): a
+ * normal battle with no story behind it, which goes back to Home. K5 adds the
+ * story's own origin, which goes back to the kingdom map.
+ */
 export type BattleOrigin =
-  | { readonly kind: "skirmish"; readonly menu: Screen }
-  | { readonly kind: "campaign"; readonly chapter: Chapter; readonly chronicle: Screen; readonly menu: Screen }
-  | { readonly kind: "lesson" };
+  | { readonly kind: "lesson" }
+  | { readonly kind: "test" };
 
 /** The page elements the app draws into. All exist in index.html and e2e.html. */
 type Elements = {
   readonly canvas: HTMLCanvasElement;
   readonly ctx: CanvasRenderingContext2D;
   readonly home: HTMLElement;
-  readonly chronicle: HTMLElement;
-  readonly menu: HTMLElement;
   readonly report: HTMLElement;
   readonly dialog: HTMLElement;
   readonly hud: HTMLElement;
@@ -75,7 +77,7 @@ function lookUp(doc: Document): Elements {
   if (!ctx) throw new Error("2d canvas context unavailable");
   return {
     canvas, ctx,
-    home: byId("home"), chronicle: byId("chronicle"), menu: byId("menu"), report: byId("report"),
+    home: byId("home"), report: byId("report"),
     dialog: byId("dialog"), hud: byId("hud"), abilities: byId("abilities"),
   };
 }
@@ -88,8 +90,8 @@ function documentFocus(doc: Document): FocusHost {
       return a && a !== doc.body && a instanceof HTMLElement ? a : null;
     },
     focus: (t: Focusable | null) => {
-      // preventScroll: the setup screen's first focus is "Take the field" at
-      // the foot of a long panel, and the panel must still open at its top.
+      // preventScroll: a screen's first focus may sit below the fold of a
+      // long panel, and the panel must still open at its top.
       if (t instanceof HTMLElement) t.focus({ preventScroll: true });
       else if (t) t.focus();
       else if (doc.activeElement instanceof HTMLElement) doc.activeElement.blur();
@@ -104,7 +106,6 @@ function documentFocus(doc: Document): FocusHost {
 export class App {
   readonly stack: ScreenStack;
   readonly router: KeyRouter;
-  readonly store: ProgressStore;
   /** The live layer, or null while only menu screens are up. */
   live: Layer | null = null;
   /** Where the current battle came from. Null while no battle is live. */
@@ -156,7 +157,6 @@ export class App {
   constructor(env: AppEnv) {
     this.env = env;
     this.els = lookUp(env.doc);
-    this.store = new ProgressStore(env.storage ?? (() => env.win.localStorage));
     this.stack = new ScreenStack(documentFocus(env.doc));
     this.router = new KeyRouter(this.stack, classifyFocus);
     this.detachKeys = attachKeyRouter(this.router, env.win, env.doc);
@@ -176,9 +176,7 @@ export class App {
   // -- menus ------------------------------------------------------------------
 
   private choose(choice: HomeChoice): void {
-    if (choice === "play") this.openMenu(this.home, undefined, (menu) => ({ kind: "skirmish", menu }));
-    else if (choice === "campaign") this.openChronicle();
-    else if (choice === "exile") this.openExile();
+    if (choice === "exile") this.openExile();
     else if (choice === "exile-new") this.newExile();
     else this.launch(lessonConfig(), { kind: "lesson" });
   }
@@ -286,36 +284,6 @@ export class App {
     // The stack's change (this pop) hands the realm its input contexts.
   }
 
-  private openChronicle(): void {
-    const chronicle: Screen = chronicleScreen(this.els.chronicle, this.store, {
-      march: (chapter) => this.march(chapter, chronicle),
-      back: () => this.stack.popTo(this.home),
-      confirm: (spec) => this.confirm(spec, spec.onYes),
-    });
-    this.stack.push(chronicle);
-  }
-
-  /** A campaign chapter: the setup screen, opened on the chapter's ground and captain. */
-  private march(chapter: Chapter, chronicle: Screen): void {
-    const level = levelById(chapter.levelId);
-    if (!level) return;
-    const preset: MenuPreset = {
-      title: "Chapter " + chapter.number + ": " + chapter.title,
-      level,
-      commander: chapter.commander,
-      difficulty: chapter.difficulty,
-    };
-    this.openMenu(chronicle, preset, (menu) => ({ kind: "campaign", chapter, chronicle, menu }));
-  }
-
-  private openMenu(opener: Screen, preset: MenuPreset | undefined, origin: (menu: Screen) => BattleOrigin): void {
-    const menu: Screen = menuScreen(this.els.menu, {
-      start: (setup) => this.launch(battleFromSetup(setup), origin(menu)),
-      back: () => this.stack.popTo(opener),
-    }, preset);
-    this.stack.push(menu);
-  }
-
   /**
    * Push a confirm dialog. The safe choice pops it; the other runs `onYes`
    * first (which may itself move the stack) and then pops the dialog if it is
@@ -341,7 +309,7 @@ export class App {
       hud: this.els.hud, abilityRoot: this.els.abilities,
     };
     const battle = new BattleLayer(config, env, {
-      onOutcome: (o) => this.battleEnded(o),
+      onOutcome: () => this.battleEnded(),
       requestLeave: () => this.requestLeave(),
       simHeld: () => this.stack.pausesSim(),
     });
@@ -400,28 +368,18 @@ export class App {
     }
   }
 
-  private battleEnded(outcome: Outcome): void {
+  /** The battle has an outcome; the report reads it from the world. */
+  private battleEnded(): void {
     const origin = this.origin;
     const battle = this.live;
     if (!origin || !battle || battle.kind !== "battle") return;
-    let chronicle: { entry: string; note?: string } | undefined;
-    if (origin.kind === "campaign") {
-      // A campaign battle is written into the chronicle the moment it ends,
-      // win or lose, and the chronicler's entry heads the report.
-      const entry = noteBattle(this.store, origin.chapter.id, outcome.winner === PLAYER);
-      chronicle = {
-        entry,
-        note: this.store.status.kind === "memory-only" ? MEMORY_ONLY_NOTICE : undefined,
-      };
-    }
-    // AA-01: the label names where the button goes, and it goes there.
-    const again = origin.kind === "campaign" ? "Continue the chronicle"
-      : origin.kind === "lesson" ? "Leave the lesson"
-        : "Fight again";
+    // AA-01: the label names where the button goes, and it goes there. Both
+    // origins go back to the front screen (K5's story battles will go back to
+    // the kingdom map, and write the chronicle as they do).
+    const again = origin.kind === "lesson" ? "Leave the lesson" : "Back to the front screen";
     this.stack.push(afterActionScreen(this.els.report, battle.world, PLAYER, {
       again,
-      onAgain: () => this.returnFromBattle("finished"),
-      chronicle,
+      onAgain: () => this.returnFromBattle(),
     }));
   }
 
@@ -437,31 +395,16 @@ export class App {
       }
       : {
         title: "Leave the battle?",
-        body: (origin.kind === "campaign" ? "Nothing is written in the chronicle. " : "") +
-          "The battle is abandoned and you go back to the setup, with your army as you left it.",
+        body: "The battle is abandoned and you go back to the front screen.",
         yes: "Leave the field", no: "Stay",
       };
-    this.confirm(spec, () => this.returnFromBattle("left"));
+    this.confirm(spec, () => this.returnFromBattle());
   }
 
-  /**
-   * Back down the stack from a battle. A finished campaign battle goes back to
-   * the chronicle; everything else goes back to the screen that launched it.
-   */
-  private returnFromBattle(how: "finished" | "left"): void {
-    const origin = this.origin;
-    if (!origin) return;
-    switch (origin.kind) {
-      case "skirmish":
-        this.stack.popTo(origin.menu);
-        return;
-      case "campaign":
-        this.stack.popTo(how === "finished" ? origin.chronicle : origin.menu);
-        return;
-      case "lesson":
-        this.stack.popTo(this.home);
-        return;
-    }
+  /** Back down the stack from a battle, finished or left: to the front screen. */
+  private returnFromBattle(): void {
+    if (!this.origin) return;
+    this.stack.popTo(this.home);
   }
 }
 

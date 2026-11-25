@@ -6,25 +6,36 @@
  * before they knew what the game was. A title, a play button and a way into the
  * tutorial is what every game does, and for good reason.
  *
+ * The game is the story only now (the owner's amendment to PLAN.md): the old
+ * skirmish setup ("Play") and the Marchwarden chronicle ("Campaign") are gone,
+ * and The Exile of Rimaros is the play button. Learn the gestures stays beside
+ * it as the tutorial until K9 folds the lesson into the story's opening
+ * (docs/PROVISIONAL.md).
+ *
  * The figures shown here are COUNTED from the content, never typed in. A hand
  * written "ten unit types" becomes a lie the moment someone adds an eleventh,
- * and this screen is the first thing a player reads.
+ * and this screen is the first thing a player reads. Only what the story game
+ * really has is counted: nothing that belonged to the removed modes.
  */
 
 import { UNIT_TYPE_IDS } from "../content/unit-types.ts";
-import { LEVELS } from "../content/levels/index.ts";
-import { COMMANDER_IDS } from "../content/commanders.ts";
 import { DOCTRINE_IDS } from "../content/doctrines.ts";
 import { TERRAIN_INFO } from "../sim/terrain.ts";
 import { ABILITY_IDS } from "../content/abilities.ts";
-import { CHAPTERS } from "../content/campaign.ts";
+import { RIMAROS } from "../content/kingdom/map.ts";
+import { BUILDING_IDS } from "../content/kingdom/buildings.ts";
+import { CROP_IDS } from "../content/kingdom/crops.ts";
+import { FACTION_IDS } from "../content/kingdom/factions.ts";
+import { STORY_EVENTS } from "../content/story/events.ts";
+import { UPGRADE_IDS } from "../content/story/upgrades.ts";
+import { BATTLE_GESTURE_CLASSES, KINGDOM_PEN_CLASSES } from "../content/story/tutorial.ts";
 
 import { K } from "../content/kingdom/ui-strings.ts";
 
 import { domScreen, el } from "./dom-screen.ts";
 import type { Screen } from "./screen-stack.ts";
 
-export type HomeChoice = "play" | "tutorial" | "campaign" | "exile" | "exile-new";
+export type HomeChoice = "exile" | "exile-new" | "tutorial";
 
 /**
  * What the front screen says about the kingdom save (K2). Asked again every
@@ -37,11 +48,34 @@ export type ExileStatus =
   | { readonly kind: "unreadable" };
 
 /** One counted figure with its label. */
-function figure(value: string, label: string): HTMLElement {
+function figure(value: number, label: string): HTMLElement {
   const box = el("div", "home-figure");
-  box.appendChild(el("div", "home-figure-value", value));
+  box.appendChild(el("div", "home-figure-value", String(value)));
   box.appendChild(el("div", "home-figure-label", label));
   return box;
+}
+
+/**
+ * The counted figures, in the order they are shown. Exported so the checks
+ * can hold each one to its source.
+ */
+export function homeFigures(): readonly { readonly value: number; readonly label: string }[] {
+  return [
+    { value: RIMAROS.holdings.length, label: "holdings on the map" },
+    { value: RIMAROS.provinces.length, label: "provinces" },
+    { value: FACTION_IDS.length, label: "powers in the realm" },
+    { value: STORY_EVENTS.length, label: "things to find exploring" },
+    { value: UPGRADE_IDS.length, label: "special upgrades" },
+    { value: BUILDING_IDS.length, label: "buildings to raise" },
+    { value: CROP_IDS.length, label: "crops to sow" },
+    { value: UNIT_TYPE_IDS.length, label: "kinds of soldier" },
+    { value: DOCTRINE_IDS.length, label: "doctrines" },
+    { value: ABILITY_IDS.length, label: "reserves to call on" },
+    { value: Object.keys(TERRAIN_INFO).length, label: "kinds of ground" },
+    // Taps select; the rest are orders (content/story/tutorial.ts names them).
+    { value: KINGDOM_PEN_CLASSES.filter((c) => !c.startsWith("tap")).length, label: "orders you can draw on the map" },
+    { value: BATTLE_GESTURE_CLASSES.length, label: "orders you can draw in battle" },
+  ];
 }
 
 /**
@@ -76,63 +110,45 @@ export function homeScreen(
       const panel = el("div", "home-panel");
 
       panel.appendChild(el("h1", "home-title", "WAR"));
-      panel.appendChild(el("p", "home-tagline", "A slow, deliberate battle. You command by drawing."));
+      panel.appendChild(el("p", "home-tagline", "A fallen king, a realm to win back, and a pen to command it with."));
 
+      // The Exile is the game: it is the play button, and the first focus.
+      // "Begin a new exile" shows only while there is a realm to replace.
       const actions = el("div", "home-actions");
-      play = el("button", "home-play", "Play") as HTMLButtonElement;
-      const chronicle = el("button", "home-teach", "Campaign") as HTMLButtonElement;
-      const teach = el("button", "home-teach", "Learn the gestures") as HTMLButtonElement;
-      actions.append(play, chronicle, teach);
-      panel.appendChild(actions);
-
-      // The Exile (K2): its own row, under the battle game's, until K9 makes
-      // it the campaign (docs/PROVISIONAL.md K2.1 keeps Campaign till then).
-      const exileRow = el("div", "home-actions home-exile");
-      const exileGo = el("button", "home-teach", K.homeButton) as HTMLButtonElement;
+      play = el("button", "home-play", K.homeButton) as HTMLButtonElement;
       exileNew = el("button", "home-teach", K.homeNew);
-      exileRow.append(exileGo, exileNew);
-      panel.appendChild(exileRow);
+      const teach = el("button", "home-teach", "Learn the gestures") as HTMLButtonElement;
+      actions.append(play, exileNew, teach);
+      panel.appendChild(actions);
       exileLine = el("p", "home-note k-home-line");
       panel.appendChild(exileLine);
-      exileGo.onclick = () => choose("exile");
+      play.onclick = () => choose("exile");
       exileNew.onclick = () => choose("exile-new");
+      teach.onclick = () => choose("tutorial");
       showExile();
 
       panel.appendChild(el("p", "home-note",
-        "New here? Learn the gestures first -- every order in this game is a stroke of the pen."));
+        "New here? Learn the gestures first -- every order, on the map and on the field, is a stroke of the pen."));
 
       // -- what the game is ----------------------------------------------------
       panel.appendChild(el("h2", undefined, "How it plays"));
       const about = el("div", "home-about");
       for (const line of [
-        "You command with the left mouse button and nothing else. A loop gathers men into a company, a line marches them, a glyph drawn over them changes their formation, and a stroke onto an enemy commits them to a fight.",
-        "There is no build order and no economy. You bring the army you chose, and what happens to it is decided by ground, formation, nerve and where you are looking -- neither side sees the whole field.",
-        "Nerve decides battles more often than numbers. A company taken in the flank breaks; a company that keeps its ranks holds far longer than the same men in a crowd.",
+        "You are the fallen king of Rimaros, exiled to the farthest reach with one companion and nothing else: no holding, no army, no coin. Rally followers from the hamlets, claim an empty keep, and take the realm back a holding at a time.",
+        "The realm runs in real time, and you can pause it. Every holding of yours has a town to go down into, with lots to build on, fields to sow and people to carry through the winter. Beyond what you know lie ruins, shrines and old forts, and what you find there can turn the war.",
+        "You command with the left mouse button and nothing else. On the map a line marches an army and a ring sets it to guard; on the field a loop gathers men into a company, a line marches them, a glyph changes their formation, and a stroke onto an enemy commits them to a fight. There, nerve decides more often than numbers.",
       ]) about.appendChild(el("p", undefined, line));
       panel.appendChild(about);
 
       // -- counted figures -----------------------------------------------------
       panel.appendChild(el("h2", undefined, "In the box"));
       const grid = el("div", "home-figures");
-      grid.appendChild(figure(String(UNIT_TYPE_IDS.length), "kinds of soldier"));
-      grid.appendChild(figure(String(LEVELS.length), "battlefields"));
-      grid.appendChild(figure(String(Object.keys(TERRAIN_INFO).length), "kinds of ground"));
-      grid.appendChild(figure(String(COMMANDER_IDS.length), "enemy commanders"));
-      grid.appendChild(figure(String(DOCTRINE_IDS.length), "doctrines"));
-      grid.appendChild(figure("14", "orders you can draw"));
-      grid.appendChild(figure(String(ABILITY_IDS.length), "reserves to call on"));
-      grid.appendChild(figure(String(new Set(LEVELS.map((l) => l.victory.mode)).size), "ways to win"));
-      grid.appendChild(figure(String(CHAPTERS.length), "chapters of the chronicle"));
+      for (const f of homeFigures()) grid.appendChild(figure(f.value, f.label));
       panel.appendChild(grid);
 
-      // PC-01: middle/right drag now really pans, so this line is true again.
       panel.appendChild(el("p", "home-foot",
-        "Middle- or right-drag or WASD to move the map, wheel or up/down arrows to zoom, " +
-        "space to pause, Esc to cancel a stroke or leave, F2 for the debug read-out."));
-
-      play.onclick = () => choose("play");
-      chronicle.onclick = () => choose("campaign");
-      teach.onclick = () => choose("tutorial");
+        "Middle- or right-drag or WASD to move the map, the wheel to zoom, " +
+        "space to pause, Esc to cancel a stroke or leave."));
 
       root.appendChild(panel);
     },

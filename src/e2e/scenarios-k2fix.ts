@@ -13,10 +13,9 @@ function battleOf(t: Driver): BattleLayer {
   return b as BattleLayer;
 }
 
+/** The test launch (test-hook.ts launchBattle): no Play button is left to press. */
 async function launch(t: Driver): Promise<BattleLayer> {
-  t.clickButton("Play");
-  t.expect(t.hook.top() === "menu", "Play opens the setup screen");
-  t.clickButton("Take the field");
+  t.hook.launchBattle();
   await t.waitFor(() => t.hook.top() === "battle", "the battle screen");
   const b = battleOf(t);
   t.expect(b.world.deploying, "a battle opens on deployment");
@@ -134,7 +133,7 @@ function smallText(root: Element): string[] {
   return out;
 }
 
-scenario("k2-text-floor", "BS-06: body text on the home and setup screens is at least 16 px", async (t) => {
+scenario("k2-text-floor", "BS-06: body text on the home screen and over a battle is at least 16 px", async (t) => {
   t.boot();
   const probe = getComputedStyle(document.body).fontSize;
   if (!probe) {
@@ -145,10 +144,13 @@ scenario("k2-text-floor", "BS-06: body text on the home and setup screens is at 
   }
   const home = smallText(document.body);
   t.expect(home.length === 0, "home: no text under 16 px (" + home.slice(0, 4).join(", ") + ")");
-  t.clickButton("Play");
-  t.expect(t.hook.top() === "menu", "Play opens the setup screen");
+  // The setup screen this used to check is gone; a battle's HUD, ability bar
+  // and leave question are the DOM text a battle shows.
+  await launch(t);
   await t.frames(2);
-  const setup = smallText(document.body);
-  t.expect(setup.length === 0, "setup: no text under 16 px (" + setup.slice(0, 4).join(", ") + ")");
+  t.key("Escape");
+  await t.frames(2);
+  const field = smallText(document.body);
+  t.expect(field.length === 0, "battle: no text under 16 px (" + field.slice(0, 4).join(", ") + ")");
   t.expect(document.documentElement.lang === "en", "the page declares its language");
 });

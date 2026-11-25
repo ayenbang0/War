@@ -1,6 +1,6 @@
 /**
  * Headless checks for the K0 layer controller's logic: the screen stack, the
- * key router, the progress store, the battle configs and a BattleLayer's own
+ * key router, the battle configs, the test launch and a BattleLayer's own
  * life cycle, all under Node with plain-object fakes.
  *
  * What this cannot see is a real page: focus as the browser moves it, real
@@ -11,13 +11,12 @@
 
 import { ScreenStack, type FocusHost, type Focusable, type InputContext, type KeyInput, type KeyVerdict, type Screen, type ScreenKind } from "../src/ui/screen-stack.ts";
 import { ABILITY_SLOT_KEYS, ABILITY_SLOT_LABELS, KeyRouter, abilitySlotForCode, attachKeyRouter, classifyFocus, type FocusKind, type LayerKeys, type RawKey } from "../src/ui/keys.ts";
-import { ProgressStore, CHRONICLE_KEY, type KeyValueStore } from "../src/app/progress-store.ts";
+import type { StorageLike } from "../src/app/kingdom-save.ts";
 import { battleFromSetup, distinctAbilities, enemyArmy, lessonConfig, LESSON_DURATION_SECONDS } from "../src/app/battle-config.ts";
 import { ABILITY_IDS, type AbilityId } from "../src/content/abilities.ts";
 import { cost, validate } from "../src/content/army.ts";
 import { COMMANDERS } from "../src/content/commanders.ts";
 import { LEVELS } from "../src/content/levels/index.ts";
-import { recordBattle, FIRST_CHAPTER } from "../src/content/campaign.ts";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -296,52 +295,6 @@ begin("ability keys");
     !codes.some((c) => ["KeyW", "KeyA", "KeyS", "KeyD", "Space", "Period", "Enter", "Escape", "F2"].includes(c)));
 }
 
-// -- the progress store (BS-01) -----------------------------------------------
-
-begin("progress store");
-{
-  const mem = new Map<string, string>();
-  const ok: KeyValueStore = {
-    getItem: (k) => mem.get(k) ?? null,
-    setItem: (k, v) => { mem.set(k, v); },
-    removeItem: (k) => { mem.delete(k); },
-  };
-  const s1 = new ProgressStore(() => ok);
-  check("working storage is used", s1.status.kind === "saved");
-  s1.save(recordBattle(s1.load(), FIRST_CHAPTER, true));
-  const s2 = new ProgressStore(() => ok);
-  check("and what it saved reads back in a fresh session", s2.load().record.length === 1);
-  check("the probe key is not left behind", [...mem.keys()].join() === CHRONICLE_KEY);
-
-  const refused = new ProgressStore(() => { throw Object.assign(new Error("denied"), { name: "SecurityError" }); });
-  check("touching storage throwing is reported, not swallowed", refused.status.kind === "memory-only" &&
-    refused.status.reason === "SecurityError");
-  refused.save(recordBattle(refused.load(), FIRST_CHAPTER, false));
-  check("a refused store keeps the chronicle in memory", refused.load().record.length === 1 && refused.load().at !== FIRST_CHAPTER);
-
-  const writeRefused = new ProgressStore(() => ({
-    getItem: () => null,
-    setItem: () => { throw Object.assign(new Error("quota"), { name: "QuotaExceededError" }); },
-    removeItem: () => {},
-  }));
-  check("a store that reads but cannot write is caught by the probe", writeRefused.status.kind === "memory-only");
-
-  let allow = true;
-  const flaky = new ProgressStore(() => ({
-    getItem: () => null,
-    setItem: () => { if (!allow) throw new Error("full"); },
-    removeItem: () => {},
-  }));
-  allow = false;
-  flaky.save(recordBattle(flaky.load(), FIRST_CHAPTER, true));
-  check("a refusal part-way through a session switches to memory and says so",
-    flaky.status.kind === "memory-only" && flaky.load().record.length === 1);
-
-  const copy = s2.load();
-  copy.record.push({ chapter: FIRST_CHAPTER, won: false });
-  check("load hands out a copy", s2.load().record.length === 1);
-}
-
 // -- battle configs -------------------------------------------------------------
 
 begin("battle configs");
@@ -365,6 +318,18 @@ begin("battle configs");
   check("a config is plain data", JSON.parse(JSON.stringify({ a: cfg.armies, b: cfg.abilities })) !== null);
   check("keys address distinct abilities", distinctAbilities(["barrage", "barrage", "shield"]).join() === "barrage,shield");
   check("enemy armies differ by budget", enemyArmy(level, 60).squads.length < enemyArmy(level, 300).squads.length);
+
+  // The test launch's config (test-hook.ts): the old setup screen's defaults.
+  const { testBattleConfig } = await import("../src/app/test-hook.ts");
+  const plain = testBattleConfig();
+  check("a test battle defaults to the first field at its suggested difficulty",
+    plain.mode === "battle" && plain.level === LEVELS[0] && plain.difficulty === LEVELS[0].suggestedDifficulty);
+  check("with a legal suggested army", validate(plain.armies[0], LEVELS[0].budget).ok && plain.armies[0].squads.length > 0);
+  check("and the same every time", JSON.stringify(testBattleConfig().armies) === JSON.stringify(plain.armies) &&
+    testBattleConfig().commander === plain.commander);
+  const spec = testBattleConfig({ commander: "fox", difficulty: "colonel", squads: ["line"], abilities: ["shield"] });
+  check("a test battle takes what the spec names", spec.commander === COMMANDERS.fox && spec.difficulty === "colonel" &&
+    spec.armies[0].squads.join() === "line" && spec.abilities[0].join() === "shield");
 }
 
 // -- the battle layer's life cycle, on fakes ------------------------------------
@@ -542,7 +507,7 @@ begin("app: screens and layers");
   type El = InstanceType<typeof FakeElement>;
 
   const mem = new Map<string, string>();
-  const okStore: KeyValueStore = {
+  const okStore: StorageLike = {
     getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => { mem.set(k, v); }, removeItem: (k) => { mem.delete(k); },
   };
   const baseWin = win.listenerCount();
@@ -573,27 +538,20 @@ begin("app: screens and layers");
   const hud = doc.getElementById("hud") as El;
 
   check("the app opens on the front screen", hook.top() === "home" && (doc.getElementById("home") as El).shown);
-  check("with Play focused", focusedText() === "Play");
+  check("with the Exile focused", focusedText() === "The Exile of Rimaros");
+  check("the Exile is the primary button", btn("The Exile of Rimaros")?.className === "home-play");
+  check("story only: no Play button", btn("Play") === null);
+  check("story only: no Campaign button", btn("Campaign") === null);
+  check("story only: no setup or chronicle screen on the page", doc.getElementById("menu") === null && doc.getElementById("chronicle") === null);
   check("RT-01: the empty HUD is hidden behind the front screen", !hud.shown);
 
-  check("Play is a button on the front screen", click("Play"));
-  check("Play pushes the setup screen", hook.screens().join(">") === "home>menu");
-  check("which hides the front screen", !(doc.getElementById("home") as El).shown && (doc.getElementById("menu") as El).shown);
-  check("focus goes to Take the field", focusedText() === "Take the field");
-  press("Escape");
-  check("BS-02: Esc on the setup screen goes back", hook.top() === "home" && focusedText() === "Play");
-  click("Play");
-  check("the setup screen has a Back button that goes back", click("Back") && hook.top() === "home");
-
-  click("Play");
-  click("Fox");
-  click("Colonel");
-  const budget = doc.querySelector("#menu .budget")?.textContent ?? "";
-  check("Take the field launches the battle", click("Take the field") && hook.top() === "battle");
-  const first = hook.battle();
-  check("a battle layer is live", first !== null && first.phase === "live");
-  check("built from the setup chosen", first?.config.commander.name === "Fox" && first?.config.difficulty === "colonel");
-  if (!first) throw new Error("no battle");
+  // A battle, through the test launch (test-hook.ts): the second exception to
+  // "never drive". Everything after the launch is real keys and pointers.
+  const first = hook.launchBattle({ commander: "fox", difficulty: "colonel" });
+  check("the test launch puts a battle over Home", hook.top() === "battle" && hook.screens().join(">") === "home>battle");
+  check("a battle layer is live", first.phase === "live" && hook.battle() === first);
+  check("built from the spec given", first.config.commander.name === "Fox" && first.config.difficulty === "colonel");
+  check("which hides the front screen", !(doc.getElementById("home") as El).shown);
   win.runFrames(2);
   check("the HUD is filled and shown in battle", hud.shown && hud.textContent.includes("ENTER to begin"));
   press("Enter");
@@ -641,25 +599,21 @@ begin("app: screens and layers");
 
   hook.forceOutcome(0);
   win.runFrames(1);
-  check("the end of the battle opens the report", hook.top() === "after-action" && focusedText() === "Fight again");
+  check("the end of the battle opens the report", hook.top() === "after-action" && focusedText() === "Back to the front screen");
   check("the ability bar goes when the battle ends", !(doc.getElementById("abilities") as El).shown);
-  check("AA-01: Fight again goes back to the setup", click("Fight again") && hook.top() === "menu");
+  check("AA-01: its button goes back to the front screen", click("Back to the front screen") && hook.top() === "home");
   check("the first battle is torn down", hook.battle() === null && first.phase === "torn-down");
   check("its frame loop is gone", win.pendingFrames() === 0);
   check("and every window listener it added", win.listenerCount() === baseWin + 3, String(win.listenerCount() - baseWin));
-  check("the setup is as it was left", (doc.querySelector("#menu .budget")?.textContent ?? "") === budget &&
-    doc.querySelectorAll("#menu .choice.on").some((e) => e.textContent === "Fox"));
-  check("focus is back on Take the field", focusedText() === "Take the field");
+  check("focus is back on the Exile", focusedText() === "The Exile of Rimaros");
   check("RT-01: the HUD is empty and hidden again", hud.textContent === "" && !hud.shown);
 
-  check("a second battle launches without a reload", click("Take the field") && hook.top() === "battle");
-  const second = hook.battle();
-  check("it is a new battle, from the beginning", second !== null && second !== first && second.world.tick === 0);
+  const second = hook.launchBattle();
+  check("a second battle launches without a reload", hook.top() === "battle" && second !== first && second.world.tick === 0);
   press("Escape");
   check("leaving a battle asks first", hook.top() === "confirm");
-  check("Leave the field goes back to the setup", click("Leave the field") && hook.top() === "menu" && hook.battle() === null);
-  press("Escape");
-  check("and Esc from there to the front screen", hook.top() === "home");
+  check("Leave the field goes back to the front screen", click("Leave the field") && hook.top() === "home" && hook.battle() === null);
+  check("leaving left nothing on the stack", hook.screens().join(">") === "home");
 
   // The lesson.
   check("Learn the gestures launches the lesson", click("Learn the gestures") && hook.battle()?.config.mode === "lesson");
@@ -675,31 +629,6 @@ begin("app: screens and layers");
   check("BS-04: leaving the lesson asks first", hook.top() === "confirm");
   check("Leave the lesson returns to the front screen", click("Leave the lesson") && hook.top() === "home");
   check("with focus where it was", focusedText() === "Learn the gestures");
-
-  // The chronicle, with a battle written into it and a restart that asks.
-  click("Campaign");
-  check("Campaign opens the chronicle", hook.top() === "chronicle" && (doc.getElementById("chronicle") as El).shown);
-  check("no storage notice when storage works", doc.querySelectorAll("#chronicle .storage-notice").length === 0);
-  click("March");
-  click("Take the field");
-  press("Enter");
-  hook.forceOutcome(0);
-  win.runFrames(1);
-  check("a campaign battle's report continues the chronicle", btn("Continue the chronicle") !== null);
-  click("Continue the chronicle");
-  check("Continue the chronicle goes back to the chronicle", hook.top() === "chronicle" && hook.screens().join(">") === "home>chronicle");
-  check("which shows the battle written down", doc.querySelectorAll("#chronicle .chronicle-row").length === 1);
-  check("and saved it", (mem.get(CHRONICLE_KEY) ?? "").includes(FIRST_CHAPTER));
-  check("BS-03: Start the chronicle over asks first", click("Start the chronicle over") && hook.top() === "confirm" &&
-    focusedText() === "Keep it");
-  press("Escape");
-  check("Esc keeps it, focus back on the button",
-    doc.querySelectorAll("#chronicle .chronicle-row").length === 1 && focusedText() === "Start the chronicle over");
-  click("Start the chronicle over");
-  click("Start over");
-  check("confirming starts it over", hook.top() === "chronicle" && doc.querySelectorAll("#chronicle .chronicle-row").length === 0);
-  press("Escape");
-  check("Esc from the chronicle goes home", hook.top() === "home");
 
   // The kingdom map (K2): reached from Home, and torn down as cleanly as a battle.
   const docListeners = (): number => (doc as unknown as { count(): number }).count();
@@ -795,25 +724,14 @@ begin("app: screens and layers");
   check("dispose removes every window listener", win.listenerCount() === baseWin, String(win.listenerCount()));
   check("and every document listener", (doc as unknown as { count(): number }).count() === 0);
 
-  // BS-01: storage refused, all the way through a chapter.
+  // Storage refused: the front screen still opens on the Exile (the realm
+  // then runs in memory and says so; scenario k2-no-storage-says-so).
   app = startApp({
     win: win as unknown as Window, doc: doc as unknown as Document,
     storage: () => { throw Object.assign(new Error("refused"), { name: "SecurityError" }); },
   });
   hook = testHook(app);
-  click("Campaign");
-  check("BS-01: the chronicle says it cannot save", doc.querySelectorAll("#chronicle .storage-notice").length === 1);
-  click("March");
-  click("Take the field");
-  press("Enter");
-  hook.forceOutcome(0);
-  win.runFrames(1);
-  check("the report says it too", doc.querySelectorAll("#report .storage-notice").length === 1);
-  click("Continue the chronicle");
-  const heads = doc.querySelectorAll("#chronicle h2").map((h) => h.textContent);
-  check("BS-01: progress survives in memory past chapter 1",
-    doc.querySelectorAll("#chronicle .chronicle-row").length === 1 && !heads.some((h) => h.startsWith("Chapter 1:")),
-    heads.join(" / "));
+  check("with storage refused the app still opens on the Exile", hook.top() === "home" && focusedText() === "The Exile of Rimaros");
   app.dispose();
   check("the canvas has no listeners left", canvas.count() === 0);
 }

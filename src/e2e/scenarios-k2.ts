@@ -65,7 +65,7 @@ function kingdomText(t: Driver): string {
 scenario("k2-open-exile", "Home's Exile button opens the kingdom map over Home", async (t) => {
   t.boot();
   t.expect(t.hasButton(K.homeButton), "Home offers " + K.homeButton);
-  t.expect(t.hasButton("Campaign"), "Campaign is still on Home until K9");
+  t.expect(!t.hasButton("Campaign") && !t.hasButton("Play"), "the story is the game: no Campaign or Play beside it");
   t.expect(!t.hasButton(K.homeNew), "no 'Begin a new exile' before there is a realm to replace");
   const k = await openExile(t);
   t.expect(t.hook.screens().join(">") === "home>kingdom", "stack is home>kingdom (" + t.hook.screens().join(">") + ")");

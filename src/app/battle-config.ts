@@ -1,13 +1,15 @@
 /**
  * What a battle is built from: one plain, serialisable-shaped record.
  *
- * The setup screen, the tutorial and (from K5) the kingdom map all produce one
- * of these, and the BattleLayer takes nothing else. That is the seam the plan's
- * descent needs (§B.9): the kingdom map arrives with pre-built armies and no
- * point-buy, so nothing about building a battle may live inside the menu.
+ * The lesson, the test launch (app/test-hook.ts) and (from K5) the kingdom
+ * map all produce one of these, and the BattleLayer takes nothing else. That
+ * is the seam the plan's descent needs (§B.9): the kingdom map arrives with
+ * pre-built armies and no point-buy, so nothing about building a battle may
+ * live in any one screen. (The old skirmish setup screen that also produced
+ * these was removed with the sandbox modes: the game is the story only.)
  *
- * Pure: no DOM, no randomness. The setup screen draws its "Unknown" commander
- * before it hands the setup over, so a config fully determines its battle.
+ * Pure: no DOM, no randomness. Whoever builds a setup picks its commander
+ * before handing it over, so a config fully determines its battle.
  */
 
 import { cost, validate, type ArmyList } from "../content/army.ts";
@@ -17,7 +19,22 @@ import { COMMANDERS } from "../content/commanders.ts";
 import type { DifficultyId } from "../content/difficulty.ts";
 import { LEVELS, type LevelDef } from "../content/levels/index.ts";
 import type { UnitTypeId } from "../content/unit-types.ts";
-import type { Setup } from "../ui/menu.ts";
+
+/**
+ * A battle as a player would choose one: ground, how hard, an army and its
+ * reserve, and who leads the other side. The skirmish setup screen used to
+ * build these; now only the test launch does, and K5's descent will build its
+ * configs from the armies that met instead.
+ */
+export type Setup = {
+  readonly level: LevelDef;
+  readonly difficulty: DifficultyId;
+  readonly army: ArmyList;
+  /** Who the machine's army answers to. */
+  readonly commander: Captain;
+  /** Abilities bought; distinct ones are bound to keys 1..9, 0, - and = in that order. */
+  readonly abilities: readonly AbilityId[];
+};
 
 /**
  * A battle is either fought or taught. The lesson is not a battle with a flag
@@ -76,7 +93,7 @@ export function enemyArmy(level: LevelDef, budget: number): ArmyList {
   return { doctrine, squads };
 }
 
-/** A battle from the setup screen (skirmish or a campaign chapter). */
+/** A battle from a chosen setup (today the test launch only). */
 export function battleFromSetup(setup: Setup): BattleConfig {
   return {
     mode: "battle",

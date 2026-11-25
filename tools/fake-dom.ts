@@ -53,7 +53,6 @@ class Listeners {
 function hiddenByStylesheet(el: FakeElement): boolean {
   const cls = el.className.split(/\s+/);
   if (cls.includes("home") || cls.includes("after-action") || cls.includes("dialog") || cls.includes("ability-bar")) return true;
-  if (el.id === "menu") return true;
   // #hud:empty { display: none }
   if (el.id === "hud" && el.textContent === "") return true;
   return false;
@@ -351,7 +350,7 @@ export class FakeDocument extends Listeners {
    * canvas when none is up (the HUD and the ability strip let the pointer through).
    */
   elementFromPoint(): FakeElement | null {
-    for (const id of ["dialog", "home", "chronicle", "report", "menu"]) {
+    for (const id of ["dialog", "home", "report"]) {
       const e = this.getElementById(id);
       // An empty root has no area: a real pointer passes straight through it.
       if (e && e.shown && e.children.length > 0) return e;
@@ -367,7 +366,7 @@ export class FakeDocument extends Listeners {
 /** Build a page with index.html's elements and install it as the globals. */
 export function installFakeDom(): { win: FakeWindow; doc: FakeDocument } {
   const win = new FakeWindow();
-  const doc = new FakeDocument(win, ["stage", "home", "chronicle", "menu", "report", "hud", "abilities", "dialog"]);
+  const doc = new FakeDocument(win, ["stage", "home", "report", "hud", "abilities", "dialog"]);
   const g = globalThis as unknown as Record<string, unknown>;
   g.document = doc;
   g.window = win;

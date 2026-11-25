@@ -44,8 +44,8 @@ const ACTIVATES_BUTTON: ReadonlySet<string> = new Set(["Space", "Enter", "Numpad
  * Physical keys for ability slots 1..12, in slot order.
  *
  * The digit row gives ten (1..9 then 0, as on every keyboard); Minus and Equal
- * sit next to 0 and give the last two, since there are twelve abilities and the
- * setup screen does not cap how many distinct ones are bought. The numpad
+ * sit next to 0 and give the last two, since there are twelve abilities and
+ * nothing caps how many distinct ones an army carries. The numpad
  * mirrors the first ten.
  */
 export const ABILITY_SLOT_KEYS: readonly (readonly string[])[] = [

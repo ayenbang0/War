@@ -1,13 +1,20 @@
 /**
  * K0 scenarios: the layer controller, the screen stack and the key router, as
  * a player meets them. Every input is a real DOM event (see harness.ts).
+ *
+ * The game is the story only now: Home has no Play or Campaign button, so the
+ * battle scenarios start their battle with the test hook's `launchBattle` (the
+ * second documented exception to "never drive", test-hook.ts) and then drive
+ * it with real strokes and keys exactly as before.
  */
 
 import { UNIT_TYPES } from "../content/unit-types.ts";
-import { FIRST_CHAPTER, freshProgress, recordBattle } from "../content/campaign.ts";
-import { CHRONICLE_KEY } from "../app/progress-store.ts";
+import { ABILITY_IDS } from "../content/abilities.ts";
+import { K } from "../content/kingdom/ui-strings.ts";
+import { homeFigures } from "../ui/home.ts";
 import type { BattleLayer } from "../app/battle-layer.ts";
-import { memoryStorage, scenario, type Driver, type Pt } from "./harness.ts";
+import type { TestBattle } from "../app/test-hook.ts";
+import { scenario, type Driver, type Pt } from "./harness.ts";
 
 /** The live battle, or a failure. */
 function battleOf(t: Driver): BattleLayer {
@@ -20,11 +27,13 @@ function display(el: HTMLElement): string {
   return getComputedStyle(el).display;
 }
 
-/** Home -> Play -> Take the field with the suggested army. Leaves it deploying. */
-async function launchFromPlay(t: Driver): Promise<BattleLayer> {
-  t.clickButton("Play");
-  t.expect(t.hook.top() === "menu", "Play opens the setup screen (top: " + t.hook.top() + ")");
-  t.clickButton("Take the field");
+/**
+ * The test launch over Home, with the old setup screen's defaults unless the
+ * spec says otherwise. Leaves it deploying.
+ */
+async function launchFromPlay(t: Driver, spec?: TestBattle): Promise<BattleLayer> {
+  t.expect(t.hook.top() === "home", "the battle is launched from the front screen (top: " + t.hook.top() + ")");
+  t.hook.launchBattle(spec);
   await t.waitFor(() => t.hook.top() === "battle", "the battle screen");
   const b = battleOf(t);
   t.expect(b.world.deploying, "a battle opens on deployment");
@@ -78,10 +87,11 @@ function companyOnScreen(t: Driver, b: BattleLayer): { ids: number[]; min: Pt; m
   return { ids, min, max };
 }
 
-scenario("launch-battle", "Play with the suggested army launches a battle; Enter begins it", async (t) => {
+scenario("launch-battle", "the test launch puts a battle over Home, deploying; Enter begins it", async (t) => {
   t.boot();
   t.expect(t.hook.top() === "home", "the app opens on the front screen");
   const b = await launchFromPlay(t);
+  t.expect(t.hook.screens().join(">") === "home>battle", "the battle sits over Home (" + t.hook.screens().join(">") + ")");
   await t.waitFor(() => t.hudText().includes("ENTER to begin"), "the HUD to ask for Enter during deployment");
   t.expect(display(t.byId("hud")) !== "none", "the HUD shows during a battle");
   await begin(t, b);
@@ -137,40 +147,27 @@ scenario("pause-shows-paused", "Space pauses; the HUD says PAUSED; Space resumes
   t.expect(!t.hudText().includes("PAUSED"), "the PAUSED line goes when resumed");
 });
 
-scenario("second-battle-no-reload", "after-action Fight again returns to the setup as left; a second battle starts without reload", async (t) => {
+scenario("second-battle-no-reload", "the report goes back to Home; a second battle starts without reload", async (t) => {
   const marker = "e2e-" + Math.random();
   (window as unknown as { __e2eMarker?: string }).__e2eMarker = marker;
   t.boot();
-  t.clickButton("Play");
-  // Choices that leave the army legal: a doctrine re-prices the reserve and
-  // can put the suggested army over budget.
-  t.clickButton("Fox");
-  t.clickButton("Colonel");
-  const budget = document.querySelector("#menu .budget")?.textContent ?? "";
-  const chosen = Array.from(document.querySelectorAll("#menu .choice.on")).map((e) => e.textContent).join("|");
-  t.clickButton("Take the field");
-  await t.waitFor(() => t.hook.top() === "battle", "the first battle");
-  const first = battleOf(t);
-  t.expect(first.config.commander.name === "Fox" && first.config.difficulty === "colonel", "the battle is built from the setup chosen");
+  const first = await launchFromPlay(t, { commander: "fox", difficulty: "colonel" });
+  t.expect(first.config.commander.name === "Fox" && first.config.difficulty === "colonel", "the battle is built from the spec given");
   await begin(t, first);
   t.hook.forceOutcome(0);
   await t.waitFor(() => t.hook.top() === "after-action", "the after-action report");
-  t.expect(t.hasButton("Fight again"), "the report offers Fight again");
-  t.expect(document.activeElement?.textContent === "Fight again", "the report's button has focus");
+  t.expect(t.hasButton("Back to the front screen"), "AA-01: the report's button names where it goes");
+  t.expect(document.activeElement?.textContent === "Back to the front screen", "the report's button has focus");
   t.expect(t.hook.battle() === first, "the battle stays behind the report until the player moves on");
-  t.clickButton("Fight again");
-  await t.waitFor(() => t.hook.top() === "menu", "Fight again to return to the setup");
+  t.clickButton("Back to the front screen");
+  await t.waitFor(() => t.hook.top() === "home", "the button to return to Home");
+  t.expect(t.hook.screens().join(">") === "home", "nothing was left on the stack (" + t.hook.screens().join(">") + ")");
   t.expect(t.hook.battle() === null, "the first battle has been torn down");
   t.expect(first.phase === "torn-down", "its phase says so");
-  t.expect((document.querySelector("#menu .budget")?.textContent ?? "") === budget, "the army is as it was left");
-  t.expect(Array.from(document.querySelectorAll("#menu .choice.on")).map((e) => e.textContent).join("|") === chosen,
-    "the choices (Fox, Colonel) are as they were left");
-  t.expect(document.activeElement?.textContent === "Take the field", "focus is back on Take the field");
-  t.expect(display(t.byId("hud")) === "none", "RT-01: the empty HUD is hidden behind the setup");
+  t.expect(document.activeElement?.textContent === K.homeButton, "focus is back on " + K.homeButton);
+  t.expect(display(t.byId("hud")) === "none", "RT-01: the empty HUD is hidden behind Home");
   t.expect(display(t.byId("abilities")) === "none", "the ability bar went with the battle");
-  t.clickButton("Take the field");
-  await t.waitFor(() => t.hook.top() === "battle", "the second battle");
-  const second = battleOf(t);
+  const second = await launchFromPlay(t);
   t.expect(second !== first, "it is a new battle");
   t.expect(second.world.tick === 0 && second.world.deploying, "it starts from the beginning, deploying");
   const firstTick = first.world.tick;
@@ -219,126 +216,53 @@ scenario("tutorial-esc", "in the lesson Esc cancels a stroke first, then asks be
   t.expect(document.activeElement?.textContent === "Learn the gestures", "focus is back where the player left it");
 });
 
-scenario("storage-refused", "with storage refused the chronicle says so and keeps progress in memory", async (t) => {
-  t.boot({ storage: () => { throw new DOMException("storage refused by e2e", "SecurityError"); } });
-  t.expect(t.hook.storage().kind === "memory-only", "the store reports the refusal");
-  t.clickButton("Campaign");
-  t.expect(t.hook.top() === "chronicle", "Campaign opens the chronicle");
-  const notice = document.querySelector("#chronicle .storage-notice");
-  t.expect(t.visible(notice), "BS-01: the chronicle says progress cannot be saved");
-  t.clickButton("March");
-  t.expect(t.hook.top() === "menu", "March opens the chapter's setup");
-  t.clickButton("Take the field");
-  await t.waitFor(() => t.hook.top() === "battle", "the chapter's battle");
-  const b = battleOf(t);
-  await begin(t, b);
-  t.hook.forceOutcome(0);
-  await t.waitFor(() => t.hook.top() === "after-action", "the report");
-  t.expect(t.visible(document.querySelector("#report .storage-notice")), "the report repeats the notice");
-  t.clickButton("Continue the chronicle");
-  await t.waitFor(() => t.hook.top() === "chronicle", "Continue to return to the chronicle");
-  const rows = document.querySelectorAll("#chronicle .chronicle-row");
-  t.expect(rows.length === 1 && rows[0].classList.contains("won"), "the won battle is written down, from memory");
-  const heads = Array.from(document.querySelectorAll("#chronicle h2")).map((h) => h.textContent ?? "");
-  t.expect(!heads.some((h) => h.startsWith("Chapter 1:")), "the chronicle has moved past chapter 1 (" + heads.join(" / ") + ")");
+scenario("home-story-only", "Home offers the Exile first and the lesson, and no Play or Campaign", async (t) => {
+  t.boot();
+  t.expect(t.hook.top() === "home", "the app opens on the front screen");
+  t.expect(!t.hasButton("Play"), "there is no Play button (the skirmish setup is gone)");
+  t.expect(!t.hasButton("Campaign"), "there is no Campaign button (the old chronicle is gone)");
+  t.expect(document.getElementById("menu") === null && document.getElementById("chronicle") === null,
+    "the page has no setup or chronicle screen left");
+  const exile = t.button(K.homeButton);
+  t.expect(exile.classList.contains("home-play"), "the Exile is the primary button");
+  t.expect(document.activeElement === exile, "and has focus when the game opens (" + (document.activeElement?.textContent ?? "none") + ")");
+  const actions = Array.from(document.querySelectorAll<HTMLElement>("#home .home-actions button")).filter((b) => t.visible(b));
+  t.expect(actions[0] === exile, "it comes first in the row");
+  t.expect(t.hasButton("Learn the gestures"), "Learn the gestures is still offered");
+  const text = t.byId("home").textContent ?? "";
+  for (const stale of ["no economy", "the army you chose", "chronicle"]) {
+    t.expect(!text.includes(stale), "the copy no longer says \"" + stale + "\"");
+  }
+  t.clickButton("Learn the gestures");
+  await t.waitFor(() => t.hook.top() === "battle", "the lesson");
+  t.expect(t.hook.battle()?.config.mode === "lesson", "Learn the gestures launches the lesson");
 });
 
-scenario("storage-write-refused", "storage that reads but will not write is caught too", async (t) => {
-  t.boot({
-    storage: () => ({
-      getItem: () => null,
-      setItem: () => { throw new DOMException("full", "QuotaExceededError"); },
-      removeItem: () => {},
-    }),
+scenario("home-figures-counted", "every figure on Home is the count its content gives", async (t) => {
+  t.boot();
+  const shown = Array.from(document.querySelectorAll("#home .home-figure")).map((f) => ({
+    value: f.querySelector(".home-figure-value")?.textContent ?? "",
+    label: f.querySelector(".home-figure-label")?.textContent ?? "",
+  }));
+  const want = homeFigures();
+  t.expect(shown.length === want.length, "one box per counted figure (" + shown.length + " of " + want.length + ")");
+  want.forEach((f, i) => {
+    t.expect(shown[i]?.value === String(f.value) && shown[i]?.label === f.label,
+      "\"" + f.label + "\" shows " + f.value + " (shows " + (shown[i]?.value ?? "nothing") + ")");
   });
-  t.expect(t.hook.storage().kind === "memory-only", "a write refusal is detected up front");
-  t.clickButton("Campaign");
-  t.expect(t.visible(document.querySelector("#chronicle .storage-notice")), "and shown");
-});
-
-scenario("menu-back-esc", "Back and Esc leave the setup screen and the chronicle", async (t) => {
-  t.boot();
-  t.clickButton("Play");
-  t.expect(t.hook.top() === "menu", "the setup screen is up");
-  t.key("Escape");
-  t.expect(t.hook.top() === "home", "BS-02: Esc goes back from the setup screen");
-  t.expect(document.activeElement?.textContent === "Play", "focus returns to Play");
-  t.clickButton("Play");
-  t.clickButton("Back");
-  t.expect(t.hook.top() === "home", "BS-02: Back goes back from the setup screen");
-  t.clickButton("Campaign");
-  t.key("Escape");
-  t.expect(t.hook.top() === "home", "Esc goes back from the chronicle");
-  t.clickButton("Campaign");
-  t.clickButton("March");
-  t.key("Escape");
-  t.expect(t.hook.top() === "chronicle", "Esc from a chapter's setup goes back to the chronicle");
-  t.expect(t.hook.screens().join(">") === "home>chronicle", "nothing was left on the stack");
-});
-
-scenario("chronicle-restart-confirm", "Start the chronicle over asks first, focused on keeping it", async (t) => {
-  const seeded = JSON.stringify(recordBattle(freshProgress(), FIRST_CHAPTER, true));
-  const store = memoryStorage({ [CHRONICLE_KEY]: seeded });
-  t.boot({ storage: () => store });
-  t.clickButton("Campaign");
-  t.expect(document.querySelectorAll("#chronicle .chronicle-row").length === 1, "one battle is written down");
-  t.clickButton("Start the chronicle over");
-  t.expect(t.hook.top() === "confirm", "BS-03: it asks first");
-  t.expect(document.activeElement?.textContent === "Keep it", "focus starts on keeping it");
-  t.key("Escape");
-  t.expect(t.hook.top() === "chronicle", "Esc keeps it");
-  t.expect(document.querySelectorAll("#chronicle .chronicle-row").length === 1, "and the record is intact");
-  t.expect(document.activeElement?.textContent === "Start the chronicle over", "focus goes back to the button");
-  t.clickButton("Start the chronicle over");
-  t.clickButton("Keep it");
-  t.expect(document.querySelectorAll("#chronicle .chronicle-row").length === 1, "Keep it keeps it");
-  t.clickButton("Start the chronicle over");
-  t.clickButton("Start over");
-  t.expect(t.hook.top() === "chronicle", "confirming returns to the chronicle");
-  t.expect(document.querySelectorAll("#chronicle .chronicle-row").length === 0, "which starts again");
-  t.expect(store.getItem(CHRONICLE_KEY) !== seeded, "and the fresh chronicle is saved");
-});
-
-/**
- * On the setup screen, buy one of every ability with the store's own + buttons,
- * then pay for them by sending companies home with the roster's - buttons, the
- * way a player would. Returns how many distinct abilities ended up bought.
- */
-function buyEveryAbility(t: Driver): number {
-  const rosters = document.querySelectorAll("#menu .roster");
-  t.expect(rosters.length === 2, "the setup screen has a roster and a store");
-  const rowsOf = (r: Element): HTMLElement[] => Array.from(r.querySelectorAll<HTMLElement>(".unit"));
-  const count = (row: HTMLElement): number => Number(row.querySelector(".count")?.textContent ?? "0");
-  const minus = (row: HTMLElement): HTMLElement => row.querySelectorAll<HTMLElement>("button")[0];
-  const plus = (row: HTMLElement): HTMLElement => row.querySelectorAll<HTMLElement>("button")[1];
-  const start = t.button("Take the field");
-  const units = rowsOf(rosters[0]);
-  const store = rowsOf(rosters[1]);
-  for (const row of store) if (count(row) === 0) t.click(plus(row));
-  const squads = (): number => units.reduce((n, r) => n + count(r), 0);
-  for (const row of units.slice().reverse()) {
-    while (start.disabled && count(row) > 0 && squads() > 1) t.click(minus(row));
+  for (const gone of ["battlefields", "enemy commanders", "ways to win", "chapters of the chronicle"]) {
+    t.expect(!shown.some((f) => f.label === gone), "no figure for a removed mode: " + gone);
   }
-  // Should the whole store still not be affordable, give back the dearest
-  // last few until it is.
-  for (const row of store.slice().reverse()) {
-    if (!start.disabled) break;
-    while (start.disabled && count(row) > 0) t.click(minus(row));
-  }
-  t.expect(!start.disabled, "a legal army with the abilities bought (" +
-    (document.querySelector("#menu .problems")?.textContent ?? "") + ")");
-  return store.filter((r) => count(r) > 0).length;
-}
+});
 
-scenario("ability-keys-and-bar", "every bought ability has a slot on screen and a key; 0, - and = reach slots 10-12", async (t) => {
+scenario("ability-keys-and-bar", "every ability has a slot on screen and a key; 0, - and = reach slots 10-12", async (t) => {
   t.boot();
-  t.clickButton("Play");
-  const bought = buyEveryAbility(t);
-  t.note(bought + " distinct abilities bought");
-  t.expect(bought >= 10, "at least ten distinct abilities could be bought, got " + bought);
-  t.clickButton("Take the field");
-  await t.waitFor(() => t.hook.top() === "battle", "the battle");
-  const b = battleOf(t);
+  // One of every ability, on a small army: the bar's layout is the point
+  // here, not the budget, and the test launch does not hold it to one.
+  const b = await launchFromPlay(t, { squads: ["line", "line", "archer"], abilities: [...ABILITY_IDS] });
+  const bought = ABILITY_IDS.length;
+  t.note(bought + " distinct abilities");
+  t.expect(bought >= 10, "at least ten distinct abilities exist, got " + bought);
   const n = b.abilityKeys.length;
   t.expect(n === bought, "one key per distinct ability (" + n + ")");
   const slots = Array.from(document.querySelectorAll<HTMLElement>("#abilities .ability"));
@@ -426,17 +350,29 @@ scenario("overlay-blocks-input", "while a dialog is up the map takes no keys and
   t.expect(b.cam.x === x1, "PC-22: Ctrl+D is not a pan");
 });
 
-scenario("leave-battle-keeps-setup", "Esc then Leave the field returns to the setup as it was", async (t) => {
+scenario("leave-battle-returns-home", "Esc then Leave the field tears the battle down and returns to Home", async (t) => {
   t.boot();
-  t.clickButton("Play");
-  t.clickButton("Owl");
-  t.clickButton("Take the field");
-  await t.waitFor(() => t.hook.top() === "battle", "the battle");
-  const b = battleOf(t);
+  const b = await launchFromPlay(t, { commander: "owl" });
   t.key("Escape");
+  t.expect(t.hook.top() === "confirm", "Esc with nothing to cancel asks before leaving");
+  const body = document.querySelector("#dialog")?.textContent ?? "";
+  t.expect(body.includes("front screen"), "the question says where leaving goes (" + body + ")");
   t.clickButton("Leave the field");
-  await t.waitFor(() => t.hook.top() === "menu", "the setup screen");
-  t.expect(b.phase === "torn-down", "the battle was torn down");
-  const on = Array.from(document.querySelectorAll("#menu .choice.on")).map((e) => e.textContent);
-  t.expect(on.includes("Owl"), "the commander chosen is still chosen");
+  await t.waitFor(() => t.hook.top() === "home", "the front screen");
+  t.expect(b.phase === "torn-down" && t.hook.battle() === null, "the battle was torn down");
+  t.expect(t.hook.screens().join(">") === "home", "nothing was left on the stack");
+});
+
+scenario("lesson-report-home", "a lesson ended by a rout reports, and its button leaves to Home", async (t) => {
+  t.boot();
+  t.clickButton("Learn the gestures");
+  await t.waitFor(() => t.hook.top() === "battle", "the lesson");
+  const b = battleOf(t);
+  t.hook.forceOutcome(0);
+  await t.waitFor(() => t.hook.top() === "after-action", "the report");
+  t.expect(document.activeElement?.textContent === "Leave the lesson", "AA-01: the report's button names where it goes");
+  t.clickButton("Leave the lesson");
+  await t.waitFor(() => t.hook.top() === "home", "the front screen");
+  t.expect(b.phase === "torn-down", "the lesson was torn down");
+  t.expect(document.activeElement?.textContent === "Learn the gestures", "focus is back where the player left it");
 });

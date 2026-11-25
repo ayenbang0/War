@@ -19,12 +19,12 @@
  *  - Input goes ONLY through the driver's real events (pointer strokes on the
  *    canvas in screen coordinates, keys on the focused element, clicks).
  *  - State is READ through the TestHook (src/app/test-hook.ts).
- *  - Every scenario boots a fresh app and never touches the real chronicle:
+ *  - Every scenario boots a fresh app and never touches the real save:
  *    storage is an in-memory stand-in unless the scenario supplies its own.
  */
 
 import { startApp } from "../app/app.ts";
-import type { KeyValueStore } from "../app/progress-store.ts";
+import type { StorageLike } from "../app/kingdom-save.ts";
 import { testHook, type TestHook } from "../app/test-hook.ts";
 
 export type Pt = { readonly x: number; readonly y: number };
@@ -52,7 +52,7 @@ export function scenarios(): readonly Scenario[] {
 class Failure extends Error {}
 
 /** An in-memory stand-in for localStorage, fresh per boot. */
-export function memoryStorage(seed: Record<string, string> = {}): KeyValueStore {
+export function memoryStorage(seed: Record<string, string> = {}): StorageLike {
   const m = new Map(Object.entries(seed));
   return {
     getItem: (k) => m.get(k) ?? null,
@@ -103,7 +103,7 @@ export class Driver {
   }
 
   /** Boot a fresh app, disposing of the last one. */
-  boot(opts: { storage?: () => KeyValueStore | null } = {}): TestHook {
+  boot(opts: { storage?: () => StorageLike | null } = {}): TestHook {
     this.live();
     this.dispose();
     const fresh = memoryStorage();
