@@ -57,7 +57,8 @@ export type LedgerCategoryId =
   // K4: armies (src/sim/kingdom/armies.ts).
   | "provisions" | "disbanded" | "favours"
   // K6: the levers of a town's politics (src/sim/kingdom/morale.ts).
-  | "festivals" | "justice";
+  | "festivals" | "justice"
+  | "hiring";
 
 export type LedgerCategoryDef = {
   readonly id: LedgerCategoryId;
@@ -101,6 +102,8 @@ export const LEDGER_CATEGORIES: readonly LedgerCategoryDef[] = [
   // K6, appended (save v6 re-lays old ledger pages for the new width).
   { id: "festivals", dir: "sink", phase: "K6", label: "festivals" },
   { id: "justice", dir: "sink", phase: "K6", label: "the justices' fees" },
+  // K7, appended (save v7 re-lays old ledger pages for the new width).
+  { id: "hiring", dir: "sink", phase: "K7", label: "free companies' fees and bids" },
 ];
 
 /** Hash and save order of the categories. Append only. */

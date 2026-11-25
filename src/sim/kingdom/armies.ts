@@ -70,6 +70,9 @@ import { discover, holdingKnowledge, marchOptions, roadKnowledge, routeOptions, 
 import type { KingdomWorld } from "./world.ts";
 import { DESCENT_REFUSAL } from "../../content/kingdom/descent-strings.ts";
 import { walledHostile } from "./descent.ts";
+import { MERCENARIES } from "../../content/kingdom/mercenaries.ts";
+import { MERC_REFUSAL } from "../../content/kingdom/mercenary-strings.ts";
+import { companyArmyGone, dismissCompany } from "./mercenaries.ts";
 
 /** The army orders. */
 export type ArmyOrderBody = Extract<KingdomOrderBody, {
@@ -122,6 +125,8 @@ export function armyFitness(a: Army): number {
 
 /** Coin a day the army's trained squads are owed. */
 export function armyWage(a: Army): number {
+  // K7: a free company is paid by its contract, not by the head.
+  if (a.company > 0) return MERCENARIES[a.company - 1].wage;
   let n = 0;
   for (const s of a.squads) n += dailyWage(UNIT_TYPES[s.unit].cost, s.levy);
   return n;
@@ -268,6 +273,7 @@ function newArmy(world: KingdomWorld, owner: number, mover: Mover, doctrine: Doc
   const a: Army = {
     id: world.nextId++,
     owner,
+    company: 0,
     name: armyName(lowestFreeOrdinal(world, owner)),
     doctrine,
     squads: [],
@@ -351,6 +357,8 @@ export function removeArmy(world: KingdomWorld, a: Army, reason: ArmyGoneReason 
     if (b.target === a.id) { clearTarget(b); b.mover.route = []; }
   }
   if (reason) world.events.push({ kind: "armyGone", army: a.id, owner: a.owner, name: a.name, reason });
+  // K7: a free company destroyed in the king's service is broken for good.
+  if (a.company > 0) companyArmyGone(world, a);
 }
 
 /** Do two armies stand close enough to meet (a merge, an intercept, K5's contact)? */
@@ -484,6 +492,7 @@ export function checkArmyOrder(world: KingdomWorld, body: ArmyOrderBody, player:
       const got = ownArmy(world, body.army, player);
       if (typeof got === "string") return got;
       if (standsIn(got.mover) !== h.id) return ARMY_REFUSAL.armyNotThere;
+      if (got.company > 0) return MERC_REFUSAL.companyArmy;
       if (got.squads.length >= MAX_SQUADS) return ARMY_REFUSAL.tooManySquads(MAX_SQUADS);
       let n = 0;
       for (const s of got.squads) if (s.unit === body.unit) n++;
@@ -535,9 +544,12 @@ export function checkArmyOrder(world: KingdomWorld, body: ArmyOrderBody, player:
       const into = ownArmy(world, body.into, player);
       if (typeof into === "string") return into;
       if (into.id === a.id) return ARMY_REFUSAL.sameArmy;
+      // K7: a free company keeps its own ranks, and the king's men do not join it.
+      if (a.company > 0 || into.company > 0) return MERC_REFUSAL.companyArmy;
       return mergeRefusal(a, into);
     }
     case "split": {
+      if (a.company > 0) return MERC_REFUSAL.companyArmy;
       const ids = new Set(body.squads);
       if (ids.size === 0 || ids.size !== body.squads.length || ids.size >= a.squads.length) {
         return a.squads.length < 2 ? ARMY_REFUSAL.splitOne : ARMY_REFUSAL.splitNone;
@@ -718,6 +730,15 @@ export function applyArmyOrder(world: KingdomWorld, order: KingdomOrder & ArmyOr
       return null;
     case "disband": {
       const at = world.holding(standsIn(a.mover));
+      // K7: a free company is not the king's men: dismissed, it rides away whole.
+      if (a.company > 0) {
+        dismissCompany(world, a);
+        a.squads = [];
+        a.supply = 0;
+        removeArmy(world, a, "disbanded");
+        updateSight(world, f);
+        return null;
+      }
       // At home the men rejoin the followers and the grain the stores; out
       // in the country they simply go home, and the grain with them.
       if (at && at.owner === FACTION_IDS[f] && economyActive(f)) {
@@ -912,7 +933,8 @@ export function runArmyDay(world: KingdomWorld): void {
       sickened = fallSick(a, sn);
     }
     // Wages owed past the grace: trained men leave. The levy serve for bread.
-    if (a.unpaid > UNPAID_GRACE_DAYS) {
+    // (K7: a free company does not trickle away; its loyalty decides, all at once -- mercenaries.ts.)
+    if (a.unpaid > UNPAID_GRACE_DAYS && a.company === 0) {
       let trained = 0;
       for (const s of a.squads) if (!s.levy) trained += s.men;
       const [n, c] = perMille(trained, UNPAID_DESERT_PERMILLE, a.desertCarry);
@@ -939,7 +961,8 @@ export function runArmyDay(world: KingdomWorld): void {
           healed += n;
         }
       }
-      if (home && hasBarracks(at)) {
+      // K7: a free company has no replacement pipeline (§B.7).
+      if (home && hasBarracks(at) && a.company === 0) {
         for (const s of a.squads) {
           const gap = UNIT_TYPES[s.unit].soldiers - s.men;
           if (gap <= 0 || s.men === 0) continue;

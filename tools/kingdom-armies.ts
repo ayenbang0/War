@@ -585,7 +585,7 @@ section("migration v3 -> v4");
         if (page.flow[s * nc + c] !== want) kept = false;
       }
     }
-    check("ledger pages re-laid for K4's three categories (and K6's two), every old value kept", kept && nc === oldNC + 5);
+    check("ledger pages re-laid for K4's three categories (and K6's two, K7's one), every old value kept", kept && nc === oldNC + 6);
     // (Its log is kept, not re-run: K4's rules -- the followers leave a
     // hungry camp -- would play an old log out differently. The snapshot is
     // the realm; the log is its history.)

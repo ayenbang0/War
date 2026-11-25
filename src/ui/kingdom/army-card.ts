@@ -26,6 +26,9 @@ import { DOCTRINES, DOCTRINE_IDS } from "../../content/doctrines.ts";
 import { ABILITIES, ABILITY_IDS } from "../../content/abilities.ts";
 import { E, etaWords } from "../../content/kingdom/ui-strings.ts";
 import { AC } from "../../content/kingdom/army-strings.ts";
+import { MERCENARIES, RENEW_WINDOW } from "../../content/kingdom/mercenaries.ts";
+import { CONTRACT, REPUTATION_WORD } from "../../content/kingdom/mercenary-strings.ts";
+import { companyOf, hireFee, renewFee } from "../../sim/kingdom/mercenaries.ts";
 import {
   abilityPrice, armiesOf, armyById, armyFitness, armyFullMen, armyMen, armyVisible, armyWage, planArmyRoute, standsIn,
   supplyDays,
@@ -56,6 +59,8 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
   let shownSquads = "";
   let last: HTMLElement | null = null;
   const buttons: { el: HTMLElement; order: () => KingdomOrderBody | null; show: () => boolean }[] = [];
+  /** Buttons whose words carry a number that moves (K7: the bid to match). */
+  const labels: (() => void)[] = [];
 
   const offer = (b: HTMLElement, on: boolean): void => {
     const want = on ? "inline-block" : "none";
@@ -84,6 +89,12 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
       for (const b of buttons) offer(b.el, false);
       return;
     }
+    if (own && a.owner !== KING_PLAYER) {
+      // K7: a company that turned its coat while the card was open: no longer the king's to command.
+      if (heading) setText(heading, CONTRACT.turned(a.name));
+      for (const b of buttons) offer(b.el, false);
+      return;
+    }
     if (heading) setText(heading, own ? AC.title(a.name) : AC.hostileTitle(a.name, FACTIONS[FACTION_IDS[a.owner]].name));
     const k = world.king;
     setText(els.led, k.army === a.id ? AC.ledByKing(k.name) : a.captain || AC.noCaptain);
@@ -105,6 +116,14 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
       setText(els.morale, AC.moraleLine({ morale: a.morale, rest: armyRestMorale(world, a), falling: a.hunger > 0 || a.unpaid > 0 }));
       setText(els.doing, doingLine(a));
       setText(els.abilities, a.abilities.length ? a.abilities.map((x) => ABILITIES[x].name).join(", ") : AC.abilitiesNone);
+      // K7: a free company's contract, loyalty and the crown's bid.
+      const c = companyOf(world, a);
+      if (c && els.contract && els.loyalty && els.bid) {
+        const def = MERCENARIES[c.index];
+        setText(els.contract, CONTRACT.contract(c.days));
+        setText(els.loyalty, CONTRACT.loyalty(c.loyalty, REPUTATION_WORD[def.reputation]));
+        setText(els.bid, c.bid > 0 ? CONTRACT.bid({ bid: c.bid, left: c.bidDays }) : CONTRACT.noBid);
+      }
     }
     const sig = a.squads.map((s) => s.id + ":" + s.men + ":" + s.wounded).join(",");
     if (squadList && sig !== shownSquads) {
@@ -115,6 +134,7 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
         squadList.appendChild(make(doc, "li", undefined, AC.squadRow({ name: u.name, men: s.men, full: u.soldiers, wounded: s.wounded, levy: s.levy })));
       }
     }
+    for (const l of labels) l();
     let reason = "";
     for (const b of buttons) {
       const on = b.show();
@@ -174,7 +194,8 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
   const screen = cardFrame("army-card", root, doc, hooks, (body, actions) => {
     heading = root.querySelector(".k-card-title") as HTMLElement;
     const a0 = army() as Army;
-    body.appendChild(make(doc, "p", "k-sub", own ? capital(FACTIONS.king.name) + "'s army" : AC.hostileNote));
+    const isCompany = a0.company > 0;
+    body.appendChild(make(doc, "p", "k-sub", own ? (isCompany ? CONTRACT.sub : capital(FACTIONS.king.name) + "'s army") : AC.hostileNote));
     const dl = make(doc, "dl", "k-rows");
     els.led = row(doc, dl, AC.ledBy);
     els.doctrine = row(doc, dl, AC.doctrine);
@@ -198,6 +219,11 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
       els.morale = row(doc, dl, AC.morale);
       els.doing = row(doc, dl, AC.doing);
       els.abilities = row(doc, dl, AC.abilities);
+      if (isCompany) {
+        els.contract = row(doc, dl, CONTRACT.heading);
+        els.loyalty = row(doc, dl, CONTRACT.loyaltyLabel);
+        els.bid = row(doc, dl, CONTRACT.bidLabel);
+      }
     }
     body.appendChild(dl);
     body.appendChild(make(doc, "h3", "k-section", AC.squads));
@@ -240,19 +266,30 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
       },
     }), standing);
     add(actions, AC.recover, () => ({ kind: "recover", army: id }), () => "The " + name() + " rests to mend.", standing);
+    const ownRanks = (): boolean => !isCompany;
+    if (isCompany) {
+      const ci = a0.company - 1;
+      add(actions, CONTRACT.renew(renewFee(ci)), () => ({ kind: "renewContract", company: ci }), () => CONTRACT.renewSaid(name()),
+        () => { const c = world.companies[ci]; return c.state === "hired" && c.army === id && c.days <= RENEW_WINDOW; });
+      const match = add(actions, CONTRACT.match(0), () => ({ kind: "matchBid", company: ci }), () => CONTRACT.matchSaid(name()),
+        () => { const c = world.companies[ci]; return c.state === "hired" && c.army === id && c.bid > 0; });
+      // The bid's price is on the button; it is known only once the crown bids.
+      const label = (): void => setText(match, CONTRACT.match(world.companies[ci].bid));
+      labels.push(label);
+    }
     add(actions, AC.split, () => {
       const a = army();
       if (!a || a.squads.length < 2) return { kind: "split", army: id, squads: [] };
       const n = Math.floor(a.squads.length / 2);
       return { kind: "split", army: id, squads: a.squads.slice(a.squads.length - n).map((s) => s.id) };
-    }, () => "Squads part from the " + name() + ".");
+    }, () => "Squads part from the " + name() + ".", ownRanks);
     pick(actions, AC.merge, () => ({
       title: AC.pickMerge(name()), intro: "",
       options: () => armiesOf(world, KING_PLAYER).filter((b) => b.id !== id).map((b): Option => {
         const order: KingdomOrderBody = { kind: "merge", army: id, into: b.id };
         return { key: "merge-" + b.id, label: b.name, lines: [strengthLine(b)], why: world.check(order), order, said: AC.mergedNews({ army: name(), into: b.name }) };
       }),
-    }), () => armiesOf(world, KING_PLAYER).length > 1);
+    }), () => ownRanks() && armiesOf(world, KING_PLAYER).length > 1);
     pick(actions, AC.intercept, () => ({
       title: AC.pickIntercept(name()), intro: "",
       options: () => world.armies.filter((b) => b.owner !== KING_PLAYER && armyVisible(world, KING_PLAYER, b)).map((b): Option => {
@@ -278,12 +315,21 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
     }));
     add(actions, AC.joinKing, () => ({ kind: "kingJoin", army: id }), () => "The king rides with the " + name() + ".", () => world.king.army !== id);
     add(actions, AC.leaveKing, () => ({ kind: "kingJoin", army: 0 }), () => "The king rides alone.", () => world.king.army === id);
-    pick(actions, AC.disband, () => {
+    pick(actions, isCompany ? CONTRACT.dismiss : AC.disband, () => {
       const a = army();
       const at = a ? world.holding(standsIn(a.mover)) : undefined;
       const home = !!at && at.owner === "king";
       const men = a ? armyMen(a) : 0;
       const order: KingdomOrderBody = { kind: "disband", army: id };
+      if (isCompany) {
+        return {
+          title: CONTRACT.dismissTitle(name()),
+          intro: CONTRACT.dismissIntro({ name: name(), fee: hireFee(a0.company - 1) }),
+          options: () => [{ key: "disband", label: CONTRACT.dismissYes, lines: [], why: world.check(order), order, said: CONTRACT.dismissSaid(name()) }],
+          cancel: CONTRACT.dismissKeep,
+          safe: true,
+        };
+      }
       return {
         title: AC.disbandTitle(name()),
         intro: home ? AC.disbandHome({ men, grain: a?.supply ?? 0 }) : AC.disbandAway(men),

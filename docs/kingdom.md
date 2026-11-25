@@ -1031,3 +1031,101 @@ exactly its row, and nothing else K6 owns moves but what the row declares
 (its coin, its grain). Then the levers as orders, the thresholds, army
 morale and desertion, the battle's starting morale both ways, save v6 and
 the v5 migration, and the ledger balancing with festivals and justices on it.
+
+## K7 — mercenaries
+
+Free companies (PLAN.md §B.7): the tavern as their source, the contract,
+price and loyalty, the crown's poaching, and betrayal. The companies
+themselves are the story's table (`src/content/story/mercenaries.ts`, seven
+of them); K7 writes the rules of their life with the king. Every number is
+provisional (docs/PROVISIONAL.md K7.1–K7.12).
+
+```
+waiting -> offered (a king's tavern, 20 days) -> hired -> renewed | expired | deserted | defected | poached | dismissed | broken
+             \-> moved on (away 30 days) -> waiting
+```
+
+### Files
+
+| File | What |
+|---|---|
+| `src/content/kingdom/mercenaries.ts` | the lifecycle's rules: offer and absence days, the act gate, renewal window and fee, loyalty's daily moves, how each reputation leaves, poaching, the bloody company's unrest; `validateMercenaryRules` |
+| `src/content/kingdom/mercenary-strings.ts` | refusals (`MERC_REFUSAL`), the market (`MARKET`), the army card (`CONTRACT`), the feed (`MERC_FEED`) |
+| `src/sim/kingdom/mercenaries.ts` | `runMercenaryDay`, the three orders (`hireCompany`, `renewContract`, `matchBid`), dismissal, betrayal (`turnCoat`), the queries the UI reads |
+| `src/ui/kingdom/mercenary-menu.ts` | the market: a choice menu from the tavern's lot |
+| `tools/kingdom-mercenaries.ts` | the K7 suite and the proof (in `npm test`) |
+| `src/e2e/scenarios-k7.ts` | `k7-tavern-hire` |
+
+### State
+
+`world.companies`: one `Company` per row of the table, in its order --
+`state`, `at` (the tavern, offered), `days` (offer, contract or absence),
+`loyalty`, `army`, the crown's `bid` and `bidDays`. `Army` gains `company`
+(1 + the table index, 0 for the faction's own men), and its `owner` is no
+longer read-only: a company that turns goes over whole.
+
+### The day
+
+After K6's morale day, so loyalty reads today's pay: every hired company's
+loyalty moves (+1 paid, −8 owed); at 0 it leaves by reputation; a bloody
+company stirs the town it stands in; a standing bid counts down, or a new
+one is made on the season's bid days; the contract counts down (word at 15
+days left, gone at 0). Offers and absences count down; free taverns take
+the next company free to come. No dice anywhere.
+
+### Hiring and the army
+
+The fee is paid (`hiring`), and `raiseArmy` puts the company on the map at
+the tavern, whole and trained, named for itself, led by its captain. It is
+paid the contract's wage through K4's army day; K4's unpaid trickle and
+barracks replacements do not apply (§B.7: no replacement pipeline). It keeps
+its own ranks: no merge, split or recruits. Disbanding is dismissal.
+
+### Betrayal
+
+A bloody or turncoat company whose loyalty is spent, or one the crown has
+poached, changes `owner` where it stands: out of the garrison, out from
+under the king, its arrears forgotten. If the king's own army stands with
+it, K5's `detectContacts` finds the two face to face that same tick and the
+realm halts for the battle; if it stands alone in a walled town of the
+king's, the town is assaulted.
+
+### Player experience
+
+The feed says when a company comes to a tavern, moves on, nears the end of
+its contract, is bid for, and leaves (each way in its own words). In a city,
+a tavern's lot offers **Free companies…**: the market lists who drinks
+there, with fee, wage, contract, men, reputation, loyalty and a line about
+them; a hire the sim would refuse stays listed and says why. A company's army
+card shows its contract, loyalty and any bid, with **Renew** (in the window),
+**Match the bid** and **Dismiss**; split and merge are not offered. Its
+counter carries its initial. Audit: docs/audit/u2-mercenary-market.md.
+
+### Save format version 7
+
+Adds `companies` and every army's `company`; the ledger gains one sink
+(`hiring`), so pages are re-laid. `migrate6to7` makes every company waiting
+(K7.12). On load a hired company's army must be the king's army of that
+company, and no king's army may be a company's that does not serve.
+
+### Determinism and the golden
+
+The kingdom golden moved (`c3917824` → `de3d690f`): `kingdomHash` now mixes
+the companies and `army.company`, and the ledger page is one category wider.
+The decade's own play is unchanged (it builds no tavern, so no company ever
+comes). The battle tiers did not move.
+
+### The proof (tools/kingdom-mercenaries.ts)
+
+The lifecycle, step by step against its rule: offers (tavern, act gate,
+moving on, coming back, a tavern lost), hire (fee, a whole company, no
+levy, one check for the button and the tick), paid upkeep (the contract's
+wage, loyalty rising, its own ranks, no replacements), contract end
+(renewal window and fee, refused with arrears; expiry), unpaid (loyalty
+falling; reliable desert, turncoats defect), poaching (bid, matched,
+unmatched), a bloody company's unrest, dismissal and a broken company. Then
+THE BETRAYAL SCENARIO: turncoats hired beside the king's First Army in Fell
+End go unpaid and turn; the same morning the realm halts on a field contact,
+the king's army against the company it paid; the same on every run, and a
+save on the contact loads as the same realm. Save v7 and the v6 migration,
+tampering refused, the log replaying, and the ledger balancing every day.

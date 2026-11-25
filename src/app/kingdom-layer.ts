@@ -39,6 +39,8 @@ import type { ArmyDraw } from "../render/kingdom/renderer.ts";
 import { armyCard } from "../ui/kingdom/army-card.ts";
 import { AC } from "../content/kingdom/army-strings.ts";
 import { ARMY_ORDINALS } from "../content/kingdom/armies.ts";
+import { MERCENARIES } from "../content/kingdom/mercenaries.ts";
+import { MERC_FEED } from "../content/kingdom/mercenary-strings.ts";
 import { FACTIONS, FACTION_IDS } from "../content/kingdom/factions.ts";
 import { armyById, armyFullMen, armyMen, armyWounded, supplyDays } from "../sim/kingdom/armies.ts";
 import { UNIT_TYPES } from "../content/unit-types.ts";
@@ -633,7 +635,10 @@ export class KingdomLayer implements LayerKeys {
         return false;
       case "armyGone":
         this.storesDirty = true;
-        if (e.owner === KING_PLAYER) this.hud.alert(day, AC.armyGone[e.reason](e.name));
+        // K7: a free company's leaving is told once, by its own line (companyLeft).
+        if (e.owner === KING_PLAYER && !w.events.some((x) => x.kind === "companyLeft" && x.army === e.army)) {
+          this.hud.alert(day, AC.armyGone[e.reason](e.name));
+        }
         return false;
       case "intercepted": {
         const t = armyById(w, e.target);
@@ -734,6 +739,40 @@ export class KingdomLayer implements LayerKeys {
         return false;
       }
       default:
+        return this.onMercenaryEvent(e);
+    }
+  }
+
+  /** K7: the free companies -- offers at the taverns, contracts, bids, leavings. */
+  private onMercenaryEvent(e: KingdomEvent): boolean {
+    const w = this.world;
+    const day = w.date.day;
+    const company = (i: number): string => MERCENARIES[i]?.name ?? "?";
+    switch (e.kind) {
+      case "companyOffered":
+        this.hud.alert(day, MERC_FEED.offered({ name: company(e.company), holding: w.holding(e.at)?.name ?? "?" }));
+        return false;
+      case "companyMovedOn":
+        this.hud.alert(day, MERC_FEED.offerGone(company(e.company)));
+        return false;
+      case "companyHired":
+      case "contractRenewed":
+      case "bidMatched":
+        // The order's own result line said it; the bar and the army card show the state.
+        this.storesDirty = true;
+        return false;
+      case "contractEnding":
+        this.hud.alert(day, MERC_FEED.ending({ name: company(e.company), left: e.days }));
+        return false;
+      case "companyBid":
+        this.hud.alert(day, MERC_FEED.bid({ name: company(e.company), bid: e.bid }));
+        return false;
+      case "companyLeft":
+        this.storesDirty = true;
+        if (e.how !== "dismissed") this.hud.alert(day, MERC_FEED.left[e.how](company(e.company)));
+        if (this.card?.kind === "army" && this.card.army === e.army) this.card.refresh();
+        return false;
+      default:
         return false;
     }
   }
@@ -815,7 +854,8 @@ export class KingdomLayer implements LayerKeys {
       return {
         id: a.id,
         own,
-        mark: own ? ROMAN[ordinal] ?? String(ordinal + 1) : (f ? f.name.replace(/^the /, "").charAt(0).toUpperCase() : "?"),
+        // K7: a free company's counter carries its name's initial, not a number.
+        mark: own ? (a.company > 0 ? a.name.charAt(0).toUpperCase() : ROMAN[ordinal] ?? String(ordinal + 1)) : (f ? f.name.replace(/^the /, "").charAt(0).toUpperCase() : "?"),
         at,
         counter,
         men: own ? armyMen(a) : Math.max(10, Math.round(armyMen(a) / 10) * 10),

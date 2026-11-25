@@ -33,6 +33,7 @@ import { UNIT_TYPE_IDS } from "../../content/unit-types.ts";
 import { DOCTRINE_IDS } from "../../content/doctrines.ts";
 import { ABILITY_IDS } from "../../content/abilities.ts";
 import { ARMY_POSTURES, CONTACT_KINDS, type Army } from "./state.ts";
+import { COMPANY_STATES } from "../../content/kingdom/mercenaries.ts";
 import { KINGDOM_STREAMS, type KingdomWorld } from "./world.ts";
 
 function mixStr(h: number, s: string | null): number {
@@ -104,12 +105,16 @@ export function mixOrder(h: number, o: KingdomOrder): number {
     case "setJustice": return mixU32(mixU32(h, o.holding), JUSTICE_IDS.indexOf(o.justice));
     case "holdFestival": return mixU32(h, o.holding);
     case "pardon": return mixU32(h, o.holding);
+    case "hireCompany": return mixU32(mixU32(h, o.company), o.at);
+    case "renewContract": return mixU32(h, o.company);
+    case "matchBid": return mixU32(h, o.company);
   }
 }
 
 function mixArmy(h: number, a: Army): number {
   h = mixU32(h, a.id);
   h = mixU32(h, a.owner);
+  h = mixU32(h, a.company); // K7
   h = mixStr(h, a.name);
   h = mixU32(h, DOCTRINE_IDS.indexOf(a.doctrine));
   h = mixU32(h, a.squads.length);
@@ -220,6 +225,18 @@ export function kingdomHash(world: KingdomWorld): string {
   // K4: every army, in id order.
   h = mixU32(h, world.armies.length);
   for (const a of world.armies) h = mixArmy(h, a);
+
+  // K7: every free company's place in its life with the king, in table order.
+  h = mixU32(h, world.companies.length);
+  for (const c of world.companies) {
+    h = mixU32(h, COMPANY_STATES.indexOf(c.state));
+    h = mixU32(h, c.at);
+    h = mixU32(h, c.days);
+    h = mixU32(h, c.loyalty);
+    h = mixU32(h, c.army);
+    h = mixU32(h, c.bid);
+    h = mixU32(h, c.bidDays);
+  }
 
   // K5: a contact waiting, and the pairs not yet parted. Mixed only when
   // there is something to mix, so a world that has never had a meeting (every

@@ -652,7 +652,7 @@ section("migration v2 -> v3");
         if (page.flow[s * nc + c] !== want) relaid = false;
       }
     }
-    check("ledger pages are re-laid for the new categories, every old value kept", relaid && nc === oldNC + 8);  // K3a's three, K4's three, then K6's two
+    check("ledger pages are re-laid for the new categories, every old value kept", relaid && nc === oldNC + 9);  // K3a's three, K4's three, K6's two, then K7's one
     check("the king still knows all of the old map", w.holdings.slice(0, 36).every((h) => knowsHolding(w, KING, h.id)) &&
       w.roads.slice(0, 52).every((r2) => knowsRoad(w, KING, r2.id)));
     check("and the new country is still to explore", w.holdings.slice(36).some((h) => !knowsHolding(w, KING, h.id)));

@@ -116,7 +116,7 @@ export const BUILDINGS: Readonly<Record<BuildingId, BuildingDef>> = {
     economy: { musterPct: 100 }, later: { recruits: true },
   },
   tavern: {
-    id: "tavern", name: "Tavern", purpose: "A little trade; hired swords and rumours (later).",
+    id: "tavern", name: "Tavern", purpose: "A little trade; free companies come here to be hired (rumours later).",
     cost: { coin: 12, timber: 10 }, days: 5, upkeep: {}, slots: 1, unique: true,
     economy: { trade: { base: 1, perRoad: 0, perPeople: 0 } }, later: { mercenaries: true, rumours: true },
   },

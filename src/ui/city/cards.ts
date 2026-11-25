@@ -27,6 +27,9 @@ import { C } from "../../content/kingdom/city-strings.ts";
 import { AC, ARMY_REFUSAL } from "../../content/kingdom/army-strings.ts";
 import { hasBarracks } from "../../sim/kingdom/armies.ts";
 import { recruitMenu } from "../kingdom/recruit-menu.ts";
+import { marketMenu } from "../kingdom/mercenary-menu.ts";
+import { MARKET, MERC_REFUSAL } from "../../content/kingdom/mercenary-strings.ts";
+import { kingsTavern } from "../../sim/kingdom/mercenaries.ts";
 import { politicsSection, type PoliticsSection } from "./politics.ts";
 
 export type CityCardHooks = FrameHooks & {
@@ -73,6 +76,7 @@ export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, h
   let note: HTMLElement | null = null;
   let build: HTMLElement | null = null;
   let recruit: HTMLElement | null = null;
+  let market: HTMLElement | null = null;
   let heading: HTMLElement | null = null;
   let buildLabel = "";
   let buildNote = "";
@@ -123,6 +127,15 @@ export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, h
       if (why) recruit.setAttribute("aria-disabled", "true");
       else recruit.removeAttribute("aria-disabled");
     }
+    // K7: a tavern lot is where the free companies drink -- the market, on
+    // offer while the tavern stands, refused (and saying why) while it is built.
+    if (market) {
+      const isTavern = id === "tavern" && h.owner === "king";
+      if (!isTavern && doc.activeElement === market) heading?.focus();
+      show(market, isTavern);
+      if (isTavern && !kingsTavern(h)) market.setAttribute("aria-disabled", "true");
+      else market.removeAttribute("aria-disabled");
+    }
     setText(build, buildLabel || C.buildHere);
     build.setAttribute("aria-label", (buildLabel || C.buildHere) + " " + h.name);
     if (heading) setText(heading, C.lotTitle(index + 1) + " · " + h.name);
@@ -152,6 +165,18 @@ export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, h
     };
     recruit = rb;
     actions.appendChild(rb);
+    const mb = button(doc, MARKET.button, "market");
+    mb.setAttribute("aria-haspopup", "dialog");
+    mb.title = MARKET.buttonWhy;
+    mb.onclick = () => {
+      if (!kingsTavern(h)) {
+        if (note) setText(note, E.notNow(MERC_REFUSAL.noTavern));
+        return;
+      }
+      hooks.economy.openMenu(marketMenu(doc, world, h.id, hooks.economy));
+    };
+    market = mb;
+    actions.appendChild(mb);
   }, refresh, () => build);
   return { screen, kind: "lot", index, refresh };
 }

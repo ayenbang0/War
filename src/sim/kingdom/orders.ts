@@ -95,8 +95,14 @@ export type KingdomOrderBody =
   /** Feast an owned holding for a week: coin and grain for calm and a little legitimacy. */
   | { kind: "holdFestival"; holding: number }
   /** Pardon an owned holding's prisoners: calm at once, and Mercy; once a season. */
-  | { kind: "pardon"; holding: number };
-  // K7: hire / pay.
+  | { kind: "pardon"; holding: number }
+  // K7: hire / pay. `company` is the index in MERCENARIES (sim/kingdom/mercenaries.ts applies them).
+  /** Sign the company drinking at this holding's tavern: its fee now, its wage every day. */
+  | { kind: "hireCompany"; company: number; at: number }
+  /** Sign a hired company on again, in the contract's last days, for part of its fee. */
+  | { kind: "renewContract"; company: number }
+  /** Pay the crown's bid for a hired company, to keep it. */
+  | { kind: "matchBid"; company: number };
   // Append new kinds; never renumber the existing ones.
 
 export type KingdomOrderKind = KingdomOrderBody["kind"];
@@ -111,10 +117,13 @@ export const KINGDOM_ORDER_KINDS: readonly KingdomOrderKind[] = [
   "resolveContact",
   // K6
   "setJustice", "holdFestival", "pardon",
+  "hireCompany", "renewContract", "matchBid",
 ];
 
 /** The K6 order kinds (src/sim/kingdom/morale.ts applies them). */
 export const MORALE_ORDER_KIND_SET: ReadonlySet<KingdomOrderKind> = new Set(["setJustice", "holdFestival", "pardon"]);
+/** The K7 order kinds. */
+export const MERCENARY_ORDER_KIND_SET: ReadonlySet<KingdomOrderKind> = new Set(["hireCompany", "renewContract", "matchBid"]);
 
 /** The K4 order kinds (src/sim/kingdom/armies.ts applies them). */
 export const ARMY_ORDER_KINDS: readonly KingdomOrderKind[] = KINGDOM_ORDER_KINDS.slice(

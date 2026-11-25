@@ -155,6 +155,8 @@ export const AC = {
     // K5: lost in battle, or cut off and taken.
     fell: (n: string) => "The " + n + " is gone: none of it came off the field.",
     captured: (n: string) => "The " + n + " was cut off and taken.",
+    // K7 (a company army's leaving has its own line in MERC_FEED; this is the fallback).
+    expired: (n: string) => n + " rode away at the end of their contract.",
   },
   mergedNews: (p: { army: string; into: string }) => "The " + p.army + " joins the " + p.into + ".",
   splitNews: (p: { army: string; into: string }) => "The " + p.into + " parts from the " + p.army + ".",

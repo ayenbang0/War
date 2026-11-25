@@ -17,3 +17,4 @@ export * from "./descent.ts";
 export * from "./autoresolve.ts";
 export * from "./morale.ts";
 export * from "./unrest.ts";
+export * from "./mercenaries.ts";

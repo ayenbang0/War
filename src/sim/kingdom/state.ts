@@ -17,6 +17,7 @@ import type { ProvinceId } from "../../content/kingdom/map.ts";
 import type { FarmEventId, StockId, TaxRateId } from "../../content/kingdom/economy.ts";
 import type { Knowledge } from "../../content/kingdom/exploration.ts";
 import type { JusticeId, UnrestBand } from "../../content/kingdom/morale.ts";
+import type { CompanyLeaving, CompanyState } from "../../content/kingdom/mercenaries.ts";
 import type { UpgradeId } from "../../content/story/upgrades.ts";
 import type { UnitTypeId } from "../../content/unit-types.ts";
 import type { DoctrineId } from "../../content/doctrines.ts";
@@ -226,8 +227,18 @@ export type ArmySquad = {
  */
 export type Army = {
   readonly id: number;
-  /** Faction index (FACTION_IDS). */
-  readonly owner: number;
+  /**
+   * Faction index (FACTION_IDS). Mutable since K7: a free company that turns
+   * its coat (or is poached) goes over to the crown, men, arms and all.
+   */
+  owner: number;
+  /**
+   * K7: 1 + the index in MERCENARIES of the free company this army is, or 0
+   * for an army of the faction's own men. A company army is named for the
+   * company and keeps its own ranks (no merge, split, recruits or barracks
+   * replacements; content/kingdom/mercenaries.ts).
+   */
+  company: number;
   /** "First Army": the lowest ordinal free when it was raised. */
   name: string;
   doctrine: DoctrineId;
@@ -267,7 +278,31 @@ export type Army = {
 };
 
 /** Why an army left the map. */
-export type ArmyGoneReason = "starved" | "deserted" | "disbanded" | "fell" | "captured";
+export type ArmyGoneReason = "starved" | "deserted" | "disbanded" | "fell" | "captured" | "expired";
+
+/**
+ * K7: one free company of the story's table (content/story/mercenaries.ts
+ * MERCENARIES) and where it is in its life with the king (content/kingdom/
+ * mercenaries.ts CompanyState). world.companies holds one per company, in
+ * the table's order.
+ */
+export type Company = {
+  /** Index in MERCENARIES. */
+  readonly index: number;
+  state: CompanyState;
+  /** offered: the tavern's holding. 0 otherwise. */
+  at: number;
+  /** offered: days the offer stands; hired: days left on the contract; away: days before it may come back. */
+  days: number;
+  /** 0..100; hired only (set from the table when hired). */
+  loyalty: number;
+  /** hired: its army's id. 0 otherwise. */
+  army: number;
+  /** hired: the crown's standing bid for it, in coin, or 0. */
+  bid: number;
+  /** Days left to match the bid. */
+  bidDays: number;
+};
 
 /**
  * K5: two hostile armies have met (or an army has come to the walls of a
@@ -438,7 +473,19 @@ export type KingdomEvent =
   /** A faction's Mercy/Terror moved. */
   | { kind: "mercyChanged"; faction: number; mercy: number; delta: number }
   /** Men left an army whose morale fell too low. */
-  | { kind: "moraleDesertion"; army: number; n: number };
+  | { kind: "moraleDesertion"; army: number; n: number }
+  // -- K7: free companies ----------------------------------------------------------------
+  /** A company came to drink in a king's tavern and will sign (or moved on: `withdrawn`). */
+  | { kind: "companyOffered"; company: number; at: number }
+  | { kind: "companyMovedOn"; company: number; at: number }
+  | { kind: "companyHired"; company: number; army: number; fee: number }
+  /** A contract came into its renewal window. */
+  | { kind: "contractEnding"; company: number; days: number }
+  | { kind: "contractRenewed"; company: number; fee: number }
+  | { kind: "companyBid"; company: number; bid: number }
+  | { kind: "bidMatched"; company: number; bid: number }
+  /** A company left the king's service; `army` is its army (gone, or gone over to the crown). */
+  | { kind: "companyLeft"; company: number; army: number; how: CompanyLeaving };
 
 /** Why a plot changed stage, for the feed. */
 export type PlotCause = "sown" | "sprouted" | "ripened" | "harvested" | "overripe" | "weather" | "winter" | "regrew" | "foraged";

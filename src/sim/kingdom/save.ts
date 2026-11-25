@@ -36,8 +36,9 @@ import { CONTACT_CHOICES, KINGDOM_ORDER_KINDS, type KingdomOrder } from "./order
 import type { BattleResult, ResultSquad } from "../layers.ts";
 import {
   ARMY_POSTURES, CONTACT_KINDS, KING_TASKS, PLOT_STAGES, type Army, type ArmyPosture, type Contact, type FactionExploration,
-  type Find, type KingTask, type Mover, type PlotStage,
+  type Company, type Find, type KingTask, type Mover, type PlotStage,
 } from "./state.ts";
+import { COMPANY_STATES, LOYALTY, MERCENARIES, type CompanyState } from "../../content/kingdom/mercenaries.ts";
 import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "../../content/unit-types.ts";
 import { DOCTRINE_IDS, type DoctrineId } from "../../content/doctrines.ts";
 import { ABILITY_IDS, type AbilityId } from "../../content/abilities.ts";
@@ -56,7 +57,7 @@ import { roadBetween } from "./graph.ts";
 import { KINGDOM_STREAMS, KingdomWorld } from "./world.ts";
 
 export const KINGDOM_SAVE_FORMAT = "war.kingdom";
-export const KINGDOM_SAVE_VERSION = 6;
+export const KINGDOM_SAVE_VERSION = 7;
 
 export type SavedPlot = { id: number; crop: string | null; stage: PlotStage; progress: number; days: number; health: number };
 export type SavedHolding = {
@@ -83,6 +84,8 @@ export type SavedSquad = { id: number; unit: UnitTypeId; men: number; wounded: n
 export type SavedArmy = {
   id: number;
   owner: FactionId;
+  /** K7: 1 + the index in MERCENARIES of the free company it is, or 0. */
+  company: number;
   name: string;
   doctrine: DoctrineId;
   squads: SavedSquad[];
@@ -115,6 +118,18 @@ export type SavedEconomy = {
   closed: LedgerDay | null;
 };
 
+/** K7: one free company, by its id in MERCENARIES (the list is in the table's order). */
+export type SavedCompany = {
+  company: string;
+  state: CompanyState;
+  at: number;
+  days: number;
+  loyalty: number;
+  army: number;
+  bid: number;
+  bidDays: number;
+};
+
 export type SavedExploration = {
   faction: FactionId;
   holdings: Knowledge[];
@@ -124,7 +139,13 @@ export type SavedExploration = {
 };
 
 /**
- * Version 6 (K6): morale -- every holding's unrest (permille), its justice,
+ * Version 7 (K7): free companies -- every company of the story's table and
+ * where it is in its life with the king (waiting, offered at a tavern, hired
+ * with its army and contract days, its loyalty and the crown's bid, away,
+ * turned or broken); every army's `company`; one new ledger category
+ * (hiring).
+ *
+ * (Version 6 (K6): morale -- every holding's unrest (permille), its justice,
  * the days left of a festival and the season of its last pardon; every
  * faction's Mercy/Terror; two new ledger categories (festivals, justice).
  * Army morale was already saved (K4).
@@ -149,9 +170,9 @@ export type SavedExploration = {
  * ledger pages, and the new fields on holdings (works, idle, tax and its
  * remainders, famine), plots (days, health) and the king (task).)
  */
-export type KingdomSaveV6 = {
+export type KingdomSaveV7 = {
   format: typeof KINGDOM_SAVE_FORMAT;
-  version: 6;
+  version: 7;
   map: string;
   /** Fingerprint of the static map; see mapFingerprint. */
   mapFingerprint: string;
@@ -172,12 +193,13 @@ export type KingdomSaveV6 = {
     armies: SavedArmy[];
     contact: Contact | null;
     disengaged: [number, number][];
+    companies: SavedCompany[];
   };
   log: KingdomOrder[];
 };
 
 /** The current save shape. */
-export type KingdomSave = KingdomSaveV6;
+export type KingdomSave = KingdomSaveV7;
 
 export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
 
@@ -190,6 +212,8 @@ const V2_CATEGORIES = LEDGER_CATEGORY_IDS.indexOf("finds");
 const V3_CATEGORIES = LEDGER_CATEGORY_IDS.indexOf("provisions");
 /** ...and a version-5 page (K4 and K5 alike) those before K6's first. */
 const V5_CATEGORIES = LEDGER_CATEGORY_IDS.indexOf("festivals");
+/** ...and a version-6 page those before K7's first. */
+const V6_CATEGORIES = LEDGER_CATEGORY_IDS.indexOf("hiring");
 
 /** Re-lay a ledger page's flow from `from` categories wide to `to` wide (the new ones zero). */
 function relayPage(v: unknown, from: number, to: number): unknown {
@@ -359,7 +383,28 @@ export const MIGRATIONS: Readonly<Record<number, (save: Record<string, unknown>)
   3: migrate3to4,
   4: migrate4to5,
   5: migrate5to6,
+  6: migrate6to7,
 };
+
+/**
+ * Version 6 (K6) -> 7 (K7). Before K7 no company had come to a tavern: every
+ * company is waiting, no army is a company's, and ledger pages gain K7's one
+ * category (hiring) at zero. No id moves. The order log holds no hiring
+ * orders; a replay under K7's rules may see a company offered at a tavern
+ * that the snapshot never saw -- the load takes the snapshot (as every step).
+ */
+function migrate6to7(save: Record<string, unknown>): Record<string, unknown> {
+  const snap = { ...(save.snapshot as Record<string, unknown>) };
+  snap.armies = (Array.isArray(snap.armies) ? snap.armies : []).map((v) => ({ ...(v as Record<string, unknown>), company: 0 }));
+  snap.companies = MERCENARIES.map((m) => ({ company: m.id, state: "waiting", at: 0, days: 0, loyalty: 0, army: 0, bid: 0, bidDays: 0 }));
+  snap.economy = (Array.isArray(snap.economy) ? snap.economy : []).map((v) => {
+    const e: Record<string, unknown> = { ...(v as Record<string, unknown>) };
+    e.open = relayPage(e.open, V6_CATEGORIES, LEDGER_CATEGORY_IDS.length);
+    e.closed = relayPage(e.closed, V6_CATEGORIES, LEDGER_CATEGORY_IDS.length);
+    return e;
+  });
+  return { ...save, version: 7, snapshot: snap };
+}
 
 /**
  * Version 5 (K5) -> 6 (K6). Before K6 no town's unrest was reckoned: every
@@ -378,8 +423,9 @@ function migrate5to6(save: Record<string, unknown>): Record<string, unknown> {
   }));
   snap.economy = (Array.isArray(snap.economy) ? snap.economy : []).map((v) => {
     const e: Record<string, unknown> = { ...(v as Record<string, unknown>), mercy: MERCY_START };
-    e.open = relayPage(e.open, V5_CATEGORIES, LEDGER_CATEGORY_IDS.length);
-    e.closed = relayPage(e.closed, V5_CATEGORIES, LEDGER_CATEGORY_IDS.length);
+    // To the v6 width (K7's category comes in migrate6to7).
+    e.open = relayPage(e.open, V5_CATEGORIES, V6_CATEGORIES);
+    e.closed = relayPage(e.closed, V5_CATEGORIES, V6_CATEGORIES);
     return e;
   });
   return { ...save, version: 6, snapshot: snap };
@@ -489,7 +535,7 @@ export function serialize(world: KingdomWorld): KingdomSave {
   const page = (d: LedgerDay | null): LedgerDay | null => (d === null ? null : { day: d.day, start: [...d.start], flow: [...d.flow] });
   return {
     format: KINGDOM_SAVE_FORMAT,
-    version: 6,
+    version: 7,
     map: world.map.id,
     mapFingerprint: mapFingerprint(world),
     seed: world.seed,
@@ -544,7 +590,7 @@ export function serialize(world: KingdomWorld): KingdomSave {
         upgrades: [...ex.upgrades],
       })),
       armies: world.armies.map((a) => ({
-        id: a.id, owner: FACTION_IDS[a.owner], name: a.name, doctrine: a.doctrine,
+        id: a.id, owner: FACTION_IDS[a.owner], company: a.company, name: a.name, doctrine: a.doctrine,
         squads: a.squads.map((q) => ({ id: q.id, unit: q.unit, men: q.men, wounded: q.wounded, levy: q.levy })),
         abilities: [...a.abilities], mover: cloneMover(a.mover), supply: a.supply, morale: a.morale, captain: a.captain,
         hunger: a.hunger, unpaid: a.unpaid, arrears: a.arrears, posture: a.posture, postureDays: a.postureDays,
@@ -553,6 +599,10 @@ export function serialize(world: KingdomWorld): KingdomSave {
       })),
       contact: world.contact ? { ...world.contact, sides: [{ ...world.contact.sides[0] }, { ...world.contact.sides[1] }] } : null,
       disengaged: world.disengaged.map(([a, b]) => [a, b] as [number, number]),
+      companies: world.companies.map((c) => ({
+        company: MERCENARIES[c.index].id, state: c.state, at: c.at, days: c.days, loyalty: c.loyalty,
+        army: c.army, bid: c.bid, bidDays: c.bidDays,
+      })),
     },
     log: world.log.map((o) => ({ ...o, ...("squads" in o ? { squads: [...o.squads] } : {}), ...("holdings" in o ? { holdings: [...o.holdings] } : {}) })),
   };
@@ -686,6 +736,12 @@ function readOrder(v: unknown, what: string): KingdomOrder {
     case "holdFestival":
     case "pardon":
       return { kind, holding: int(o.holding, what + ".holding"), tick, player, seq };
+    // K7. A company index past the table is the sim's to refuse, like an unknown holding.
+    case "hireCompany":
+      return { kind, company: int(o.company, what + ".company"), at: int(o.at, what + ".at"), tick, player, seq };
+    case "renewContract":
+    case "matchBid":
+      return { kind, company: int(o.company, what + ".company"), tick, player, seq };
     default:
       return { kind: "harvest", plot: int(o.plot, what + ".plot"), tick, player, seq };
   }
@@ -936,8 +992,10 @@ function readArmies(v: unknown, world: KingdomWorld, nextId: number): Army[] {
     });
     const patrolIndex = int(o.patrolIndex, what + ".patrolIndex");
     if (patrol.length > 0 ? patrolIndex >= patrol.length : patrolIndex !== 0) throw new Bad(what + ".patrolIndex is off its patrol");
+    const company = int(o.company, what + ".company");
+    if (company > MERCENARIES.length) throw new Bad(what + " is a company the story does not have");
     const a: Army = {
-      id, owner, name: str(o.name, what + ".name"), doctrine: oneOf(o.doctrine, DOCTRINE_IDS, what + ".doctrine"),
+      id, owner, company, name: str(o.name, what + ".name"), doctrine: oneOf(o.doctrine, DOCTRINE_IDS, what + ".doctrine"),
       squads, abilities, mover: readMover(o.mover, what + ".mover", world), supply: int(o.supply, what + ".supply"),
       morale, captain: str(o.captain, what + ".captain"), hunger: int(o.hunger, what + ".hunger"),
       unpaid: int(o.unpaid, what + ".unpaid"), arrears: int(o.arrears, what + ".arrears"),
@@ -951,6 +1009,42 @@ function readArmies(v: unknown, world: KingdomWorld, nextId: number): Army[] {
     if (a.target === a.id) throw new Bad(what + " chases itself");
     return a;
   });
+}
+
+/**
+ * K7: one record per company of the table, in its order; a hired company's
+ * army is the king's and is that company's; no army is a hired company's but
+ * its own; an offer is at a holding.
+ */
+function readCompanies(v: unknown, world: KingdomWorld, armies: Army[]): Company[] {
+  const list = arr(v, "snapshot.companies");
+  if (list.length !== MERCENARIES.length) throw new Bad("snapshot.companies does not match the story's companies");
+  const out = list.map((x, i) => {
+    const what = "company[" + i + "]";
+    const o = obj(x, what);
+    if (str(o.company, what + ".company") !== MERCENARIES[i].id) throw new Bad(what + " is not " + MERCENARIES[i].id);
+    const state = oneOf(o.state, COMPANY_STATES, what + ".state") as CompanyState;
+    const c: Company = {
+      index: i, state, at: int(o.at, what + ".at"), days: int(o.days, what + ".days"),
+      loyalty: int(o.loyalty, what + ".loyalty"), army: int(o.army, what + ".army"),
+      bid: int(o.bid, what + ".bid"), bidDays: int(o.bidDays, what + ".bidDays"),
+    };
+    if (c.loyalty > LOYALTY.max) throw new Bad(what + ".loyalty is over " + LOYALTY.max);
+    if ((state === "offered") !== (c.at !== 0)) throw new Bad(what + " is at a tavern without an offer, or the reverse");
+    if (state === "offered" && !world.holding(c.at)) throw new Bad(what + " is offered at an unknown holding");
+    if ((state === "hired") !== (c.army !== 0)) throw new Bad(what + " has an army without a contract, or the reverse");
+    if (state !== "hired" && (c.bid !== 0 || c.bidDays !== 0)) throw new Bad(what + " has a bid out of service");
+    if (state === "hired") {
+      const a = armies.find((y) => y.id === c.army);
+      if (!a || a.owner !== 0 || a.company !== i + 1) throw new Bad(what + "'s army is not the king's army of that company");
+    }
+    return c;
+  });
+  for (const a of armies) {
+    if (a.company === 0 || a.owner !== 0) continue;
+    if (out[a.company - 1].army !== a.id) throw new Bad("army " + a.id + " is a company's that does not serve the king");
+  }
+  return out;
 }
 
 function build(save: Record<string, unknown>, resight = false): KingdomWorld {
@@ -1073,6 +1167,7 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
   const armies = readArmies(s.armies, world, nextId);
   const contact = readContact(s.contact, world, armies, nextId);
   const disengaged = readDisengaged(s.disengaged, world, armies);
+  const companies = readCompanies(s.companies, world, armies);
   const hosts = bool(save.hosts, "hosts");
   if (kingArmy !== 0) {
     const a = armies.find((x) => x.id === kingArmy);
@@ -1134,6 +1229,7 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
   world.armies.push(...armies);
   world.contact = contact;
   world.disengaged.push(...disengaged);
+  world.companies.splice(0, world.companies.length, ...companies);
   world.hosts = hosts;
   economy.forEach((e, i) => {
     const live = world.economy[i];

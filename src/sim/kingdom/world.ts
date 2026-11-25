@@ -34,7 +34,7 @@ import {
   advanceMover, buildGraph, findRoute, moverAt, moverPosition, roadLength, setRoute,
   type RoadGraph, type Route,
 } from "./graph.ts";
-import type { Army, FactionEconomy, FactionExploration, FieldPlot, Holding, KingToken, KingdomEvent, Road } from "./state.ts";
+import type { Army, Company, FactionEconomy, FactionExploration, FieldPlot, Holding, KingToken, KingdomEvent, Road } from "./state.ts";
 import {
   applyArmyOrder, armyById, checkArmyOrder, isArmyOrder, marchArmies, planArmyRoute, raiseArmy, runArmyDay, type ArmyOrderBody,
 } from "./armies.ts";
@@ -54,6 +54,9 @@ import { applyContactOrder, checkContactOrder, detectContacts } from "./descent.
 import type { Contact } from "./state.ts";
 import { applyMoraleOrder, checkMoraleOrder, isMoraleOrder, runMoraleDay, type MoraleOrderBody } from "./morale.ts";
 import { DEFAULT_JUSTICE } from "../../content/kingdom/morale.ts";
+import {
+  applyMercenaryOrder, checkMercenaryOrder, isMercenaryOrder, newCompanies, runMercenaryDay, type MercenaryOrderBody,
+} from "./mercenaries.ts";
 
 /** Default name of the exiled king (docs/PROVISIONAL.md A.7.3). */
 export const DEFAULT_KING_NAME = "Aldric of Rimaros";
@@ -134,6 +137,8 @@ export class KingdomWorld {
    * again until they part (descent.ts detectContacts).
    */
   readonly disengaged: [number, number][] = [];
+  /** K7: every free company of the story's table, in its order (mercenaries.ts). */
+  readonly companies: Company[] = newCompanies();
 
   readonly rng: KingdomRng;
   readonly orders = new KingdomOrderQueue();
@@ -312,6 +317,11 @@ export class KingdomWorld {
       // every army's morale and the men low spirits cost (morale.ts). After
       // the armies' day, so today's wages and bread are what it reads.
       runMoraleDay(this);
+      // K7: contracts and wages -- every hired company's loyalty (today's pay
+      // is what it reads), the crown's bids, contracts running out, offers at
+      // the taverns (mercenaries.ts). A company that turns does so before the
+      // march, so the contact below finds it in the king's camp.
+      runMercenaryDay(this);
       // K3a: the realm's sight as the day begins (towers built, holdings
       // claimed); the king's is also kept up as he marches, below.
       for (let f = 0; f < FACTION_IDS.length; f++) updateSight(this, f);
@@ -329,7 +339,6 @@ export class KingdomWorld {
     marchArmies(this);
     // K5: contact, in army-id order (descent.ts). One of the king's side holds the realm from the next tick.
     detectContacts(this, marching);
-    // K7: contracts and wages.
     this.now++;
     return this.events;
   }
@@ -388,6 +397,11 @@ export class KingdomWorld {
       if (why) this.reject(order, why);
       return;
     }
+    if (isMercenaryOrder(order)) {
+      const why = applyMercenaryOrder(this, order as KingdomOrder & MercenaryOrderBody);
+      if (why) this.reject(order, why);
+      return;
+    }
     switch (order.kind) {
       case "moveKing": {
         if (order.player !== KING_PLAYER) return this.reject(order, "only the king's seat commands the king");
@@ -441,6 +455,7 @@ export class KingdomWorld {
     }
     if (isArmyOrder(body)) return checkArmyOrder(this, body, player);
     if (isMoraleOrder(body)) return checkMoraleOrder(this, body, player);
+    if (isMercenaryOrder(body)) return checkMercenaryOrder(this, body, player);
     if (!isEconomyOrder(body)) return null;
     return checkEconomyOrder(this, body as EconomyOrderBody, player);
   }
