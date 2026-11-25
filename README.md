@@ -24,7 +24,16 @@ npm test
 
 `npm test` needs no browser: it scans `src/sim/` for determinism violations, then
 runs the simulation headless under Node and checks a scripted 90-second match
-against a committed state hash.
+against a committed state hash. Its last step, `tools/ui-check.ts`, drives the
+screen stack, the key router and the whole app on a small fake DOM.
+
+On-screen behaviour is checked by a browser harness that ships with the build:
+open `e2e.html` (locally under `npm run dev`, or on the published site) and it
+boots the real game and drives it with real pointer and keyboard events. The
+verdict is in the tab title (`E2E PASS n/m` or `E2E FAIL k/m`); `e2e.html?list`
+lists the scenarios and `e2e.html?only=name` runs one. `npm run e2e:fake` runs
+the same scenarios on the fake DOM, to catch a broken scenario before a browser
+run.
 
 ## Controls
 
@@ -63,7 +72,10 @@ commit, `esc` to abandon. A stroke begun on one of your squads always commands
 that squad, which is how a group can still be sent somewhere one squad at a time.
 
 Camera: middle or right drag, WASD/arrows, or push the screen edge; wheel zooms
-about the cursor. `space` pauses, `.` single-steps while paused.
+about the cursor. `space` pauses, `.` single-steps while paused. Abilities sit on
+keys `1`-`9`, `0`, `-` and `=`. `esc` works down a list: it abandons a stroke
+being drawn, else puts away an armed ability, else asks whether to leave the
+battle (or the lesson).
 
 ## Why the simulation looks over-engineered
 

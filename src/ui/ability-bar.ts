@@ -1,9 +1,14 @@
 /**
  * The commander's ability bar.
  *
- * Buttons you click, the way any game does it. Keys 1..n still work for anyone
- * who wants them, but an ability the player has to remember a number for is an
- * ability they will not use.
+ * Buttons you click, the way any game does it. Keys 1..9, 0, - and = still work
+ * for anyone who wants them, but an ability the player has to remember a number
+ * for is an ability they will not use.
+ *
+ * AB-01: there are twelve abilities and nothing caps how many distinct ones are
+ * bought, but keys used to stop at 9 and the bar was one row that never wrapped,
+ * so a tenth slot could be reached by neither key nor click. Every slot now has
+ * a key (ui/keys.ts ABILITY_SLOT_KEYS) and the bar wraps inside the window.
  *
  * These are the COMMANDER's, not a unit's: no company casts a barrage, and
  * nothing on the field has to be selected to spend one. Clicking a button arms
@@ -17,6 +22,7 @@
 import { ABILITIES, type AbilityId } from "../content/abilities.ts";
 import type { World } from "../sim/world.ts";
 import type { Commander } from "../input/commander.ts";
+import { ABILITY_SLOT_LABELS } from "./keys.ts";
 
 /** A one-glyph mark per ability, so a button reads before its label does. */
 const MARK: Record<AbilityId, string> = {
@@ -55,7 +61,10 @@ export class AbilityBar {
     }
     root.style.display = "flex";
 
-    ids.forEach((id, i) => {
+    // More distinct abilities than there are keys cannot be bought (there are
+    // exactly as many keys as abilities), but if one ever were, a slot with no
+    // key must not silently appear.
+    ids.slice(0, ABILITY_SLOT_LABELS.length).forEach((id, i) => {
       const a = ABILITIES[id];
       const b = document.createElement("button");
       b.className = "ability";
@@ -63,7 +72,7 @@ export class AbilityBar {
 
       const key = document.createElement("span");
       key.className = "ability-key";
-      key.textContent = String(i + 1);
+      key.textContent = ABILITY_SLOT_LABELS[i];
       const mark = document.createElement("span");
       mark.className = "ability-mark";
       mark.textContent = MARK[id];
@@ -106,5 +115,12 @@ export class AbilityBar {
   /** Hide the bar, for the tutorial and once the match is over. */
   hide(): void {
     this.root.style.display = "none";
+  }
+
+  /** Empty and hide the bar, when its battle is torn down. */
+  dispose(): void {
+    this.hide();
+    this.root.textContent = "";
+    this.slots.length = 0;
   }
 }

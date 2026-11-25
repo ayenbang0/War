@@ -9,8 +9,10 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "check:sim": "node tools/check-sim-purity.mjs",
-    "test": "node tools/check-sim-purity.mjs && node tools/headless.ts && node tools/lockstep.ts && node tools/render-check.ts && node tools/content-check.ts",
-    "lockstep": "node tools/lockstep.ts"
+    "test": "node tools/check-sim-purity.mjs && node tools/headless.ts && node tools/lockstep.ts && node tools/render-check.ts && node tools/content-check.ts && node tools/ui-check.ts",
+    "lockstep": "node tools/lockstep.ts",
+    "ui-check": "node tools/ui-check.ts",
+    "e2e:fake": "node tools/e2e-fake.ts"
   },
   "devDependencies": {
     "@types/node": "^26.4.0",

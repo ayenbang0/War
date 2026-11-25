@@ -19,14 +19,10 @@ import { TERRAIN_INFO } from "../sim/terrain.ts";
 import { ABILITY_IDS } from "../content/abilities.ts";
 import { CHAPTERS } from "../content/campaign.ts";
 
-export type HomeChoice = "play" | "tutorial" | "campaign";
+import { domScreen, el } from "./dom-screen.ts";
+import type { Screen } from "./screen-stack.ts";
 
-const el = (tag: string, cls?: string, text?: string): HTMLElement => {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
+export type HomeChoice = "play" | "tutorial" | "campaign";
 
 /** One counted figure with its label. */
 function figure(value: string, label: string): HTMLElement {
@@ -36,69 +32,71 @@ function figure(value: string, label: string): HTMLElement {
   return box;
 }
 
-/** Show the front screen and resolve with what the player chose to do. */
-export function openHome(root: HTMLElement): Promise<HomeChoice> {
-  return new Promise((resolve) => {
-    root.textContent = "";
-    root.className = "home";
-    const panel = el("div", "home-panel");
+/**
+ * The front screen, as the bottom of the screen stack. It is never popped:
+ * every other screen comes back here in the end.
+ */
+export function homeScreen(root: HTMLElement, choose: (choice: HomeChoice) => void): Screen {
+  let play: HTMLButtonElement | null = null;
+  return domScreen({
+    name: "home",
+    kind: "full",
+    root,
+    // The bottom screen has nothing to trap focus away from.
+    trapsFocus: false,
+    firstFocus: () => play,
+    build: () => {
+      root.textContent = "";
+      root.className = "home";
+      const panel = el("div", "home-panel");
 
-    panel.appendChild(el("h1", "home-title", "WAR"));
-    panel.appendChild(el("p", "home-tagline", "A slow, deliberate battle. You command by drawing."));
+      panel.appendChild(el("h1", "home-title", "WAR"));
+      panel.appendChild(el("p", "home-tagline", "A slow, deliberate battle. You command by drawing."));
 
-    const actions = el("div", "home-actions");
-    const play = el("button", "home-play", "Play") as HTMLButtonElement;
-    const chronicle = el("button", "home-teach", "Campaign") as HTMLButtonElement;
-    const teach = el("button", "home-teach", "Learn the gestures") as HTMLButtonElement;
-    actions.append(play, chronicle, teach);
-    panel.appendChild(actions);
+      const actions = el("div", "home-actions");
+      play = el("button", "home-play", "Play") as HTMLButtonElement;
+      const chronicle = el("button", "home-teach", "Campaign") as HTMLButtonElement;
+      const teach = el("button", "home-teach", "Learn the gestures") as HTMLButtonElement;
+      actions.append(play, chronicle, teach);
+      panel.appendChild(actions);
 
-    panel.appendChild(el("p", "home-note",
-      "New here? Learn the gestures first -- every order in this game is a stroke of the pen."));
+      panel.appendChild(el("p", "home-note",
+        "New here? Learn the gestures first -- every order in this game is a stroke of the pen."));
 
-    // -- what the game is ------------------------------------------------------
-    panel.appendChild(el("h2", undefined, "How it plays"));
-    const about = el("div", "home-about");
-    for (const line of [
-      "You command with the left mouse button and nothing else. A loop gathers men into a company, a line marches them, a glyph drawn over them changes their formation, and a stroke onto an enemy commits them to a fight.",
-      "There is no build order and no economy. You bring the army you chose, and what happens to it is decided by ground, formation, nerve and where you are looking -- neither side sees the whole field.",
-      "Nerve decides battles more often than numbers. A company taken in the flank breaks; a company that keeps its ranks holds far longer than the same men in a crowd.",
-    ]) about.appendChild(el("p", undefined, line));
-    panel.appendChild(about);
+      // -- what the game is ----------------------------------------------------
+      panel.appendChild(el("h2", undefined, "How it plays"));
+      const about = el("div", "home-about");
+      for (const line of [
+        "You command with the left mouse button and nothing else. A loop gathers men into a company, a line marches them, a glyph drawn over them changes their formation, and a stroke onto an enemy commits them to a fight.",
+        "There is no build order and no economy. You bring the army you chose, and what happens to it is decided by ground, formation, nerve and where you are looking -- neither side sees the whole field.",
+        "Nerve decides battles more often than numbers. A company taken in the flank breaks; a company that keeps its ranks holds far longer than the same men in a crowd.",
+      ]) about.appendChild(el("p", undefined, line));
+      panel.appendChild(about);
 
-    // -- counted figures -------------------------------------------------------
-    panel.appendChild(el("h2", undefined, "In the box"));
-    const grid = el("div", "home-figures");
-    grid.appendChild(figure(String(UNIT_TYPE_IDS.length), "kinds of soldier"));
-    grid.appendChild(figure(String(LEVELS.length), "battlefields"));
-    grid.appendChild(figure(String(Object.keys(TERRAIN_INFO).length), "kinds of ground"));
-    grid.appendChild(figure(String(COMMANDER_IDS.length), "enemy commanders"));
-    grid.appendChild(figure(String(DOCTRINE_IDS.length), "doctrines"));
-    grid.appendChild(figure("14", "orders you can draw"));
-    grid.appendChild(figure(String(ABILITY_IDS.length), "reserves to call on"));
-    grid.appendChild(figure(String(new Set(LEVELS.map((l) => l.victory.mode)).size), "ways to win"));
-    grid.appendChild(figure(String(CHAPTERS.length), "chapters of the chronicle"));
-    panel.appendChild(grid);
+      // -- counted figures -----------------------------------------------------
+      panel.appendChild(el("h2", undefined, "In the box"));
+      const grid = el("div", "home-figures");
+      grid.appendChild(figure(String(UNIT_TYPE_IDS.length), "kinds of soldier"));
+      grid.appendChild(figure(String(LEVELS.length), "battlefields"));
+      grid.appendChild(figure(String(Object.keys(TERRAIN_INFO).length), "kinds of ground"));
+      grid.appendChild(figure(String(COMMANDER_IDS.length), "enemy commanders"));
+      grid.appendChild(figure(String(DOCTRINE_IDS.length), "doctrines"));
+      grid.appendChild(figure("14", "orders you can draw"));
+      grid.appendChild(figure(String(ABILITY_IDS.length), "reserves to call on"));
+      grid.appendChild(figure(String(new Set(LEVELS.map((l) => l.victory.mode)).size), "ways to win"));
+      grid.appendChild(figure(String(CHAPTERS.length), "chapters of the chronicle"));
+      panel.appendChild(grid);
 
-    panel.appendChild(el("p", "home-foot",
-      "Middle-drag or WASD to move the map, wheel or up/down arrows to zoom, " +
-      "space to pause, F2 for the debug read-out."));
+      // PC-01: middle/right drag now really pans, so this line is true again.
+      panel.appendChild(el("p", "home-foot",
+        "Middle- or right-drag or WASD to move the map, wheel or up/down arrows to zoom, " +
+        "space to pause, Esc to cancel a stroke or leave, F2 for the debug read-out."));
 
-    play.onclick = () => {
-      root.style.display = "none";
-      resolve("play");
-    };
-    chronicle.onclick = () => {
-      root.style.display = "none";
-      resolve("campaign");
-    };
-    teach.onclick = () => {
-      root.style.display = "none";
-      resolve("tutorial");
-    };
+      play.onclick = () => choose("play");
+      chronicle.onclick = () => choose("campaign");
+      teach.onclick = () => choose("tutorial");
 
-    root.appendChild(panel);
-    root.style.display = "flex";
-    play.focus();
+      root.appendChild(panel);
+    },
   });
 }

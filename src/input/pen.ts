@@ -10,6 +10,11 @@
  * Works with a mouse, a trackpad, or a stylus -- Pointer Events unify all
  * three. Tuned for the mouse, which is jitterier than a pen and is what most
  * players will actually use.
+ *
+ * The pen owns no keyboard listener. Escape used to be caught here AND by
+ * main.ts, so one press both cancelled the stroke and reloaded the tutorial;
+ * now the key router calls `cancelStroke()` and a stroke in progress claims the
+ * key before anything else sees it.
  */
 
 import type { Camera } from "../render/camera.ts";
@@ -32,6 +37,12 @@ export class Pen {
   private readonly cam: Camera;
   private readonly commander: Commander;
   private pointerId: number | null = null;
+  /**
+   * Whether the pen context is live. Off while a screen that does not allow it
+   * is on top -- the canvas is still under a dialog, and a stroke begun there
+   * must not reach the world.
+   */
+  private enabled = true;
 
   constructor(canvas: HTMLCanvasElement, cam: Camera, commander: Commander) {
     this.canvas = canvas;
@@ -41,7 +52,21 @@ export class Pen {
     canvas.addEventListener("pointermove", this.onMove);
     canvas.addEventListener("pointerup", this.onUp);
     canvas.addEventListener("pointercancel", this.onCancel);
-    window.addEventListener("keydown", this.onKey);
+  }
+
+  /** Remove every listener, so a torn-down battle leaves nothing on the canvas. */
+  dispose(): void {
+    this.cancelStroke();
+    this.canvas.removeEventListener("pointerdown", this.onDown);
+    this.canvas.removeEventListener("pointermove", this.onMove);
+    this.canvas.removeEventListener("pointerup", this.onUp);
+    this.canvas.removeEventListener("pointercancel", this.onCancel);
+  }
+
+  /** Turn the pen context on or off. Turning it off abandons any stroke. */
+  setEnabled(on: boolean): void {
+    if (!on) this.cancelStroke();
+    this.enabled = on;
   }
 
   private toWorld(e: PointerEvent): Point {
@@ -53,7 +78,7 @@ export class Pen {
   }
 
   private onDown = (e: PointerEvent): void => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || !this.enabled) return;
     e.preventDefault();
     this.drawing = true;
     this.pointerId = e.pointerId;
@@ -94,14 +119,19 @@ export class Pen {
     this.commander.cancel();
   };
 
-  /** Escape abandons a stroke mid-draw without issuing anything. */
-  private onKey = (e: KeyboardEvent): void => {
-    if (e.key !== "Escape" || !this.drawing) return;
+  /**
+   * Abandon a stroke mid-draw without issuing anything. Returns whether there
+   * was one, so Escape can stop there instead of also opening the leave screen.
+   */
+  cancelStroke(): boolean {
+    if (!this.drawing) return false;
     if (this.pointerId !== null) this.release(this.pointerId);
+    this.drawing = false;
     this.points = [];
     this.commander.cancel();
     this.lastAction = "cancelled";
-  };
+    return true;
+  }
 
   private release(id: number): void {
     this.drawing = false;

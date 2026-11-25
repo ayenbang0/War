@@ -1,0 +1,583 @@
+/**
+ * Layer 2, the battle: everything main.ts used to do for its one battle, as an
+ * object with a beginning and an end.
+ *
+ * Built from a plain BattleConfig, so the setup screen, the lesson and (from
+ * K5) the kingdom map's descent all launch it the same way. `start()` attaches
+ * the listeners and the frame loop; `teardown()` cancels the loop, removes every
+ * listener it added, clears the canvas and the HUD, and hands back what
+ * happened -- so a second battle can be built straight after without a page
+ * reload, which is what every return used to cost.
+ *
+ * Fixed-timestep accumulator: the sim advances in whole 20 Hz ticks and never
+ * sees real time, while rendering happens at display rate and interpolates
+ * between the last two tick states. That split is what makes the simulation
+ * reproducible while the picture stays smooth.
+ */
+
+import { World, TICK_DT, TICK_RATE } from "../sim/world.ts";
+import type { Outcome } from "../sim/victory.ts";
+import { hashWorld } from "../sim/hash.ts";
+import { PI } from "../sim/math.ts";
+import { TILE_SIZE } from "../sim/terrain.ts";
+import { DIFFICULTIES } from "../content/difficulty.ts";
+import { UNIT_TYPES } from "../content/unit-types.ts";
+import type { AbilityId } from "../content/abilities.ts";
+import { Camera } from "../render/camera.ts";
+import { Renderer, type Snapshot } from "../render/renderer.ts";
+import { drawInk } from "../render/ink.ts";
+import { Effects } from "../render/effects.ts";
+import { isMoving, presenceOf } from "../render/presence.ts";
+import { CameraControls } from "../input/camera-controls.ts";
+import { Commander } from "../input/commander.ts";
+import { Pen } from "../input/pen.ts";
+import { AbilityBar } from "../ui/ability-bar.ts";
+import { Tutorial } from "../ui/tutorial.ts";
+import { abilitySlotForCode, type LayerKeys } from "../ui/keys.ts";
+import type { InputContext, KeyInput, KeyVerdict } from "../ui/screen-stack.ts";
+import { distinctAbilities, LESSON_DURATION_SECONDS, type BattleConfig } from "./battle-config.ts";
+
+/** The seat the local player always takes. */
+export const PLAYER = 0;
+
+const MAX_STEPS_PER_FRAME = 5;
+/** How long a "company broke" line stays on screen. */
+const BREAK_NOTICE_MS = 4200;
+/**
+ * Dev builds expose `window.war` for console poking. Read defensively so the
+ * layer also runs under Node (tools/ui-check.ts), where import.meta has no env.
+ */
+const DEV = (import.meta as { env?: { DEV?: boolean } }).env?.DEV === true;
+/** The page colour, painted over the canvas when a battle is torn down. */
+const CLEAR_COLOUR = "#d9cbb0";
+
+/** Where the battle is in its life. */
+export type BattlePhase = "built" | "live" | "over" | "torn-down";
+
+/** The player's own pause (Space), distinct from a screen holding the sim. */
+export type RunState = "running" | "paused";
+
+/** What the battle tells the controller. */
+export type BattleHooks = {
+  /** The match has just ended. Called once. */
+  onOutcome(outcome: Outcome): void;
+  /** Esc with nothing to cancel: the player wants to leave. */
+  requestLeave(): void;
+  /** True while a screen on the stack holds the sim (a dialog, the report). */
+  simHeld(): boolean;
+};
+
+/** The page the battle draws into. */
+export type BattleEnv = {
+  readonly win: Window;
+  readonly canvas: HTMLCanvasElement;
+  readonly ctx: CanvasRenderingContext2D;
+  readonly hud: HTMLElement;
+  readonly abilityRoot: HTMLElement;
+};
+
+/** What teardown hands back. */
+export type BattleReport = {
+  readonly outcome: Outcome | null;
+  readonly tick: number;
+  readonly hash: string;
+};
+
+export class BattleLayer implements LayerKeys {
+  readonly kind = "battle" as const;
+  readonly config: BattleConfig;
+  readonly world: World;
+  readonly cam: Camera;
+  readonly commander: Commander;
+  readonly pen: Pen;
+  readonly tutorial: Tutorial | null;
+  /** Distinct abilities, in slot order. */
+  readonly abilityKeys: readonly AbilityId[];
+  phase: BattlePhase = "built";
+  run: RunState = "running";
+  showDebug = false;
+
+  private readonly env: BattleEnv;
+  private readonly hooks: BattleHooks;
+  private readonly renderer: Renderer;
+  private readonly controls: CameraControls;
+  private readonly effects: Effects;
+  private readonly abilityBar: AbilityBar;
+  private readonly prev: Snapshot;
+  private readonly myZone: { x: number; y: number; w: number; h: number } | undefined;
+
+  private raf = 0;
+  private last = 0;
+  private accumulator = 0;
+  private fps = 0;
+  private hudTimer = 0;
+  private cachedHash = "";
+  private deployFogTick = 0;
+  private lastDust = 0;
+  /** The last company to break, shown briefly and then allowed to fade. */
+  private lastBreak = "";
+  private lastBreakAt = 0;
+  private breaksSeen = 0;
+
+  constructor(config: BattleConfig, env: BattleEnv, hooks: BattleHooks) {
+    this.config = config;
+    this.env = env;
+    this.hooks = hooks;
+    const level = config.level;
+    const diff = DIFFICULTIES[config.difficulty];
+    const lesson = config.mode === "lesson";
+
+    this.world = new World({
+      seed: level.seed,
+      tilesWide: level.tilesWide,
+      tilesHigh: level.tilesHigh,
+      // BS-05: the lesson has no clock and no enemy commander, so neither the
+      // level's timer nor an attack can end it mid-step. The far side stands
+      // where it was set out until the player goes to it.
+      duration: lesson ? LESSON_DURATION_SECONDS : level.duration,
+      soldierCapacity: 4096,
+      aiPlayers: lesson ? [] : [1],
+      aiTuning: { think: diff.thinkInterval, commit: diff.commitTicks, focus: diff.focus },
+      commander: config.commander,
+      victory: level.victory,
+      controlPoints: level.controlPoints,
+      reinforcements: level.reinforcements,
+      sightScale: level.night,
+      floodAtSeconds: level.floodAtSeconds,
+    });
+    const world = this.world;
+    world.doctrine[0] = config.armies[0].doctrine;
+    world.doctrine[1] = config.armies[1].doctrine;
+    this.abilityKeys = distinctAbilities(config.abilities[PLAYER]);
+    world.armAbilities(0, config.abilities[0]);
+    world.armAbilities(1, config.abilities[1]);
+
+    // Deploy INDIVIDUAL soldiers. No groups are created here, by design: a
+    // group is something the player draws with the pen, not something the game
+    // hands them.
+    for (const zone of level.deployment) {
+      const list = config.armies[zone.player];
+      let n = 0;
+      for (const type of list.squads) {
+        const spec = UNIT_TYPES[type];
+        const blockX = (zone.x + 3 + (n % 4) * 5) * TILE_SIZE;
+        const blockY = (zone.y + 4 + ((n / 4) | 0) * 9) * TILE_SIZE;
+        for (let i = 0; i < spec.soldiers; i++) {
+          world.spawnSoldier(
+            zone.player, type,
+            blockX + (i % 5) * 14, blockY + ((i / 5) | 0) * 14,
+            zone.player === 0 ? 0 : PI,
+          );
+        }
+        n++;
+      }
+    }
+
+    // The board is set out but the battle has not begun -- except in the
+    // lesson, which is about the pen, not about setting an army out.
+    world.deploying = !lesson;
+    this.myZone = level.deployment.find((z) => z.player === PLAYER);
+
+    this.cam = new Camera(world.terrain.worldWidth, world.terrain.worldHeight);
+    // Open looking at YOUR OWN MEN, not at the middle of your deployment zone.
+    // The zone is much taller than the force set out in it, so the camera
+    // started well below the army.
+    {
+      const s = world.soldiers;
+      let cx = 0;
+      let cy = 0;
+      let n = 0;
+      for (let i = 0; i < s.count; i++) {
+        if (s.alive[i] !== 1 || s.player[i] !== PLAYER) continue;
+        cx += s.x[i];
+        cy += s.y[i];
+        n++;
+      }
+      const z = this.myZone;
+      this.cam.x = n > 0 ? cx / n : (z ? z.x + z.w / 2 : 20) * TILE_SIZE;
+      this.cam.y = n > 0 ? cy / n : world.terrain.worldHeight * 0.5;
+    }
+    this.cam.zoom = 1.1;
+
+    this.renderer = new Renderer(env.ctx, world.terrain);
+    this.effects = new Effects();
+    this.commander = new Commander(world, PLAYER);
+    // Attached now but switched off until start(), and removed by teardown()
+    // whether or not the battle was ever started.
+    this.controls = new CameraControls(env.canvas, this.cam);
+    this.pen = new Pen(env.canvas, this.cam, this.commander);
+    this.controls.setEnabled(false);
+    this.pen.setEnabled(false);
+
+    this.prev = {
+      x: new Float64Array(world.soldiers.capacity),
+      y: new Float64Array(world.soldiers.capacity),
+      facing: new Float64Array(world.soldiers.capacity),
+    };
+    this.snapshotInto(this.prev);
+    this.abilityBar = new AbilityBar(env.abilityRoot, lesson ? [] : this.abilityKeys, this.commander);
+    this.tutorial = lesson ? new Tutorial(world, this.commander) : null;
+    this.cachedHash = hashWorld(world);
+  }
+
+  /** Attach the page listeners and start the frame loop. */
+  start(): void {
+    if (this.phase !== "built") throw new Error("battle already started");
+    this.phase = "live";
+    this.env.win.addEventListener("resize", this.resize);
+    this.resize();
+    this.pen.setEnabled(true);
+    this.controls.setEnabled(true);
+    if (DEV) {
+      (this.env.win as unknown as { war: unknown }).war = {
+        world: this.world, cam: this.cam, level: this.config.level, commander: this.commander,
+        pen: this.pen, hashWorld, UNIT_TYPES, tutorial: this.tutorial,
+      };
+    }
+    this.last = performance.now();
+    this.raf = this.env.win.requestAnimationFrame(this.frame);
+  }
+
+  /**
+   * Stop everything and leave the page as a menu would find it: no loop, no
+   * listener, a blank canvas, an empty (and so hidden) HUD, no ability bar.
+   */
+  teardown(): BattleReport {
+    const report: BattleReport = {
+      outcome: this.world.outcome, tick: this.world.tick, hash: hashWorld(this.world),
+    };
+    if (this.phase === "torn-down") return report;
+    this.phase = "torn-down";
+    this.env.win.cancelAnimationFrame(this.raf);
+    this.env.win.removeEventListener("resize", this.resize);
+    this.pen.dispose();
+    this.controls.dispose();
+    this.abilityBar.dispose();
+    this.env.hud.textContent = "";
+    const { ctx, canvas } = this.env;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = CLEAR_COLOUR;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+    if (DEV) delete (this.env.win as unknown as { war?: unknown }).war;
+    return report;
+  }
+
+  /** The screen on top decides what is live (plan §C.4). */
+  setContexts(contexts: readonly InputContext[]): void {
+    if (this.phase === "torn-down") return;
+    this.pen.setEnabled(contexts.includes("pen"));
+    this.controls.setEnabled(contexts.includes("camera"));
+  }
+
+  // -- keys (from the router) -------------------------------------------------
+
+  keyDown(k: KeyInput, contexts: readonly InputContext[]): KeyVerdict {
+    if (this.phase === "torn-down") return "pass";
+    const pen = contexts.includes("pen");
+    const world = this.world;
+
+    if (k.code === "Escape") {
+      if (k.repeat) return "handled";
+      // GK-01 / PC-06 / BS-04: Esc has ONE owner, and works down a list. A
+      // stroke in progress claims it first and nothing else sees the press;
+      // then an armed ability is put away (GK-06); only then is it "leave",
+      // which asks before it throws anything away.
+      if (pen && this.pen.cancelStroke()) return "handled";
+      if (this.commander.armed !== null) {
+        this.commander.arm(this.commander.armed);
+        this.pen.lastAction = "put away";
+        return "handled";
+      }
+      this.hooks.requestLeave();
+      return "handled";
+    }
+
+    if (pen && (k.code === "Enter" || k.code === "NumpadEnter") && world.deploying) {
+      if (k.repeat) return "handled";
+      world.deploying = false;
+      this.pen.lastAction = "battle begins";
+      return "handled";
+    }
+
+    const slot = abilitySlotForCode(k.code);
+    if (slot >= 0) {
+      // Arm an ability; the next pen stroke says where it goes. The left
+      // button stays the only thing that ever points at the world.
+      if (!pen || world.deploying || k.repeat) return "handled";
+      if (slot < this.abilityKeys.length && this.config.mode === "battle") {
+        this.pen.lastAction = this.commander.arm(this.abilityKeys[slot]);
+      }
+      return "handled";
+    }
+
+    if (k.code === "F2") {
+      k.preventDefault();
+      if (!k.repeat) this.showDebug = !this.showDebug;
+      return "handled";
+    }
+    if (k.code === "Space") {
+      // Without preventDefault the page would scroll; without the repeat check
+      // a held Space flickers the pause (GK-05).
+      k.preventDefault();
+      if (!k.repeat) this.run = this.run === "paused" ? "running" : "paused";
+      return "handled";
+    }
+    if (k.code === "Period" && this.run === "paused") {
+      this.snapshotInto(this.prev);
+      world.step();
+      return "handled";
+    }
+    if (contexts.includes("camera") && this.controls.keyDown(k.code)) return "handled";
+    return "pass";
+  }
+
+  keyUp(code: string): void {
+    this.controls.keyUp(code);
+  }
+
+  releaseAll(): void {
+    this.controls.releaseAll();
+  }
+
+  // -- the loop -------------------------------------------------------------
+
+  private resize = (): void => {
+    const { win, canvas, ctx } = this.env;
+    const dpr = Math.min(win.devicePixelRatio || 1, 2);
+    const w = win.innerWidth;
+    const h = win.innerHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.cam.setViewport(w, h);
+  };
+
+  private snapshotInto(t: Snapshot): void {
+    t.x.set(this.world.soldiers.x);
+    t.y.set(this.world.soldiers.y);
+    t.facing.set(this.world.soldiers.facing);
+  }
+
+  /** Whether the sim is held this frame, by the player or by a screen. */
+  private held(): boolean {
+    return this.run === "paused" || this.hooks.simHeld();
+  }
+
+  private inDeploymentZone(x: number, y: number): boolean {
+    const z = this.myZone;
+    if (!z) return false;
+    return (
+      x >= z.x * TILE_SIZE && x <= (z.x + z.w) * TILE_SIZE &&
+      y >= z.y * TILE_SIZE && y <= (z.y + z.h) * TILE_SIZE
+    );
+  }
+
+  private frame = (now: number): void => {
+    if (this.phase === "torn-down") return;
+    const { world, effects, renderer, commander, pen, cam, prev } = this;
+    const ctx = this.env.ctx;
+    const dtReal = Math.min((now - this.last) / 1000, 0.25);
+    this.last = now;
+    this.fps += (1 / Math.max(dtReal, 1e-6) - this.fps) * 0.1;
+
+    this.controls.update(dtReal);
+    commander.flushPending(now);
+
+    const held = this.held();
+    if (!held) {
+      this.accumulator += dtReal;
+      let steps = 0;
+      while (this.accumulator >= TICK_DT && steps < MAX_STEPS_PER_FRAME) {
+        this.snapshotInto(prev);
+        world.step();
+        // Events are cleared at the top of every tick, so a frame running
+        // several ticks would otherwise see only the last one's blows. Blows
+        // you could not see leave nothing above the fog either.
+        effects.ingest(world.events, now / 1000, (x, y) => world.fog[PLAYER].at(x, y) === 1);
+        renderer.fallen.ingest(world, world.events, PLAYER, now / 1000);
+        effects.ingestSpecials(
+          world.specialEvents.filter((m) => m.player === PLAYER || world.fog[PLAYER].at(m.x, m.y) === 1),
+          now / 1000,
+        );
+        // A company that has just ceased to exist leaves nothing behind.
+        for (const id of world.disbanded) effects.forgetGroup(id);
+        this.accumulator -= TICK_DT;
+        steps++;
+      }
+      if (steps === MAX_STEPS_PER_FRAME) this.accumulator = 0;
+    }
+
+    // Pick up any company that broke since the last frame. Only the player's
+    // own are announced -- being told the enemy is breaking would hand over
+    // information the fog is meant to be keeping.
+    while (this.breaksSeen < world.breakages.length) {
+      const b = world.breakages[this.breaksSeen++];
+      if (b.player !== PLAYER) continue;
+      this.lastBreak = b.name + " broke - " + b.cause;
+      this.lastBreakAt = now;
+    }
+
+    // The match has just ended: tell the controller once. Guarded by the phase
+    // rather than by clearing world.outcome, because the outcome is real state
+    // that the HUD and the sim both still read.
+    if (world.outcome && this.phase === "live") {
+      this.phase = "over";
+      this.abilityBar.hide();
+      this.hooks.onOutcome(world.outcome);
+      // The controller may have torn the battle down from inside that call.
+      if ((this.phase as BattlePhase) === "torn-down") return;
+    }
+
+    // Deployment freezes the match, so the sim's vision sweep never runs and
+    // the fog would sit at "never seen" everywhere. Light it from here instead,
+    // throttled because there is no reason to re-stamp 160 discs every frame.
+    if (world.deploying && this.deployFogTick++ % 6 === 0) world.lightGround();
+
+    this.tutorial?.update();
+    this.abilityBar.update(world, PLAYER, commander, TICK_RATE);
+
+    // During deployment the pen drags men into position instead of ordering them.
+    if (world.deploying && pen.drawing && pen.points.length > 1 && commander.selected.length > 0) {
+      const tip = pen.points[pen.points.length - 1];
+      if (this.inDeploymentZone(tip.x, tip.y)) {
+        for (const handle of commander.selected) {
+          const g = world.groupById(handle);
+          const men = g ? g.members : [];
+          if (men.length === 0) continue;
+          let cx = 0;
+          let cy = 0;
+          for (const id of men) {
+            cx += world.soldiers.x[id];
+            cy += world.soldiers.y[id];
+          }
+          cx /= men.length;
+          cy /= men.length;
+          for (const id of men) {
+            world.soldiers.x[id] += tip.x - cx;
+            world.soldiers.y[id] += tip.y - cy;
+          }
+        }
+        this.snapshotInto(prev);
+      }
+    }
+
+    const alpha = held ? 1 : Math.min(this.accumulator / TICK_DT, 1);
+    const clock = now / 1000;
+    renderer.draw(world, cam, prev, alpha, commander.selected, clock, PLAYER);
+    // Companies on the move scuff the ground. Purely visual and driven from
+    // the render clock, so it never touches a tick.
+    if (!held && now - this.lastDust > 70) {
+      this.lastDust = now;
+      for (const g of world.groups) {
+        if (g.stance !== "move" && g.stance !== "attack" && g.stance !== "retreat") continue;
+        const p = presenceOf(world, g, PLAYER, prev);
+        if (!isMoving(p)) continue;
+        effects.kickDust(p.x, p.y, clock, Math.max(18, Math.min(g.radius, p.spread * 2 + 8)), g.id);
+      }
+    }
+    effects.draw(ctx, cam, clock);
+    drawInk(ctx, cam, pen.points, commander.preview, commander.pendingRail);
+    if (this.run === "paused") {
+      // BH-01: a paused field must not look like a frozen one. Dimmed, and the
+      // HUD says so in words.
+      ctx.fillStyle = "rgba(40, 32, 22, 0.16)";
+      ctx.fillRect(0, 0, cam.viewW, cam.viewH);
+    }
+
+    this.hudTimer += dtReal;
+    if (this.hudTimer > 0.5) {
+      this.hudTimer = 0;
+      this.cachedHash = hashWorld(world);
+    }
+    this.drawHud();
+    this.raf = this.env.win.requestAnimationFrame(this.frame);
+  };
+
+  /**
+   * The whole interface, deliberately almost nothing.
+   *
+   * Your own army's nerve and numbers, the clock, and what the pen just did.
+   * Everything else -- tick counts, hashes, frame rate, the enemy's strength --
+   * is either a debugging aid or information you are supposed to earn by
+   * scouting, and neither belongs on the screen during a battle. F2 brings the
+   * diagnostics back when they are actually wanted.
+   */
+  private drawHud(): void {
+    const { world, pen, cam } = this;
+    const t = world.tick / TICK_RATE;
+    const left = Math.max(0, world.duration - t);
+    const men = world.soldiersOf(PLAYER).length;
+    const morale = world.armyMorale(PLAYER);
+    // A lesson has no clock to show (BS-05); six hours counting down would
+    // only suggest that it is a race.
+    const clock = this.config.mode === "lesson"
+      ? "lesson"
+      : String(Math.floor(left / 60)).padStart(2, "0") + ":" +
+        String(Math.floor(left % 60)).padStart(2, "0");
+
+    const bars = 20;
+    const filled = Math.round(morale * bars);
+    const bar = "█".repeat(filled) + "░".repeat(bars - filled);
+
+    const lines: string[] = [];
+    if (this.run === "paused") lines.push("PAUSED - space to resume", "");
+    lines.push(
+      clock + "   " + men + " men",
+      bar + " " + (morale * 100).toFixed(0) + "%",
+    );
+    const v = world.victory;
+    if (this.config.mode === "lesson") {
+      // The lesson's ground has a win condition of its own, which is not what
+      // the lesson is about.
+    } else if (v.mode === "objectives") {
+      lines.push(
+        "holding " + world.pointsHeldBy(PLAYER) + "/" + world.controlPoints.length +
+        "   " + Math.floor(world.holdSeconds[PLAYER]) + "s of " + v.holdToWin + "s",
+      );
+    } else if (v.mode === "points") {
+      lines.push(
+        Math.floor(world.points[PLAYER]) + " / " + v.target + " pts" +
+        "   holding " + world.pointsHeldBy(PLAYER) + "/" + world.controlPoints.length,
+      );
+    } else if (v.mode === "survive") {
+      lines.push(v.defender === PLAYER ? "hold out until the clock runs down" : "break them before time");
+    } else if (v.mode === "breakthrough") {
+      const where = world.controlPoints[v.exit]?.name ?? "the exit";
+      lines.push(
+        (v.attacker === PLAYER ? "through to " : "keep them from ") + where + ": " +
+        world.through[v.attacker] + "/" + v.required,
+      );
+    } else if (v.mode === "standard") {
+      const [a, b] = world.standardsFlying();
+      const mine = PLAYER === 0 ? a : b;
+      const theirs = PLAYER === 0 ? b : a;
+      lines.push("colours: yours " + (mine ? "flying" : "taken") + ", theirs " + (theirs ? "flying" : "taken"));
+    }
+    if (world.deploying) {
+      lines.push("", "loop to group - glyph to form up - drag to place", "ENTER to begin");
+    } else if (world.outcome) {
+      lines.push("", world.outcome.winner === PLAYER ? "VICTORY" : world.outcome.winner < 0 ? "DRAW" : "DEFEAT");
+    } else if (this.lastBreak && performance.now() - this.lastBreakAt < BREAK_NOTICE_MS) {
+      // A company breaking outranks the pen's own chatter: it is the one thing
+      // happening on the field that the player most needs to know about.
+      lines.push("", this.lastBreak);
+    } else if (pen.lastAction) lines.push("", pen.lastAction);
+
+    // The lesson owns the panel while it is running.
+    if (this.tutorial) lines.push(...this.tutorial.lines());
+
+    if (this.showDebug) {
+      lines.push(
+        "",
+        "tick " + world.tick + "  " + this.cachedHash,
+        "groups " + world.groups.length + "  fps " + this.fps.toFixed(0),
+        "zoom " + cam.zoom.toFixed(2) + "  foe " + (world.ai[0] ? world.ai[0].style : "-"),
+      );
+    }
+    this.env.hud.textContent = lines.join("\n");
+  }
+}
