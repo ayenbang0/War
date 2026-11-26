@@ -905,6 +905,10 @@ begin("ui policy (BS-06, BS-07, BS-10, BS-11, RT-02)");
     }
     check("story.css: no font size in px or under 1rem", bad.length === 0, bad.join(" | "));
     check("story.css: authored focus rings", /:focus-visible[^{]*\{[^}]*outline:\s*3px/.test(scss));
+    // K11: the coach sits over the field and the map; a stroke begun under it
+    // must reach the canvas (the real-browser k9-tutorial-drill failure).
+    check("story.css: the coach lets strokes through except its buttons",
+      /\.s-coach\s*\{[^}]*pointer-events:\s*none/.test(scss) && /\.s-coach \.k-btn\s*\{[^}]*pointer-events:\s*auto/.test(scss));
     check("story.css: reduced motion is honoured", /@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(scss));
     check("story.css: index.html and e2e.html load it", read("../index.html").includes("/src/ui/story/story.css") &&
       read("../e2e.html").includes("/src/ui/story/story.css"));

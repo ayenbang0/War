@@ -37,7 +37,16 @@
   background: rgba(29, 25, 18, 0.94); color: #f3ecd9; border: 1px solid #8a7550;
   font: 1rem/1.45 "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  /* K11: the coach "never takes the pen" -- and in a real browser it did. A
+     stroke begun over the panel (the drill's split line, drawn low-left of the
+     group, starts there on a 1366x768 or 1536x730 window) went to the panel and
+     never reached the canvas, so the step waited for ever. The fake DOM's
+     elementFromPoint never returns the coach, which is why only real Chrome
+     failed. The panel now lets every pointer through except on its buttons,
+     the same rule as the ability strip (style.css .ability). */
+  pointer-events: none;
 }
+.s-coach .k-btn { pointer-events: auto; }
 .s-coach-lesson { margin: 0; font-weight: 700; font-size: 1rem; }
 .s-coach-count { margin: 0 0 0.25rem; color: #d8ccb0; font-size: 1rem; }
 .s-coach-text { margin: 0.25rem 0 0.5rem; font-size: 1.0625rem; }
