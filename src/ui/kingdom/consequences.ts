@@ -53,6 +53,8 @@ export function consequenceLines(
       lines.push(DESCENT.wallsDamaged({ name: name(e.holding), pct: Math.round(e.by / 10), down: Math.round(e.walls / 10) }));
     }
   }
+  // K10: a town stormed through broken walls is sacked.
+  if (result.damage.buildings > 0) lines.push(DESCENT.sacked({ name: name(spec.terrain.holding), n: result.damage.buildings }));
   if (result.legitimacy > 0) lines.push(DESCENT.legitimacyUp(result.legitimacy));
   else if (result.legitimacy < 0) lines.push(DESCENT.legitimacyDown(-result.legitimacy));
   return lines;

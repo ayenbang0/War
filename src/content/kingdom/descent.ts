@@ -109,6 +109,15 @@ export const SIEGE_STORM = { share: 4, maxMen: 20 } as const;
 export const SIEGE_LAYOUT = { margin: 2, keepMargin: 3, keepThickness: 2 } as const;
 
 /**
+ * A town stormed through broken walls is sacked: one of its buildings is
+ * knocked idle (K5's battle damage) for every `perBuilding` per mille of its
+ * walls standing broken when it fell -- the old damage and the battle's
+ * together. A town that held, or walls that fell whole (stormed over the top),
+ * lose none (docs/PROVISIONAL.md K10.16).
+ */
+export const SIEGE_SACK = { perBuilding: 250 } as const;
+
+/**
  * Wall damage an auto-resolved siege leaves (per mille), by who won, spread
  * across the range by the resolve's own cost draw (no new draw): a stormed
  * town is badly broken, a town that held is knocked about.

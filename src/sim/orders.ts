@@ -58,7 +58,7 @@ export type OrderBody =
    * squad: a gate is the garrison's, not a company's. Refused for a player
    * who does not hold the walls; a gate with anyone standing in it does not
    * shut (World.applyGates, docs/PROVISIONAL.md K10.1). Not a gesture -- the
-   * pen vocabulary stays as it is -- but a HUD button and a key.
+   * pen vocabulary stays as it is -- but a key, named on the HUD (K10.15).
    */
   | { kind: "gates"; open: boolean };
 

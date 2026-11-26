@@ -134,6 +134,9 @@ export class BattleLayer implements LayerKeys {
   /** The last company to break, shown briefly and then allowed to fade. */
   private lastBreak = "";
   private lastBreakAt = 0;
+  /** K10: the HUD's siege line, and the tick (with deploying and outcome) it was read at. */
+  private siegeLine = "";
+  private siegeLineKey = -1;
   private breaksSeen = 0;
 
   constructor(config: BattleConfig, env: BattleEnv, hooks: BattleHooks) {
@@ -305,7 +308,8 @@ export class BattleLayer implements LayerKeys {
       if (k.repeat || world.deploying || world.outcome) return "handled";
       const open = !world.gatesOpen(PLAYER);
       world.orders.issue({ kind: "gates", open }, PLAYER, world.tick + 1);
-      this.pen.lastAction = open ? "gates open" : "gates shut";
+      // Audit K10-04: a gate is never shut on men, so say so rather than claim it shut.
+      this.pen.lastAction = open ? "gates open" : world.gateHeldOpen(PLAYER) ? "men in the gateway - it stays open" : "gates shut";
       return "handled";
     }
 
@@ -599,11 +603,20 @@ export class BattleLayer implements LayerKeys {
       const theirs = PLAYER === 0 ? b : a;
       lines.push("colours: yours " + (mine ? "flying" : "taken") + ", theirs " + (theirs ? "flying" : "taken"));
     }
-    // K10: a siege's walls, and the defender's gates.
+    // K10: a siege's walls, and the defender's gates. Read once per sim tick,
+    // not per frame (audit K10-03): walls and gates change only on a tick.
     if (world.siege) {
-      const down = Math.round(world.wallDamage() / 10);
-      const gates = world.hasGates(PLAYER) ? (world.gatesOpen(PLAYER) ? "gates open - G to shut" : "gates shut - G to open") : "";
-      lines.push(["walls " + (down > 0 ? down + "% down" : "whole"), gates].filter(Boolean).join("   "));
+      const key = world.tick * 4 + (world.deploying ? 1 : 0) + (world.outcome ? 2 : 0);
+      if (this.siegeLineKey !== key) {
+        this.siegeLineKey = key;
+        const down = Math.round(world.wallDamage() / 10);
+        // The gates are offered only while G can swing them (audit K10-02):
+        // not while deploying, not once the battle is over.
+        const live = !world.deploying && !world.outcome && world.hasGates(PLAYER);
+        const gates = live ? (world.gatesOpen(PLAYER) ? "gates open - G to shut" : "gates shut - G to open") : "";
+        this.siegeLine = ["walls " + (down > 0 ? down + "% down" : "whole"), gates].filter(Boolean).join("   ");
+      }
+      lines.push(this.siegeLine);
     }
     if (world.deploying) {
       lines.push("", "loop to group - glyph to form up - drag to place", "ENTER to begin");

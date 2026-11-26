@@ -41,7 +41,7 @@ export const SEAT_WORKS: readonly BuildingId[] = ["barracks", "palisade", "grana
 /**
  * K10: works raised over the seat works at the Crown Seat, each over the work
  * it upgrades (buildings.ts): Rimaros is walled in stone, so taking it back
- * is a siege (docs/PROVISIONAL.md K10.8).
+ * is a siege (docs/PROVISIONAL.md K10.9).
  */
 export const CROWN_SEAT_WORKS: readonly BuildingId[] = ["wall"];
 

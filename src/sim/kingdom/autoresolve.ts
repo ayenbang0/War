@@ -30,11 +30,11 @@
  * fight it" (docs/PROVISIONAL.md K5.11).
  */
 
-import { max, min, round } from "../math.ts";
+import { floor, max, min, round } from "../math.ts";
 import type { Rng } from "../rng.ts";
 import { UNIT_TYPES } from "../../content/unit-types.ts";
 import { KING_PLAYER } from "../../content/kingdom/factions.ts";
-import { AUTORESOLVE, AUTORESOLVE_WALLS, LOSS_LEGITIMACY, WALLS_DOWN, WIN_LEGITIMACY } from "../../content/kingdom/descent.ts";
+import { AUTORESOLVE, AUTORESOLVE_WALLS, LOSS_LEGITIMACY, SIEGE_SACK, WALLS_DOWN, WIN_LEGITIMACY } from "../../content/kingdom/descent.ts";
 import type { BattleResult, BattleSpec, ResultSquad } from "../layers.ts";
 
 /** A side's fighting strength for the auto-resolve (before walls and the sergeant's penalty). */
@@ -116,7 +116,16 @@ export function autoResolve(spec: BattleSpec, rng: Rng, forPlayer: boolean): Bat
     morale,
     fled: [winner === 1, winner === 0],
     left: [false, false],
-    damage: { crops: 0, buildings: 0, walls },
+    damage: { crops: 0, buildings: sackedBuildings(spec, winner, spec.terrain.worn + walls), walls },
     legitimacy: !king ? 0 : winner === 0 ? WIN_LEGITIMACY : winner === 1 ? -LOSS_LEGITIMACY : 0,
   };
+}
+
+/**
+ * K10: the buildings a storm knocks idle (SIEGE_SACK): only when the attacker
+ * took the walls, one per share of them left broken (`down`, per mille).
+ */
+export function sackedBuildings(spec: BattleSpec, winner: number, down: number): number {
+  if (spec.terrain.fortification === "none" || winner !== spec.deployment.attacker) return 0;
+  return floor(min(WALLS_DOWN, down) / SIEGE_SACK.perBuilding);
 }

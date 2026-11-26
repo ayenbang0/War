@@ -1134,21 +1134,42 @@ export class World {
     const w = this.siege;
     if (!w || w.defender !== player) return;
     const t = this.terrain;
-    let occupied: Set<number> | null = null;
-    if (!open) {
-      occupied = new Set<number>();
-      const s = this.soldiers;
-      for (let i = 0; i < s.count; i++) {
-        if (s.alive[i] !== 1) continue;
-        occupied.add(floor(s.y[i] / TILE_SIZE) * t.width + floor(s.x[i] / TILE_SIZE));
-      }
-      for (const g of this.groups) occupied.add(floor(g.anchorY / TILE_SIZE) * t.width + floor(g.anchorX / TILE_SIZE));
-    }
+    const occupied = open ? null : this.occupiedTiles();
     for (let k = 0; k < w.gates.length; k++) {
       const tiles = gateTiles(t, w, k);
-      if (occupied && tiles.some((i) => occupied!.has(i))) continue;
+      if (occupied && tiles.some((i) => occupied.has(i))) continue;
       for (const i of tiles) t.swingGate(i % t.width, (i / t.width) | 0, open);
     }
+  }
+
+  /** Every tile a living soldier or a company's anchor stands on (tile indices). */
+  private occupiedTiles(): Set<number> {
+    const t = this.terrain;
+    const occupied = new Set<number>();
+    const s = this.soldiers;
+    for (let i = 0; i < s.count; i++) {
+      if (s.alive[i] !== 1) continue;
+      occupied.add(floor(s.y[i] / TILE_SIZE) * t.width + floor(s.x[i] / TILE_SIZE));
+    }
+    for (const g of this.groups) occupied.add(floor(g.anchorY / TILE_SIZE) * t.width + floor(g.anchorX / TILE_SIZE));
+    return occupied;
+  }
+
+  /**
+   * K10: is an open gate of this player's held open by men standing in it
+   * right now (so a `gates` shut order would leave it open)? For the HUD's
+   * answer to the key (audit K10-04); reads the world, changes nothing.
+   */
+  gateHeldOpen(player: number): boolean {
+    const w = this.siege;
+    if (!w || w.defender !== player) return false;
+    const t = this.terrain;
+    const occupied = this.occupiedTiles();
+    for (let k = 0; k < w.gates.length; k++) {
+      const tiles = gateTiles(t, w, k);
+      if (tiles.some((i) => t.type[i] === Terrain.GateOpen) && tiles.some((i) => occupied.has(i))) return true;
+    }
+    return false;
   }
 
   /** K10: does this player hold walls with a gate standing open? (The HUD's button reads it.) */

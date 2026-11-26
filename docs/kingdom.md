@@ -1244,7 +1244,8 @@ Hungry armies go home; scouts ride only with bread for the way back.
   deployment and `AMBUSHED_NERVE`); walls; and at an assault on townsmen
   alone, **Open the gates** (`yield`, legitimacy −3) or **Retreat to the
   keep** (`keep`: needs a wall or keep; the town is sacked and the siege
-  auto-resolved -- the real siege is K10).
+  auto-resolved -- the real siege is K10). *Superseded by K10: the siege of
+  the keep is a battle still to be fought (K10.11).*
 
 ### Player experience
 
@@ -1388,6 +1389,8 @@ of it. Choices are in docs/PROVISIONAL.md K9s.1–9 and K9.1–22.
   `battle` effect stands a host at the encounter's holding; a contact with it
   is fought on the encounter's level under its captain (K9.4). The capital
   siege is an assault on fixed walls (K9.8, the plan's named scope cut).
+  *Superseded by K10: Rimaros is walled in stone in the realm and its siege
+  is a K10 siege of those walls (K10.9).*
 - **The chronicle** is written from the tick's events at its end, as a ledger
   (K9.10). **Endings**: Restored King, Iron Crown, Hollow Crown (Legitimacy ×
   Mercy the day the crown is taken), The Chronicle Closes (the king lost, or
@@ -1457,3 +1460,136 @@ the K2–K8 scenarios are unchanged; `boot({ opening: true })` is the real flow.
 ### Determinism and the golden
 No golden moved: the story is off in the golden realm, and the drill's
 config is not a golden battle.
+
+## K10 — sieges
+
+PLAN.md §B.11's K10 row: finish what Phase 8 scoped out, so that the walls a
+holding has built are the walls its battle is fought behind, and what the
+battle does to them stays done. Three kinds of battle are now real sieges
+launched through K5's descent: **(a)** an assault on a walled holding,
+**(b)** the townsmen's retreat to the keep, and **(c)** the Act IV assault
+on the Crown Seat. AI-against-AI sieges stay auto-resolved, and batter the
+walls too. Every number is provisional (docs/PROVISIONAL.md K10.1–K10.18);
+P8.1, K8.9 and K9.8 are superseded.
+
+```
+kingdom contact at walls -> buildBattleSpec: terrain.fortification + terrain.worn, victory breakthrough
+  -> battleFromSpec -> siegeFromSpec: works laid out round the defender (gates, courses, old damage)
+  -> the battle (gates swing, engines batter) -> world.wallDamage()
+  -> resultFromBattle: damage.walls (this battle's), damage.buildings (the sack)
+  -> applyBattleResult: holding.walls += walls; buildings idle; stormed / held / keep held
+  -> the city view: Repair walls -> holding.mend; the masons work it off by the day
+```
+
+### Files
+
+| File | What |
+|---|---|
+| `src/sim/terrain.ts` | `Terrain.GateOpen`, `isGate`, `TerrainGrid.swingGate` (keeps wear and fire) |
+| `src/sim/siege.ts` | thick circuits (`thickness`), works raised battered (`worn`), `onSiegeWall`, `gateTiles`, `siegeDamage` |
+| `src/sim/world.ts` | the `gates` order (`applyGates`), `gatesOpen`, `hasGates`, `wallDamage` |
+| `src/sim/orders.ts` | the battle order kind `gates` (appended) |
+| `src/sim/layers.ts` | `BattleSpec.terrain.worn`, `BattleResult.damage.walls` |
+| `src/app/battle-config.ts` | `siegeFromSpec`: the holding's works as a battlefield lays them out, and their heart (the breakthrough's exit) |
+| `src/content/kingdom/descent.ts` | `WALLS_DOWN`, `WALL_REPAIR`, `SIEGE_STORM`, `SIEGE_LAYOUT`, `SIEGE_SACK`, `AUTORESOLVE_WALLS` |
+| `src/sim/kingdom/descent.ts` | sieges in the spec (`stormMen`, K10.7 walls at home, the keep), wall damage read back and applied, `abandonHolding`, the keep as a waiting contact |
+| `src/sim/kingdom/autoresolve.ts` | wall damage and the sack of an auto-resolved siege (`sackedBuildings`) |
+| `src/sim/kingdom/economy.ts` | `builtFortification`, `wallRepairCost`, the `repairWalls` order, the masons' day |
+| `src/sim/kingdom/invasions.ts` | the Crown Seat walled in stone (`CROWN_SEAT_WORKS`) |
+| `src/sim/kingdom/ai.ts` | the captains mend their walls |
+| `src/app/battle-layer.ts` | G swings the gates; the HUD's walls and gates line |
+| `src/ui/kingdom/contact-dialog.ts` | the siege line (how it is won), walls already battered, the keep's dialog |
+| `src/ui/kingdom/cards.ts`, `src/ui/city/cards.ts`, `src/render/city/renderer.ts`, `src/render/terrain-layer.ts` | walls on the region card, the wall lot (state, cost, Repair walls), breaches on the town plan, the open gate drawn |
+| `src/ui/kingdom/consequences.ts` | the after-action's wall damage, sack and keep lines |
+| `tools/kingdom-sieges.ts` | the K10 suite (in `npm test`) |
+| `src/e2e/scenarios-k10.ts` | `k10-siege-walls`, `k10-keep-gates` |
+
+### State
+
+Per holding, `walls` (battle damage, per mille of the walls' strength) and
+`mend` (the share of it the masons are paid for). `fortificationOf` is now
+the strongest wall STANDING (none at `WALLS_DOWN`); `builtFortification` the
+strongest built, which the repair is priced from. A waiting `Contact` may be
+marked `keep`. The kingdom order kind `repairWalls {holding}` is appended;
+so is the battle order kind `gates {open}`.
+
+### The siege contract
+
+- **The spec carries the works.** `buildBattleSpec` sets `terrain.fortification`
+  (the keep for townsmen in it; the holding's standing walls for an assault or
+  an army at home, K10.7) and `terrain.worn` (the holding's `walls`), and
+  behind works the victory `breakthrough` (attacker, exit 0, `stormMen`).
+- **The battle builds them from the spec alone** (`siegeFromSpec`, K10.2):
+  the same spec always raises the same walls, so a replay or a peer has them.
+- **Gates** (K10.1): only the holder swings them; a gate is never shut on men.
+- **What goes back**: `damage.walls` is this battle's battering over `worn`
+  (K10.5); `damage.buildings` the sack of a town stormed (K10.16). The
+  kingdom refuses a result that batters walls that are not there or past
+  rubble.
+- **What the kingdom does with it**: walls added (event `wallsDamaged`),
+  buildings idled, the holding stormed or held, the rest of its lord's
+  armies there giving up the walls (`abandonHolding`, K10.8), the keep's
+  siege told (`siege`).
+- **AI against AI** (K10.10): auto-resolved on the spot as before, the walls
+  battered by the resolve's own draws.
+
+### Player experience
+
+At a walled holding the contact dialog says it is a siege and how it is won
+("get N men inside the walls at once, or break the garrison, within M
+minutes", or for the defender "hold for M minutes ... Your gates open and
+shut with G") and how battered the walls already are. Fight goes down to a
+field with the holding's own walls on it: stone or timber, a gate where the
+road comes in, broken where they were broken. The HUD says how much of the
+walls stands and, to their holder, whether the gates are open ("G to
+open"/"G to shut"). The after-action says what the siege knocked down, the
+sack, and whether a keep held; the feed says it too. Retreat to the keep
+gives the town up and asks again, about the keep. Back on the map the region
+card shows the walls' state, the town plan draws the breaches, and the wall's
+lot says what is down, what mending costs and how many days the masons have
+left, with **Repair walls**. Audit: docs/audit/k10-sieges.md.
+
+### Save format version 11
+
+Adds per-holding `walls` and `mend` (validated: whole numbers, walls 0..1000,
+mend 0..walls), a contact's `keep`, a result's `damage.walls`. `migrate10to11`
+gives every holding whole walls with nothing mending, and every battle result
+in the log and the queue no wall damage, so a v10 realm hashes as it did.
+
+### Determinism and the golden
+
+No golden moved. The battle `world` tier is a field without works, which
+K10 does not change; the `stable` tier is untouched. The kingdom golden's
+decade has no captains and no walled sieges; the K10 state is mixed into
+the kingdom hash and the result hash only when non-zero.
+
+### The proof
+
+- `tools/kingdom-sieges.ts` (55 checks): the works on every level a kingdom
+  battle can borrow, either side attacking, each kind of works and host size
+  (nobody in a wall, the defender in, the attacker out); an assault on a
+  walled town fought for real from the kingdom (contact, spec, a headless
+  battle World, result, applied back: the walls carry the damage, the sack by
+  the rule, the same battle twice); the townsmen in the keep (a waiting
+  contact, then a real siege of two courses); an AI-against-AI siege still
+  auto-resolved and battering the walls; mending (cost, refusals, the
+  masons' days, walls down for good); **Act IV**: the Crown Seat walled, the
+  crown-siege letter, the Chancery Guard, the king's siege train marching on
+  the capital, the siege fought as a real battle World to a result and
+  applied back (walls, the encounter, the rest of the garrison giving up the
+  walls), and the story carried on to a crowned ending; save v11, the v10
+  migration and tampering refused.
+- `tools/story-playthrough.ts`: a fifth run reaches Act IV from day one and
+  fights every assault on the capital as a real battle World (K10.14): the
+  first siege is held with the walls 85‰ down, the second meets them so
+  battered and takes Rimaros; restored-king; its log replays.
+- `tools/siege-check.ts`: gates (only the holder, never shut on men, a sally
+  through an open gate, wear kept, battered and burnt open, the same on two
+  peers), the keep's two courses, works raised battered and read back.
+- `src/e2e/scenarios-k10.ts`: `k10-siege-walls` (a pen line marches on a
+  walled town; the dialog's siege line; Fight; the field's walls and HUD;
+  the outcome forced with a breach; the report, the feed, the region card,
+  the town plan's breach and the lot's Repair walls paid and worked off by
+  the day) and `k10-keep-gates` (the Hare at the king's walls; Retreat to the
+  keep; the keep's dialog; its siege; the gate swung open and shut with the
+  real G key; the keep held, in the report and the feed).

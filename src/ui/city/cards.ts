@@ -156,9 +156,12 @@ export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, h
       show(wallsRow, standing, "block");
       show(wallsDt, standing, "block");
       const pct = Math.round(h.walls / 10);
-      setText(wallsRow, h.walls === 0 ? C.wallsWhole : h.walls >= WALLS_DOWN ? C.wallsFallen
-        : h.mend > 0 ? C.wallsMending({ pct, days: Math.ceil(Math.min(h.walls, h.mend) / WALL_REPAIR.perDay) }) : C.wallsDown(pct));
+      const state = h.walls === 0 ? C.wallsWhole : h.walls >= WALLS_DOWN ? C.wallsFallen
+        : h.mend > 0 ? C.wallsMending({ pct, days: Math.ceil(Math.min(h.walls, h.mend) / WALL_REPAIR.perDay) }) : C.wallsDown(pct);
       const offerRepair = standing && h.owner === "king" && h.walls > 0;
+      // Audit K10-01: what mending costs is said in the card's own words, not
+      // only in the button's tooltip, which a keyboard or touch player never sees.
+      setText(wallsRow, offerRepair && h.mend < h.walls ? state + ". " + C.repairCost(amountsLine(wallRepairCost(h))) : state);
       if (!offerRepair && doc.activeElement === repair) heading?.focus();
       show(repair, offerRepair);
       repairWhy = offerRepair ? world.check({ kind: "repairWalls", holding: h.id }) : null;

@@ -670,6 +670,9 @@ section("K10 gates");
       w.orders.issue({ kind: "gates", open: false }, 0, w.tick + 1);
       w.step();
       check("a gate is not shut on men standing in it", GATE_ROWS.every((y) => t.typeAt(EAST, y) === Terrain.GateOpen));
+      const still = liveIn(w, g, (x, y) => x === EAST && GATE_ROWS.includes(y)) > 0;
+      check("and the HUD can say why: held open by men in it (gateHeldOpen), never for the besieger",
+        (!still || w.gateHeldOpen(0)) && !w.gateHeldOpen(1), "men still in it: " + still);
     }
     out = liveIn(w, g, (x) => x > EAST);
     if (out >= g.members.length * 0.8) break;

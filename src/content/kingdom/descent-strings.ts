@@ -66,6 +66,8 @@ export const DESCENT = {
   cutOff: (army: string) => "The " + army + " is cut off and taken.",
   townsmen: (p: { name: string; lost: number }) => p.name + " lost " + p.lost + " of its people on the walls.",
   stormed: (p: { name: string; by: string }) => p.name + " is taken by " + p.by + ".",
+  sacked: (p: { name: string; n: number }) =>
+    "The sack of " + p.name + " left " + p.n + " of its buildings standing idle.",
   wallsDamaged: (p: { name: string; pct: number; down: number }) =>
     "The siege knocked down " + p.pct + "% of the walls of " + p.name + " (" + p.down + "% down now): they stay down until they are mended in the town.",
   legitimacyUp: (n: number) => "Word of it spreads: legitimacy +" + n + ".",

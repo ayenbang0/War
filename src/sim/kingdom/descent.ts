@@ -65,7 +65,8 @@ import { ARMY_MORALE, CLAIM_UNREST, STORMED_UNREST } from "../../content/kingdom
 import { builtFortification } from "./economy.ts";
 export { builtFortification };
 import { routeOptions, updateSight } from "./explore.ts";
-import { autoResolve } from "./autoresolve.ts";
+import { autoResolve, sackedBuildings } from "./autoresolve.ts";
+export { sackedBuildings };
 import type { KingdomWorld } from "./world.ts";
 
 type ResolveOrder = Extract<KingdomOrderBody, { kind: "resolveContact" }>;
@@ -433,6 +434,7 @@ export function resultFromBattle(
     if (fieldedMen > 0) morale[side] = moraleFromNerve(world.armyMorale(side));
   }
   const king = spec.sides[0].faction === KING_PLAYER;
+  const walls = spec.terrain.fortification === "none" ? 0 : max(0, world.wallDamage() - spec.terrain.worn);
   return {
     contact: spec.contact,
     winner,
@@ -440,8 +442,9 @@ export function resultFromBattle(
     morale,
     fled: [winner === 1, winner === 0],
     left: [leftBy === 0, leftBy === 1],
-    // K10: what the battle did to the works, over what they carried in.
-    damage: { crops: 0, buildings: 0, walls: spec.terrain.fortification === "none" ? 0 : max(0, world.wallDamage() - spec.terrain.worn) },
+    // K10: what the battle did to the works, over what they carried in, and
+    // the sack of a town stormed through them.
+    damage: { crops: 0, buildings: sackedBuildings(spec, winner, spec.terrain.worn + walls), walls },
     legitimacy: !king ? 0 : winner === 0 ? WIN_LEGITIMACY : winner === 1 ? -LOSS_LEGITIMACY : 0,
   };
 }

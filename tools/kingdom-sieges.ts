@@ -31,7 +31,7 @@ import { sendLetter } from "../src/sim/kingdom/story.ts";
 import { ENDINGS } from "../src/content/story/endings.ts";
 import { wallRepairCost } from "../src/sim/kingdom/economy.ts";
 import { KING_PLAYER, FACTION_IDS } from "../src/content/kingdom/factions.ts";
-import { WALLS_DOWN, WALL_REPAIR } from "../src/content/kingdom/descent.ts";
+import { SIEGE_SACK, WALLS_DOWN, WALL_REPAIR } from "../src/content/kingdom/descent.ts";
 import { BIOMES } from "../src/content/kingdom/terrain.ts";
 import { REFUSAL } from "../src/content/kingdom/ui-strings.ts";
 import { STORY_LETTERS } from "../src/content/story/letters.ts";
@@ -197,6 +197,23 @@ let assaultSave = "";
     ev.push(...w.tick());
     check("applied back: the holding's walls carry the battle's damage", harrow.walls === 200 + f.result.damage.walls, String(harrow.walls));
     check("and the realm is told", f.result.damage.walls === 0 || ev.some((e) => e.kind === "wallsDamaged" && e.holding === harrow.id));
+    // The sack (K10.16): a town stormed through broken walls loses a building's work per quarter of them down.
+    check("stormed through walls " + (200 + f.result.damage.walls) + "‰ down, the town is sacked by the rule",
+      f.result.damage.buildings === (f.result.winner === 0 ? Math.floor((200 + f.result.damage.walls) / SIEGE_SACK.perBuilding) : 0),
+      String(f.result.damage.buildings));
+    {
+      const spec = { ...f.spec, terrain: { ...f.spec.terrain, worn: 600 } };
+      const sack = (winner: number): BattleResult => {
+        const { world, fielded } = battleWorld(battleFromSpec(spec), { aiPlayers: [0, 1] });
+        world.deploying = false;
+        world.outcome = { winner, reason: "rout", detail: "test" };
+        return resultFromBattle(spec, world, fielded);
+      };
+      const stormed = sack(0);
+      const held = sack(1);
+      check("walls 60% down and stormed: two buildings sacked; held: none", stormed.damage.buildings === 2 && held.damage.buildings === 0 &&
+        resultRefusal(spec, stormed) === null, stormed.damage.buildings + " " + held.damage.buildings);
+    }
     // Fought twice from the same realm: the same battle, to the man.
     const w2 = new KingdomWorld({ seed: SEED });
     const h2 = w2.holding(id(w2, "harrowfield")) as Holding;
@@ -249,6 +266,29 @@ section("the townsmen in the keep: a real siege of two courses");
       check("whoever won, the holding is his", f.result.winner === 1 ? (town.owner as string) === "hare" : town.owner === "king", String(town.owner) + " " + f.result.winner);
     }
   }
+}
+
+// -- 3b. the machine's sieges ------------------------------------------------------------------------
+
+section("a siege between two of the machine's sides (the Hare at the commons' walls): still auto-resolved");
+{
+  const w = new KingdomWorld({ seed: SEED });
+  const town = w.holding(id(w, "rookstead")) as Holding;
+  // Test setup: a walled town the commons rose and took (K8.6: hostile to the
+  // crown's armies alone), the Hare marching to take it back.
+  town.owner = "commons";
+  town.population = 240;
+  town.buildings[town.buildings.indexOf(null)] = "wall";
+  const hare = FACTION_IDS.indexOf("hare");
+  const host = raiseArmy(w, hare, id(w, "harrowfield"), ["siege", "line", "line", "line", "archer"], "defensive");
+  host.supply = 5000;
+  w.issue({ kind: "marchArmy", army: host.id, to: town.id }, hare);
+  const ev: KingdomEvent[] = [];
+  for (let i = 0; i < 40 * TICKS_PER_DAY && !ev.some((e) => e.kind === "contact"); i++) ev.push(...w.tick());
+  const met = ev.find((e) => e.kind === "contact");
+  check("the Hare meets the commons' walls: nobody waits on the king", !!met && met.kind === "contact" && !met.player && w.contact === null);
+  check("settled at once, the walls battered by it", ev.some((e) => e.kind === "wallsDamaged" && e.holding === town.id) && town.walls > 0,
+    "walls " + town.walls);
 }
 
 // -- 4. mending --------------------------------------------------------------------------------

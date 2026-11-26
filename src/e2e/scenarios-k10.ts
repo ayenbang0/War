@@ -139,6 +139,7 @@ scenario("k10-siege-walls", "march on a walled town: a siege battle at its walls
   await t.waitFor(() => t.hook.top() === "lot-card" && city.card?.index === lot, () => "the wall's lot card (top: " + t.hook.top() + ")");
   const card = document.querySelector(".k-card")?.textContent ?? "";
   t.expect(card.includes(C.walls) && card.includes(C.wallsDown(Math.round(down / 10))), "the lot card says how much of the wall is down (" + card + ")");
+  t.expect(card.includes("Mending costs "), "and, in its own words, what mending it costs (audit K10-01)");
   const timber0 = w.kingStocks.stocks.timber;
   t.clickButton(C.repairWalls);
   stepDays(t, 1);
@@ -211,9 +212,11 @@ scenario("k10-keep-gates", "the Hare at the king's walls: retreat to the keep, a
   t.expect(works !== null && works.defender === 0 && works.thickness === 2 && works.gates.length === 1,
     "a siege of the keep: two courses, one gate, the king's townsmen holding it");
   await t.frames(2);
-  t.expect(t.hudText().includes("gates shut - G to open"), "the HUD offers the gate to its holder (" + t.hudText().split("\n").join(" | ") + ")");
+  t.expect(t.hudText().includes("walls whole") && !t.hudText().includes("G to open"), "deploying, the HUD says the walls stand, and offers no gate yet");
   t.key("Enter");
   t.expect(!b.world.deploying, "Enter begins the siege");
+  await t.frames(2);
+  t.expect(t.hudText().includes("gates shut - G to open"), "the HUD offers the gate to its holder (" + t.hudText().split("\n").join(" | ") + ")");
   const gate = gateTiles(b.world.terrain, works!, 0);
   t.key("KeyG");
   await t.waitFor(() => b.world.gatesOpen(0), "the gate to swing open");
