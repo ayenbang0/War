@@ -16,6 +16,9 @@
 import type { KingdomWorld } from "../../sim/kingdom/world.ts";
 import type { Holding } from "../../sim/kingdom/state.ts";
 import { C, KIND_PLACE } from "../../content/kingdom/city-strings.ts";
+import { CROPS, type CropId } from "../../content/kingdom/crops.ts";
+import { KING_PLAYER } from "../../content/kingdom/factions.ts";
+import { grainStores } from "../../sim/kingdom/economy.ts";
 import { fieldLine, lotLine } from "../../render/city/renderer.ts";
 
 export type CityPanelHooks = {
@@ -23,6 +26,8 @@ export type CityPanelHooks = {
   field(index: number): void;
   politics(): void;
   leave(): void;
+  /** ECON: the realm's "resow all fields automatically" switch, turned on or off. */
+  resowAll(on: boolean): void;
 };
 
 /** What is open beside the panel, marked aria-current on its button. */
@@ -89,8 +94,9 @@ export class CityPanel {
     return [
       h.name, h.kind, h.population, h.famine,
       h.buildings.map((_, i) => lotLine(h, i)).join(","),
-      h.plots.map((p) => fieldLine(p) + ":" + p.health).join(","),
+      h.plots.map((p) => fieldLine(p) + ":" + p.health + ":" + p.auto).join(","),
       o ? o.kind + ("index" in o ? o.index : "") : "",
+      this.world.kingStocks.autoSow, grainStores(this.world, KING_PLAYER).grain, grainStores(this.world, KING_PLAYER).capacity,
     ].join("|");
   }
 
@@ -154,6 +160,17 @@ export class CityPanel {
       fields.appendChild(li);
     });
     root.appendChild(fields);
+    // ECON (owner: "the king can automatically make them sowed"): one switch for
+    // every field of the realm, a pressed/not-pressed button so its state is read.
+    const auto = world.kingStocks.autoSow;
+    const sw = this.button(C.resowAll, "resow-all", () => this.hooks.resowAll(auto === null), false);
+    sw.setAttribute("aria-pressed", auto !== null ? "true" : "false");
+    sw.setAttribute("aria-label", C.resowAllAria(auto !== null));
+    sw.classList.add("c-switch");
+    root.appendChild(sw);
+    root.appendChild(make(doc, "p", "c-sub c-resow-state", auto !== null ? C.resowAllOn(CROPS[auto as CropId].name) : C.resowAllOff));
+    const gs = grainStores(world, KING_PLAYER);
+    root.appendChild(make(doc, "p", "c-sub c-stores", C.realmStores({ grain: gs.grain, capacity: gs.capacity })));
     root.appendChild(make(doc, "p", "c-keys", C.keyHint));
   }
 

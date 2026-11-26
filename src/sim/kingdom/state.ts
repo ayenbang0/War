@@ -14,7 +14,7 @@
 import type { FactionId } from "../../content/kingdom/factions.ts";
 import type { BiomeId, HoldingKind, RoadTerrainId } from "../../content/kingdom/terrain.ts";
 import type { ProvinceId } from "../../content/kingdom/map.ts";
-import type { FarmEventId, StockId, TaxRateId } from "../../content/kingdom/economy.ts";
+import type { StockId, TaxRateId } from "../../content/kingdom/economy.ts";
 import type { Knowledge } from "../../content/kingdom/exploration.ts";
 import type { JusticeId, UnrestBand } from "../../content/kingdom/morale.ts";
 import type { CompanyLeaving, CompanyState } from "../../content/kingdom/mercenaries.ts";
@@ -43,8 +43,20 @@ export type FieldPlot = {
    * growing-season days, ripe -> days standing ripe.
    */
   days: number;
-  /** 0..100: what weather has left of the crop. The yield is scaled by it; 0 spoils it. */
+  /**
+   * 0..100: what is left of the crop. The yield is scaled by it; 0 spoils it.
+   * ECON: no weather harms a crop any more (no draw decides a field's fate);
+   * only an army foraging it does (armies.ts), which the field card says.
+   */
   health: number;
+  /**
+   * ECON: the crop this field resows by itself when its sowing season comes
+   * (economy.ts autoSow), paying the seed from the stores; null = by hand
+   * only. Ripe fields are reaped by themselves whatever this says.
+   */
+  auto: string | null;
+  /** ECON: why the crop in it was last lost (winter, foraged, burned, overripe), until it is sown again; null if never. */
+  lost: PlotCause | null;
 };
 
 export type Holding = {
@@ -101,7 +113,7 @@ export type Holding = {
   justice: JusticeId;
   /** K6: days left of a festival held here; 0 = none running. */
   festival: number;
-  /** K6: 1 + the absolute season (floor(day / 30)) of the last pardon here; 0 = never. One a season. */
+  /** K6: 1 + the absolute season (morale.ts seasonIndex) of the last pardon here; 0 = never. One a season. */
   pardoned: number;
 };
 
@@ -131,6 +143,12 @@ export type FactionEconomy = {
    * morale.ts `changeMercy` (the levers, and K9's story choices).
    */
   mercy: number;
+  /**
+   * ECON: the crop a holding this faction comes to hold is set to resow on
+   * every field (FieldPlot.auto), or null for none. The realm-wide switch
+   * (setAutoSow on holding 0) sets it.
+   */
+  autoSow: string | null;
 };
 
 /** What the king's party is doing where it stands (the from-nothing start, §A.5). */
@@ -411,7 +429,8 @@ export type KingdomEvent =
   /** A faction's stocks changed this tick (the resources bar listens for this). */
   | { kind: "stocksChanged"; faction: number }
   /** Drought, frost or flood today (kingdom-wide; flood only harms flood country). */
-  | { kind: "farmWeather"; event: FarmEventId }
+  // ECON: the crop a field (or a holding's fields, plot 0; or the realm's, holding 0) resows by itself.
+  | { kind: "autoSowSet"; holding: number; plot: number; crop: string | null }
   | { kind: "plotStage"; holding: number; plot: number; stage: PlotStage; cause: PlotCause }
   | { kind: "built"; holding: number; slot: number; building: string }
   | { kind: "buildingStarted"; holding: number; slot: number; building: string }
@@ -506,7 +525,15 @@ export type KingdomEvent =
   | { kind: "commonsDispersed"; army: number; holding: number };
 
 /** Why a plot changed stage, for the feed. */
-export type PlotCause = "sown" | "sprouted" | "ripened" | "harvested" | "overripe" | "weather" | "winter" | "regrew" | "foraged" | "burned";
+export type PlotCause = "sown" | "sprouted" | "ripened" | "harvested" | "overripe" | "weather" | "winter" | "regrew" | "foraged" | "burned"
+  // ECON: a field sown or reaped by itself (economy.ts autoSow, autoHarvest).
+  | "autoSown" | "autoReaped"
+  // ECON: a battle fought over the fields (K5's crop damage; it said "weather" before).
+  | "trampled";
+/** Hash and save order of the causes (FieldPlot.lost). Append only. */
+export const PLOT_CAUSES: readonly PlotCause[] = [
+  "sown", "sprouted", "ripened", "harvested", "overripe", "weather", "winter", "regrew", "foraged", "burned", "autoSown", "autoReaped", "trampled",
+];
 
 // -- K8: the captains' AI and invasions (sim/kingdom/ai.ts, invasions.ts) ------------------
 

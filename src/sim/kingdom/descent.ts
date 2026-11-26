@@ -53,7 +53,6 @@ import { KEEP_RETREAT, YIELD_LEGITIMACY } from "../../content/kingdom/invasions.
 import { moveUnrest } from "./unrest.ts";
 import type { BattleResult, BattleSide, BattleSpec, FieldedSquad, SpecSquad } from "../layers.ts";
 import type { World } from "../world.ts";
-import { calendar } from "./clock.ts";
 import { findRoute, setRoute, type Route } from "./graph.ts";
 import type { KingdomOrder, KingdomOrderBody } from "./orders.ts";
 import type { Army, Contact, ContactHow, ContactSide, Holding, Mover } from "./state.ts";
@@ -357,7 +356,7 @@ export function buildBattleSpec(world: KingdomWorld, c: Contact): BattleSpec {
     victory: c.kind === "assault" ? { mode: "survive", defender } : { mode: "rout" },
     duration: level ? level.duration : 900,
     weather: world.weather,
-    season: calendar(world.now).season,
+    season: world.date.season,
     sightScale: night === undefined ? 1 : night,
     reinforcements: [],
   };
@@ -581,7 +580,8 @@ export function applyBattleResult(
       if (p.health === 0) {
         p.stage = "spoiled";
         p.days = 0;
-        world.events.push({ kind: "plotStage", holding: h.id, plot: p.id, stage: "spoiled", cause: "weather" });
+        p.lost = "trampled";
+        world.events.push({ kind: "plotStage", holding: h.id, plot: p.id, stage: "spoiled", cause: "trampled" });
       }
     }
   }
@@ -716,6 +716,7 @@ function keepSiege(world: KingdomWorld, c: Contact): void {
     if (p.stage !== "sown" && p.stage !== "growing" && p.stage !== "ripe") continue;
     p.stage = "spoiled";
     p.days = 0;
+    p.lost = "burned";
     world.events.push({ kind: "plotStage", holding: h.id, plot: p.id, stage: "spoiled", cause: "burned" });
   }
   moveUnrest(world, h, KEEP_RETREAT.unrest);

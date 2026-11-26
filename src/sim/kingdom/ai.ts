@@ -39,13 +39,12 @@ import type { Rng } from "../rng.ts";
 import { FACTIONS, FACTION_IDS, KING_PLAYER } from "../../content/kingdom/factions.ts";
 import { FORTIFICATIONS, MILITIA_SQUADS, AUTORESOLVE } from "../../content/kingdom/descent.ts";
 import { UNIT_TYPES, type UnitTypeId } from "../../content/unit-types.ts";
-import { CROPS, CROP_IDS, type CropId } from "../../content/kingdom/crops.ts";
+import { CROPS, CROP_IDS, daysToRipe, type CropId } from "../../content/kingdom/crops.ts";
 import { STOCK_IDS, type StockId } from "../../content/kingdom/economy.ts";
 import { KNOW_SEEN } from "../../content/kingdom/exploration.ts";
 import { AI, AI_RECRUIT, INVASION_WAVES, WAVE_DAYS } from "../../content/kingdom/invasions.ts";
 import { ARMY_MILES_PER_DAY, MAX_ARMIES_PER_SIDE } from "../../content/kingdom/armies.ts";
 import type { Season } from "../../content/kingdom/terrain.ts";
-import { calendar } from "./clock.ts";
 import type { KingdomOrder, KingdomOrderBody } from "./orders.ts";
 import type { AiGoal, AiMind, Army, FactionIntel, PlotStage } from "./state.ts";
 import { AI_GOALS } from "./state.ts";
@@ -167,7 +166,7 @@ function armyPoint(world: KingdomWorld, a: Army): { x: number; y: number } {
 export function remember(world: KingdomWorld, f: number): void {
   const intel = world.intel[f];
   if (intel.owner.length === 0) return;
-  const day = calendar(world.now).day;
+  const day = world.date.day;
   const fid = FACTION_IDS[f];
   world.holdings.forEach((h, i) => {
     if (holdingKnowledge(world, f, h.id) !== KNOW_SEEN) {
@@ -189,7 +188,7 @@ export function remember(world: KingdomWorld, f: number): void {
 /** The faction's Perception: its own state, its memory, its sight, the static map. */
 export function perceive(world: KingdomWorld, f: number): Perception {
   const fid = FACTION_IDS[f];
-  const d = calendar(world.now);
+  const d = world.date;
   const garrisoned = new Set<number>();
   for (const h of world.holdings) if (h.owner === fid) for (const g of h.garrison) garrisoned.add(g);
   const own: OwnArmy[] = [];
@@ -209,8 +208,9 @@ export function perceive(world: KingdomWorld, f: number): Perception {
   const holdings: OwnHolding[] = world.holdings.filter((h) => h.owner === fid).map((h) => ({
     id: h.id, barracks: hasBarracks(h), garrison: h.garrison.length, garrisonSlots: h.garrisonSlots,
     plots: h.plots.map((p) => {
-      // Only a crop that can be sown this season and will not be killed by the winter it would stand in.
-      const crop = CROP_IDS.find((c) => CROPS[c].sow.includes(d.season) && !CROPS[c].regrowDays && (CROPS[c].hardy || d.season !== "autumn")) ?? null;
+      // Only a crop that can be sown this season and will ripen before any winter could kill it
+      // (ECON: the same test the player's auto-resow uses, crops.ts daysToRipe).
+      const crop = CROP_IDS.find((c) => CROPS[c].sow.includes(d.season) && !CROPS[c].regrowDays && daysToRipe(CROPS[c], d.dayOfYear) !== null) ?? null;
       return { id: p.id, stage: p.stage, crop, seed: crop ? seedCost(CROPS[crop], h).grain ?? 0 : 0 };
     }),
   }));

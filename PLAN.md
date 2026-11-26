@@ -21,6 +21,7 @@ Open questions for the user are collected in **§A.7 / §B.12**. Everything mark
 > 4. **Twice the map.** Twice the plan's region count (72 holdings instead of 36): twice the cities and areas to explore, with exploration events and special upgrades found there.
 > 5. **Armies on the map.** The fallen king's armies are visible on the kingdom map (K4).
 > 6. **A city level.** Each city can be zoomed into, one level down, to build buildings, manage politics, farms and so on. Layers become Kingdom → City → Battle (army) → Troop.
+> 7. **A real year and easier farming** (owner, 2026-11-26): "the years in the game should be actual 12 month years rather than the fake 4 month ones"; "The granary should actually store food that the king can access. The fields sowed with plants shouldn't just randomly die without reason."; "The fields should be auto harvested and the king can automatically make them sowed"; "The game needs to be a lot easier with managing resources." Built as ECON (docs/kingdom.md, docs/PROVISIONAL.md ECON.n).
 > How these fold into the phases is in §B.11a.
 
 # Part A — Storyline: The Exile of Rimaros

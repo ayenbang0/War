@@ -15,7 +15,7 @@
  * are polite live regions. Every string comes from content/kingdom/ui-strings.ts.
  */
 
-import { K, SEASON_NAME, WEATHER_LINE, dateLine } from "../../content/kingdom/ui-strings.ts";
+import { K, WEATHER_LINE, dateLine, dateTitle } from "../../content/kingdom/ui-strings.ts";
 import type { CalendarDate } from "../../sim/kingdom/clock.ts";
 import type { WeatherId } from "../../content/kingdom/terrain.ts";
 import { KINGDOM_SPEEDS, type KingdomRun, type KingdomSpeed } from "../../app/kingdom-clock.ts";
@@ -145,7 +145,7 @@ export class KingdomHud {
     if (line !== this.shownDate) {
       this.shownDate = line;
       this.date.textContent = line;
-      this.date.setAttribute("title", SEASON_NAME[d.season] + " of year " + d.year);
+      this.date.setAttribute("title", dateTitle(d));
     }
     const w = "Weather: " + WEATHER_LINE[weather];
     if (w !== this.shownWeather) {

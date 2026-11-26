@@ -91,8 +91,12 @@ export async function openRegionCard(t: Driver, k: KingdomLayer, name: string): 
 }
 
 /** From a new game: forage, rally, forage, march to Greyshaw, claim it. */
-export async function claimGreyshaw(t: Driver, k: KingdomLayer): Promise<void> {
+export async function claimGreyshaw(t: Driver, k: KingdomLayer, handFarm = true): Promise<void> {
   const w = k.world;
+  // ECON: a new game's fields resow themselves (KingdomConfig.autoFarm). The K3 scenarios
+  // drive the sow menu by hand, so they play a hand-farmed realm, as an old save is:
+  // setup, not a player's act (the switch itself is driven in scenarios-econ.ts).
+  if (handFarm) w.kingStocks.autoSow = null;
   t.expect(w.holdingsOf("king").length === 0 && w.kingStocks.stocks.coin === 0 && w.kingStocks.stocks.levy === 0,
     "a new exile has no holding, no coin and no followers");
   t.expect(t.visible(document.querySelector(".k-stores")), "the resources bar is on screen");

@@ -31,7 +31,6 @@ import {
 } from "../../content/kingdom/mercenaries.ts";
 import { MERC_REFUSAL } from "../../content/kingdom/mercenary-strings.ts";
 import { REFUSAL } from "../../content/kingdom/ui-strings.ts";
-import { calendar } from "./clock.ts";
 import type { KingdomOrder, KingdomOrderBody } from "./orders.ts";
 import { MERCENARY_ORDER_KIND_SET } from "./orders.ts";
 import type { Army, Company, Holding } from "./state.ts";
@@ -290,7 +289,7 @@ function turnCoat(world: KingdomWorld, c: Company, a: Army, how: "defected" | "p
 export function runMercenaryDay(world: KingdomWorld): void {
   const k = KING_PLAYER;
   if (!economyActive(world, k)) return;
-  const d = calendar(world.now);
+  const d = world.date;
   const e = world.economy[k];
   const book = world.books[k];
 

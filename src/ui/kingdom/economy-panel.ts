@@ -32,12 +32,14 @@ import { domScreen } from "../dom-screen.ts";
 import type { KeyVerdict, Screen } from "../screen-stack.ts";
 import type { KingdomWorld } from "../../sim/kingdom/world.ts";
 import type { KingdomOrderBody } from "../../sim/kingdom/orders.ts";
-import type { Holding } from "../../sim/kingdom/state.ts";
+import type { FieldPlot, Holding } from "../../sim/kingdom/state.ts";
 import { seedCost, taxPerDay } from "../../sim/kingdom/economy.ts";
+import { DAYS_PER_YEAR, daysUntilSeason } from "../../sim/kingdom/clock.ts";
 import { BUILDINGS, BUILDING_IDS, type BuildingId, type Cost } from "../../content/kingdom/buildings.ts";
-import { CROPS, CROP_IDS, type CropId } from "../../content/kingdom/crops.ts";
-import { DOLE_PER_100, FIELD_SIZE, TAX_RATES, TAX_RATE_IDS } from "../../content/kingdom/economy.ts";
-import { E, SEASON_NAME, STAGE_NAME, TAX_NAME, amountsLine } from "../../content/kingdom/ui-strings.ts";
+import { CROPS, CROP_IDS, daysToRipe, type CropDef, type CropId } from "../../content/kingdom/crops.ts";
+import { DOLE_PER_100, FIELD_SIZE, GERMINATION_DAYS, TAX_RATES, TAX_RATE_IDS } from "../../content/kingdom/economy.ts";
+import { E, SEASON_NAME, STAGE_NAME, TAX_NAME, amountsLine, monthDay } from "../../content/kingdom/ui-strings.ts";
+import { C } from "../../content/kingdom/city-strings.ts";
 
 export type EconomyHooks = {
   /** Send an order to the queue (and say so on the result line). */
@@ -380,6 +382,76 @@ export function buildMenu(doc: Document, world: KingdomWorld, h: Holding, hooks:
   }, hooks);
 }
 
+/**
+ * ECON: when a crop would be ripe -- for a field already sown or growing
+ * (what is left of its growth), or for one sown today -- read from the
+ * calendar exactly as the sim grows it (crops.ts daysToRipe), so the card
+ * never promises a harvest the winter will take. Null: it would not ripen.
+ */
+export function ripeEstimate(world: KingdomWorld, crop: CropDef, plot: FieldPlot | null): { when: string; days: number } | null {
+  const d = world.date;
+  let need = GERMINATION_DAYS + crop.growDays;
+  if (plot && plot.stage === "sown") need = max0(GERMINATION_DAYS - plot.days) + crop.growDays;
+  if (plot && plot.stage === "growing") need = max0(crop.growDays - plot.days);
+  const days = daysToRipe(crop, d.dayOfYear, need);
+  if (days === null) return null;
+  return { when: monthDay((d.dayOfYear + days) % DAYS_PER_YEAR), days };
+}
+
+function max0(n: number): number {
+  return n < 0 ? 0 : n;
+}
+
+/** The first day of the next season a crop may be sown in, as "1 Thawmoon". */
+export function nextSowing(world: KingdomWorld, crop: CropDef): string {
+  let best = DAYS_PER_YEAR;
+  for (const s of crop.sow) {
+    const n = daysUntilSeason(world.date, s);
+    if (n > 0 && n < best) best = n;
+  }
+  return monthDay((world.date.dayOfYear + best) % DAYS_PER_YEAR);
+}
+
+/**
+ * ECON: the "resow automatically" menu for one field: Off, or a crop. Each
+ * crop says when it would next be sown and ripe; a crop the field cannot
+ * grow at all is not refused (the setting waits for its season), only
+ * explained.
+ */
+export function resowMenu(doc: Document, world: KingdomWorld, h: Holding, index: number, hooks: EconomyHooks): Screen {
+  const plot = h.plots[index];
+  return choiceMenu(doc, {
+    name: "resow-menu",
+    title: C.resowTitle({ field: E.field(index + 1), name: h.name }),
+    intro: C.resowIntro,
+    options: () => {
+      const off: Option = {
+        key: "resow-off", label: C.resowOff + (plot.auto === null ? " (now)" : ""), lines: [C.resowOffLine],
+        why: world.check({ kind: "setAutoSow", holding: h.id, plot: plot.id, crop: null }),
+        order: { kind: "setAutoSow", holding: h.id, plot: plot.id, crop: null }, said: C.resowUnset,
+      };
+      const crops = CROP_IDS.filter((id) => !CROPS[id].regrowDays).map((id): Option => {
+        const crop = CROPS[id];
+        const order: KingdomOrderBody = { kind: "setAutoSow", holding: h.id, plot: plot.id, crop: id };
+        const now = crop.sow.includes(world.date.season) ? ripeEstimate(world, crop, null) : null;
+        return {
+          key: "resow-" + id,
+          label: crop.name + (plot.auto === id ? " (now)" : ""),
+          lines: [
+            crop.about,
+            E.costLine(costOf(seedCost(crop, h))),
+            now ? E.ripeBy(now) : C.waits.season({ crop: crop.name, when: nextSowing(world, crop) }),
+          ],
+          why: world.check(order),
+          order,
+          said: C.resowSet(crop.name),
+        };
+      });
+      return [off, ...crops];
+    },
+  }, hooks);
+}
+
 export function sowMenu(doc: Document, world: KingdomWorld, h: Holding, index: number, hooks: EconomyHooks): Screen {
   const plot = h.plots[index];
   return choiceMenu(doc, {
@@ -400,6 +472,8 @@ export function sowMenu(doc: Document, world: KingdomWorld, h: Holding, index: n
           E.costLine(costOf(seedCost(crop, h))),
           E.yieldLine(costOf(yields as Cost)),
           E.seasonLine(E.seasons(crop.sow.map((s) => SEASON_NAME[s]))),
+          // ECON: what sowing it today comes to, said before the seed is paid.
+          ...(crop.sow.includes(world.date.season) ? [ripeEstimate(world, crop, null)].map((r) => (r ? E.ripeBy(r) : E.tooLate)) : []),
         ],
         why: world.check(order),
         order,

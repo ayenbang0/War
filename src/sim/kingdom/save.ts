@@ -26,7 +26,7 @@ import { FACTIONS, type FactionId } from "../../content/kingdom/factions.ts";
 import { KINGDOM_MAPS } from "../../content/kingdom/map.ts";
 import { WEATHER_IDS, type WeatherId } from "../../content/kingdom/terrain.ts";
 import { BUILDING_IDS, type BuildingId } from "../../content/kingdom/buildings.ts";
-import { CROP_IDS, type CropId } from "../../content/kingdom/crops.ts";
+import { CROPS, CROP_IDS, type CropId } from "../../content/kingdom/crops.ts";
 import { FACTION_IDS } from "../../content/kingdom/factions.ts";
 import {
   DEFAULT_TAX, KING_START, KING_START_LEGITIMACY, LEDGER_CATEGORY_IDS, LEDGER_STOCK_IDS, LEGITIMACY_MAX, STOCK_IDS,
@@ -37,7 +37,7 @@ import type { BattleResult, ResultSquad } from "../layers.ts";
 import {
   AI_GOALS, ARMY_POSTURES, CONTACT_KINDS, KING_TASKS, PLOT_STAGES, type AiMind, type Army, type ArmyPosture, type Burned,
   type Contact, type FactionExploration, type FactionIntel, type Company, type Find, type KingTask, type Levied, type Mover,
-  type PlotStage, type Rumour,
+  PLOT_CAUSES, type PlotCause, type PlotStage, type Rumour,
 } from "./state.ts";
 import { INVASION_WAVES } from "../../content/kingdom/invasions.ts";
 import { FORTIFICATIONS } from "../../content/kingdom/descent.ts";
@@ -55,14 +55,19 @@ import {
   DEFAULT_JUSTICE, JUSTICE_IDS, MERCY_MAX, MERCY_MIN, MERCY_START, UNREST_MAX, type JusticeId,
 } from "../../content/kingdom/morale.ts";
 import type { LedgerDay } from "./ledger.ts";
-import { calendar } from "./clock.ts";
+import { floor, min } from "../math.ts";
+import { DAYS_PER_SEASON, OLD_DAYS_PER_SEASON, TICKS_PER_DAY, calendar, epochForOldDay } from "./clock.ts";
 import { roadBetween } from "./graph.ts";
 import { KINGDOM_STREAMS, KingdomWorld } from "./world.ts";
 
 export const KINGDOM_SAVE_FORMAT = "war.kingdom";
-export const KINGDOM_SAVE_VERSION = 8;
+export const KINGDOM_SAVE_VERSION = 9;
 
-export type SavedPlot = { id: number; crop: string | null; stage: PlotStage; progress: number; days: number; health: number };
+export type SavedPlot = {
+  id: number; crop: string | null; stage: PlotStage; progress: number; days: number; health: number;
+  /** ECON (v9): the crop it resows by itself, and why it was last lost. */
+  auto: string | null; lost: PlotCause | null;
+};
 export type SavedHolding = {
   id: number;
   key: string;
@@ -117,6 +122,8 @@ export type SavedEconomy = {
   hunger: number;
   defaultTax: TaxRateId;
   mercy: number;
+  /** ECON (v9): the crop the faction's new holdings resow by themselves. */
+  autoSow: string | null;
   open: LedgerDay;
   closed: LedgerDay | null;
 };
@@ -224,8 +231,21 @@ export type KingdomSaveV8 = Omit<KingdomSaveV7, "version" | "snapshot"> & {
   snapshot: KingdomSaveV7["snapshot"] & { k8: SavedK8 };
 };
 
+/**
+ * Version 9 (ECON): the twelve-month calendar and auto-farming -- the realm's
+ * `epoch` (the day of year 1 it began on, which the calendar reads every date
+ * from) and `autoFarm` (KingdomConfig.autoFarm, which a replay needs, as
+ * `hosts`); every field's `auto` crop and the cause it was last `lost` to;
+ * every faction's `autoSow`.
+ */
+export type KingdomSaveV9 = Omit<KingdomSaveV8, "version"> & {
+  version: 9;
+  epoch: number;
+  autoFarm: boolean;
+};
+
 /** The current save shape. */
-export type KingdomSave = KingdomSaveV8;
+export type KingdomSave = KingdomSaveV9;
 
 export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
 
@@ -411,7 +431,55 @@ export const MIGRATIONS: Readonly<Record<number, (save: Record<string, unknown>)
   5: migrate5to6,
   6: migrate6to7,
   7: migrate7to8,
+  8: migrate8to9,
 };
+
+/**
+ * Version 8 (K8) -> 9 (ECON): the old four-month calendar to the twelve-month
+ * one (owner, 2026-11-25). The days already lived stay lived -- `now`, every
+ * tick in the log and the queue, every day counted (famine, contracts,
+ * works) are untouched -- and only the DATE converts: the realm is given the
+ * epoch (clock.ts epochForOldDay) that keeps it in the same year and season,
+ * at the same share of the season (the 10th of an old 30-day spring is the
+ * 30th of a 90-day one). A field part-grown keeps its share of its growth
+ * (its days scaled with the crops' growth, clock ECON.2). Nothing resows
+ * itself (`autoFarm` false, every field and faction `auto` null) until the
+ * player turns it on; ripe fields are reaped by themselves from now on. The
+ * season of each town's last pardon was counted from the old start and is
+ * forgotten (a pardon is open again). The log replays under the new rules
+ * from the converted epoch, which is the honest meaning of an old log under
+ * new rules, as in every earlier step; the load takes the snapshot.
+ */
+function migrate8to9(save: Record<string, unknown>): Record<string, unknown> {
+  // A save that already carries its epoch was written on the twelve-month
+  // calendar (the tools write older version numbers onto new saves to test
+  // each step): its dates and fields need no conversion, only the version.
+  const converting = typeof save.epoch !== "number";
+  const snap = { ...(save.snapshot as Record<string, unknown>) };
+  const now = typeof snap.now === "number" ? snap.now : 0;
+  const epoch = converting ? epochForOldDay(floor(now / TICKS_PER_DAY)) : save.epoch;
+  const scale = converting ? DAYS_PER_SEASON / OLD_DAYS_PER_SEASON : 1;
+  snap.holdings = (Array.isArray(snap.holdings) ? snap.holdings : []).map((v) => {
+    const h: Record<string, unknown> = { ...(v as Record<string, unknown>) };
+    if (converting) h.pardoned = 0;
+    h.plots = (Array.isArray(h.plots) ? h.plots : []).map((pv: unknown) => {
+      const p: Record<string, unknown> = { ...(pv as Record<string, unknown>) };
+      p.auto = p.auto ?? null;
+      p.lost = p.lost ?? null;
+      if ((p.stage === "growing" || p.stage === "ripe") && typeof p.days === "number") p.days = p.days * scale;
+      // Its share of its growth, on the new crop table (the days above are on it now).
+      const crop = typeof p.crop === "string" ? CROPS[p.crop as CropId] : undefined;
+      if (converting && p.stage === "growing" && crop && typeof p.days === "number") p.progress = min(1, p.days / crop.growDays);
+      return p;
+    });
+    return h;
+  });
+  snap.economy = (Array.isArray(snap.economy) ? snap.economy : []).map((v) => {
+    const e = v as Record<string, unknown>;
+    return { ...e, autoSow: e.autoSow ?? null };
+  });
+  return { ...save, version: 9, epoch, autoFarm: save.autoFarm === true, snapshot: snap };
+}
 
 /**
  * Version 7 (K7) -> 8 (K8). A K7 realm had no captains, and is not given them
@@ -607,7 +675,9 @@ export function serialize(world: KingdomWorld): KingdomSave {
   const page = (d: LedgerDay | null): LedgerDay | null => (d === null ? null : { day: d.day, start: [...d.start], flow: [...d.flow] });
   return {
     format: KINGDOM_SAVE_FORMAT,
-    version: 8,
+    version: 9,
+    epoch: world.epoch,
+    autoFarm: world.autoFarm,
     map: world.map.id,
     mapFingerprint: mapFingerprint(world),
     seed: world.seed,
@@ -630,7 +700,9 @@ export function serialize(world: KingdomWorld): KingdomSave {
         buildings: [...h.buildings],
         works: [...h.works],
         idle: [...h.idle],
-        plots: h.plots.map((p) => ({ id: p.id, crop: p.crop, stage: p.stage, progress: p.progress, days: p.days, health: p.health })),
+        plots: h.plots.map((p) => ({
+          id: p.id, crop: p.crop, stage: p.stage, progress: p.progress, days: p.days, health: p.health, auto: p.auto, lost: p.lost,
+        })),
         tax: h.tax,
         taxCarry: h.taxCarry,
         doleCarry: h.doleCarry,
@@ -652,6 +724,7 @@ export function serialize(world: KingdomWorld): KingdomSave {
         hunger: e.hunger,
         defaultTax: e.defaultTax,
         mercy: e.mercy,
+        autoSow: e.autoSow,
         open: page(world.books[f].open) as LedgerDay,
         closed: page(world.books[f].closed),
       })),
@@ -829,6 +902,11 @@ function readOrder(v: unknown, what: string): KingdomOrder {
       return { kind, holding: int(o.holding, what + ".holding"), tick, player, seq };
     case "ambush":
       return { kind, army: int(o.army, what + ".army"), tick, player, seq };
+    case "setAutoSow":
+      return {
+        kind, holding: int(o.holding, what + ".holding"), plot: int(o.plot, what + ".plot"),
+        crop: o.crop === null ? null : oneOf(o.crop, CROP_IDS, what + ".crop"), tick, player, seq,
+      };
     default:
       return { kind: "harvest", plot: int(o.plot, what + ".plot"), tick, player, seq };
   }
@@ -1204,6 +1282,8 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
     seed: u32(save.seed, "seed"),
     map,
     kingName: str(save.kingName, "kingName"),
+    autoFarm: bool(save.autoFarm, "autoFarm"),
+    epoch: int(save.epoch, "epoch"),
   });
   if (str(save.mapFingerprint, "mapFingerprint") !== mapFingerprint(world)) {
     throw new Bad("save was made on a different version of the map " + mapId);
@@ -1260,9 +1340,14 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
       if (health > 100) throw new Bad(pw + ".health is over 100");
       const progress = num(po.progress, pw + ".progress");
       if (!(progress >= 0 && progress <= 1)) throw new Bad(pw + ".progress is outside 0..1");
+      const auto = strOrNull(po.auto, pw + ".auto");
+      if (auto !== null && !(CROP_IDS as readonly string[]).includes(auto)) throw new Bad(pw + " resows an unknown crop " + auto);
+      const lost = strOrNull(po.lost, pw + ".lost");
+      if (lost !== null && !(PLOT_CAUSES as readonly string[]).includes(lost)) throw new Bad(pw + " was lost to an unknown cause " + lost);
       return {
         id: int(po.id, pw + ".id"), crop: crop as CropId | null,
         stage: stage as PlotStage, progress, days: int(po.days, pw + ".days"), health,
+        auto: auto as CropId | null, lost: lost as PlotCause | null,
       };
     });
     if (plots.length !== live.plots.length || plots.some((p, j) => p.id !== live.plots[j].id)) {
@@ -1304,6 +1389,11 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
       stocks, legitimacy, hunger: int(o.hunger, what + ".hunger"),
       defaultTax: oneOf(o.defaultTax, TAX_RATE_IDS, what + ".defaultTax"),
       mercy: mercyOf(o.mercy, what + ".mercy"),
+      autoSow: ((): string | null => {
+        const c = strOrNull(o.autoSow, what + ".autoSow");
+        if (c !== null && !(CROP_IDS as readonly string[]).includes(c)) throw new Bad(what + " resows an unknown crop " + c);
+        return c;
+      })(),
       open: readPage(o.open, what + ".open"),
       closed: o.closed === null ? null : readPage(o.closed, what + ".closed"),
     };
@@ -1396,6 +1486,7 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
     live.hunger = e.hunger;
     live.defaultTax = e.defaultTax;
     live.mercy = e.mercy;
+    live.autoSow = e.autoSow;
     world.books[i].open = e.open;
     world.books[i].closed = e.closed;
   });
@@ -1439,7 +1530,7 @@ export function loadFromJson(text: string): Result<KingdomWorld> {
  */
 export function replayLog(
   seed: number, log: readonly KingdomOrder[], until: number,
-  config: { map?: KingdomWorld["map"]; kingName?: string; hosts?: boolean; captains?: boolean } = {},
+  config: { map?: KingdomWorld["map"]; kingName?: string; hosts?: boolean; captains?: boolean; autoFarm?: boolean; epoch?: number } = {},
 ): KingdomWorld {
   const w = new KingdomWorld({ seed, ...config });
   for (const o of log) w.submit(o);

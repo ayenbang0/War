@@ -103,6 +103,22 @@ export const HOLDING_KINDS: Record<HoldingKind, HoldingKindDef> = {
 export type Season = "spring" | "summer" | "autumn" | "winter";
 export const SEASONS: readonly Season[] = ["spring", "summer", "autumn", "winter"];
 
+/**
+ * ECON: the twelve months of the realm's year, three to a season, in the
+ * year's order (spring first, as SEASONS). Thirty days each
+ * (sim/kingdom/clock.ts DAYS_PER_MONTH). Names of the Reach's own making
+ * rather than the real ones, because the real year begins mid-winter and this
+ * one, like the seasons the sim counts, begins at the thaw
+ * (docs/PROVISIONAL.md ECON.1). Placeholder names; change them freely.
+ */
+export type MonthDef = { readonly name: string; readonly season: Season };
+export const MONTHS: readonly MonthDef[] = [
+  { name: "Thawmoon", season: "spring" }, { name: "Seedmoon", season: "spring" }, { name: "Blossommoon", season: "spring" },
+  { name: "Sunmoon", season: "summer" }, { name: "Haymoon", season: "summer" }, { name: "Reapmoon", season: "summer" },
+  { name: "Harvestmoon", season: "autumn" }, { name: "Leafmoon", season: "autumn" }, { name: "Mistmoon", season: "autumn" },
+  { name: "Frostmoon", season: "winter" }, { name: "Snowmoon", season: "winter" }, { name: "Wolfmoon", season: "winter" },
+];
+
 export type WeatherId = "clear" | "rain" | "fog" | "storm" | "snow";
 
 export type WeatherDef = {

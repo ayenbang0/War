@@ -83,7 +83,9 @@ export const POACH = {
   bidPct: 50,
   min: 5,
   days: 5,
-  onDays: [0, 15] as readonly number[],
+  // ECON: every fifteen days, as on the old 30-day season (0 and 15): loyalty is earned
+  // by the day, so the bid keeps its pace in days, not in seasons.
+  onDays: [0, 15, 30, 45, 60, 75] as readonly number[],
 } as const;
 
 /**

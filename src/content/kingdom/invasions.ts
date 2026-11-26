@@ -70,9 +70,11 @@ export const AI = {
   jitterPct: 20,
   /**
    * Days from the start before any captain moves against the king. Act I's
-   * winter is days 30-59; this leaves a season after it (§A.5, K8.1).
+   * winter is days 90-179; this leaves a season after it (§A.5, K8.1). ECON:
+   * was 100 on the old four-month year (winter days 30-59); rescaled with the
+   * seasons, so the king still has the same share of the year to settle.
    */
-  graceDays: 100,
+  graceDays: 300,
   /** An emergent invasion needs the king seen holding at least this many holdings... */
   emergentMinKingHoldings: 2,
   /** ...and one of them seen with fewer men than this in its garrison (a thin garrison invites it). */
@@ -117,9 +119,11 @@ export type InvasionWave = {
  * heard of (that much is common talk, not something it saw), and looks.
  */
 export const INVASION_WAVES: readonly InvasionWave[] = [
-  { day: 120, faction: "hare" },
-  { day: 200, faction: "boar" },
-  { day: 280, faction: "badger" },
+  // ECON: days 120/200/280 on the old four-month year, x3 with the seasons
+  // (the Hare still rides in the first summer, the Badger in the third spring).
+  { day: 360, faction: "hare" },
+  { day: 600, faction: "boar" },
+  { day: 840, faction: "badger" },
 ];
 
 /** Days a wave keeps its goal before the captain may think better of it. */

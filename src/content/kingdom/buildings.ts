@@ -96,9 +96,10 @@ export const BUILDINGS: Readonly<Record<BuildingId, BuildingDef>> = {
     economy: { yieldPct: 30 }, later: {},
   },
   granary: {
-    id: "granary", name: "Granary", purpose: "Stores grain through the winter without it rotting.",
+    id: "granary", name: "Granary", purpose: "Keeps grain without it rotting: the realm's stores, which the king draws on.",
     cost: { coin: 4, timber: 4 }, days: 4, upkeep: {}, slots: 1, unique: false,
-    economy: { storage: 500 }, later: {},
+    // ECON: 500 on the old four-month year; x3 with the seasons (a winter is 90 days now).
+    economy: { storage: 1500 }, later: {},
   },
   woodcutter: {
     id: "woodcutter", name: "Woodcutter", purpose: "Timber every day; more in forest country.",

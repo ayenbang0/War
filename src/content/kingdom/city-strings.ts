@@ -67,10 +67,47 @@ export const C = {
   // -- fields ---------------------------------------------------------------
   fieldTitle: (n: number) => "Field " + n,
   health: "Health",
-  healthLine: (pct: number) => pct + "% of the crop left after the weather",
+  // ECON: no weather harms a crop any more; only an army's foraging does, and it says so.
+  healthLine: (pct: number) => pct === 100 ? "whole" : pct + "% of the crop left after an army foraged here",
   crop: "Crop",
   stage: "Stage",
   nothingSown: "nothing sown",
+  // ECON (owner: "the fields should be auto harvested and the king can automatically make them sowed").
+  reaped: "Harvest",
+  reapedAuto: "reaped by itself the day it ripens, into the granary",
+  resows: "Resows",
+  resowsOff: "no: sow it by hand",
+  resowsCrop: (crop: string) => crop + ", by itself in its season",
+  resowButton: "Resow automatically…",
+  resowTitle: (p: { field: string; name: string }) => "Resow " + p.field + " at " + p.name + " automatically",
+  resowIntro: "The field is sown again by itself, paying the seed from the stores, each time it lies open in the crop's season and the crop can ripen before the winter. It is always reaped by itself.",
+  resowOff: "Off",
+  resowOffLine: "Sow this field by hand.",
+  resowSet: (crop: string) => "This field will resow " + crop.toLowerCase() + " by itself.",
+  resowUnset: "This field will be sown by hand.",
+  ripe: "Ripe",
+  ripeOn: (p: { when: string; days: number }) => "about " + p.when + " (" + days(p.days) + ")",
+  ripeNever: "not before the winter kills it",
+  lostTo: "Last lost",
+  // What a field set to resow itself is waiting for (economy.ts autoSowWaits).
+  waits: {
+    off: "",
+    standing: "the orchard stands and fruits again by itself",
+    inUse: "",
+    season: (p: { crop: string; when: string }) => "waiting for " + p.when + " to sow " + p.crop.toLowerCase(),
+    late: (p: { crop: string; when: string }) => "too late this year for " + p.crop.toLowerCase() + ": sown again " + p.when,
+    seed: (p: { seed: string }) => "waiting for seed: needs " + p.seed + " in the stores",
+  },
+  // The city panel's switch for the whole realm.
+  resowAll: "Resow all fields automatically",
+  resowAllOn: (crop: string) => "On: every field resows " + crop.toLowerCase() + " in its season",
+  resowAllOff: "Off: fields are sown by hand",
+  resowAllAria: (on: boolean) => "Resow all fields automatically: " + (on ? "on" : "off"),
+  resowAllSaid: (on: boolean) => on ? "Every field of the realm will resow itself." : "Fields will be sown by hand.",
+  realmStores: (p: { grain: number; capacity: number }) => "The realm's stores: " + p.grain + " grain of " + p.capacity,
+  granaryLot: (p: { inGranary: number; granary: number; grain: number; capacity: number }) =>
+    "The realm's granaries hold " + p.inGranary + " of " + p.granary + " grain, none of it spoiling; all the realm's stores, " +
+    p.grain + " of " + p.capacity + ", are the king's to draw on wherever the army or the towns eat.",
 
   // -- politics -------------------------------------------------------------
   politicsTitle: (name: string) => "Politics at " + name,

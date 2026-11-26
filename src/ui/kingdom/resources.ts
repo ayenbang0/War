@@ -17,12 +17,14 @@
  * alone.
  */
 
-import { LEDGER_STOCK_IDS, type LedgerStockId } from "../../content/kingdom/economy.ts";
+import { LEDGER_CATEGORIES, LEDGER_STOCK_IDS, type LedgerStockId } from "../../content/kingdom/economy.ts";
 import { E, STOCK_ABOUT, STOCK_NAME } from "../../content/kingdom/ui-strings.ts";
 import { KING_PLAYER } from "../../content/kingdom/factions.ts";
 import type { KingdomWorld } from "../../sim/kingdom/world.ts";
-import { ledgerValue, netOf } from "../../sim/kingdom/ledger.ts";
-import { storageOf } from "../../sim/kingdom/economy.ts";
+import { flowOf, ledgerValue, netOf } from "../../sim/kingdom/ledger.ts";
+import { dailyNeed, grainStores } from "../../sim/kingdom/economy.ts";
+import { DAYS_PER_SEASON, daysUntilSeason } from "../../sim/kingdom/clock.ts";
+import type { LedgerDay } from "../../sim/kingdom/ledger.ts";
 import { stockIcon } from "./icons.ts";
 
 import { armiesOf, armyUpkeep } from "../../sim/kingdom/armies.ts";
@@ -44,6 +46,25 @@ function setText(el: HTMLElement, text: string): void {
 export function grainDays(world: KingdomWorld): number {
   const need = world.dailyNeed(KING_PLAYER);
   return need <= 0 ? 999 : Math.floor(world.kingStocks.stocks.grain / need);
+}
+
+/** Warn of the coming winter this many days ahead, when the stores will not see the king's towns through it. */
+const WINTER_WARNING_DAYS = 30;
+/** Warn that the bread runs out when it lasts fewer days than this. */
+const BREAD_WARNING_DAYS = 20;
+
+/**
+ * ECON (owner: "a lot easier with managing resources"): a stock's day in
+ * words for its tooltip -- yesterday's net and what moved it, the biggest
+ * movers first (ties in ledger order, so the same day reads the same).
+ */
+export function flowParts(day: LedgerDay, s: LedgerStockId): { label: string; n: number }[] {
+  const parts: { label: string; n: number }[] = [];
+  for (const c of LEDGER_CATEGORIES) {
+    const v = flowOf(day, s, c.id);
+    if (v !== 0) parts.push({ label: c.label, n: c.dir === "source" ? v : -v });
+  }
+  return parts.sort((a, b) => Math.abs(b.n) - Math.abs(a.n));
 }
 
 type Cell = { readonly item: HTMLElement; readonly value: HTMLElement; readonly delta: HTMLElement };
@@ -108,6 +129,11 @@ export class ResourcesBar {
       // The whole cell's meaning as one accessible name.
       const label = STOCK_NAME[s] + " " + v + ", " + (d === 0 ? E.noChange : E.sinceYesterday(d));
       if (cell.item.getAttribute("aria-label") !== label) cell.item.setAttribute("aria-label", label);
+      // ECON: the tooltip says where yesterday's change came from (the main cause first).
+      const parts = yesterday ? flowParts(yesterday, s).slice(0, 4).map(E.flowPart) : [];
+      let title = E.flowTitle({ name: STOCK_NAME[s], value: v, net: d, parts }) + " " + STOCK_ABOUT[s];
+      if (s === "grain") title += " " + this.grainTitle(world);
+      if (cell.item.getAttribute("title") !== title) cell.item.setAttribute("title", title);
     }
     // K6: Mercy above zero, Terror below -- named by which it is, never by colour alone.
     const m = e.mercy;
@@ -116,16 +142,43 @@ export class ResourcesBar {
     const ml = MERCY.label(m);
     if (this.mercyItem.getAttribute("aria-label") !== ml) this.mercyItem.setAttribute("aria-label", ml);
     setText(this.lasts, STOCK_NAME.grain + " " + E.grainLasts(grainDays(world)));
-    const st = storageOf(world, KING_PLAYER);
-    setText(this.store, " · " + E.grainStore(st.granary + st.loose));
+    // ECON: the realm's granary as a store -- what is in it and how much it holds.
+    const gs = grainStores(world, KING_PLAYER);
+    setText(this.store, " · " + E.storedOf({ grain: gs.grain, capacity: gs.capacity }) + " (" + E.granaryHolds(gs) + ")");
     const up = armyUpkeep(world, KING_PLAYER);
     setText(this.burn, armiesOf(world, KING_PLAYER).length > 0 ? " · " + AC.burnLine(up) : "");
     const lines: string[] = [];
     if (e.hunger > 0) lines.push(E.hungry(e.hunger));
+    // ECON: warnings before trouble, not only after it.
+    const owned = world.holdingsOf("king");
+    const days = grainDays(world);
+    if (e.hunger === 0 && owned.length > 0 && days < BREAD_WARNING_DAYS) lines.push(E.breadRunsOut(days));
+    if (gs.heap > 0) lines.push(E.overflow({ heap: gs.heap, spoils: gs.spoilsToday }));
+    const toWinter = daysUntilSeason(world.date, "winter");
+    if (owned.length > 0 && toWinter > 0 && toWinter <= WINTER_WARNING_DAYS) {
+      const need = dailyNeed(world, KING_PLAYER, "winter");
+      // Only when the stores will not see the winter out at the winter's need.
+      if (gs.grain < need * (toWinter + DAYS_PER_SEASON)) lines.push(E.winterComing({ days: toWinter, need }));
+    }
     for (const h of world.holdingsOf("king")) if (h.famine > 0) lines.push(E.famineAt({ name: h.name, days: h.famine }));
     const text = lines.join(" · ");
     setText(this.trouble, text);
     this.trouble.style.display = text ? "block" : "none";
+  }
+
+  /** The grain cell's tooltip tail: the store and its granaries. */
+  private grainTitle(world: KingdomWorld): string {
+    const gs = grainStores(world, KING_PLAYER);
+    return E.grainTitle({ stored: E.storedOf(gs), granary: E.granaryHolds(gs), spoils: gs.spoilsToday });
+  }
+
+  /** A stock's tooltip, for the tests. */
+  titleOf(s: LedgerStockId): string {
+    return this.cells.get(s)!.item.getAttribute("title") ?? "";
+  }
+
+  get storeText(): string {
+    return this.store.textContent ?? "";
   }
 
   /** A stock's shown value and change, for the tests. */

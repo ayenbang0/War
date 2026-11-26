@@ -33,7 +33,6 @@ import type { CropId } from "../../content/kingdom/crops.ts";
 import { STORY_EVENTS, type EventEffect, type EventOutcome, type StoryEventDef } from "../../content/story/events.ts";
 import { UPGRADES, type UpgradeEffect, type UpgradeId } from "../../content/story/upgrades.ts";
 import { EXPLORE_REFUSAL } from "../../content/story/strings.ts";
-import { calendar } from "./clock.ts";
 import { canAfford, credit, debitUpTo, pay } from "./ledger.ts";
 import { changeLegitimacy, standing } from "./economy.ts";
 import { moverPosition, type AdvanceOptions, type RouteOptions } from "./graph.ts";
@@ -301,7 +300,7 @@ export function discover(world: KingdomWorld, faction: number, id: number): Find
   // story/validate.ts holds the campaign to enough events per kind; a custom
   // map that runs out still records the visit, with nothing to decide.
   const event = pool.length > 0 ? pool[world.rng.events.int(pool.length)] : -1;
-  const find: Find = { site: id, event, day: calendar(world.now).day, choice: -1, failed: false };
+  const find: Find = { site: id, event, day: world.date.day, choice: -1, failed: false };
   ex.finds.push(find);
   world.events.push({ kind: "siteDiscovered", faction, site: id, event });
   return find;

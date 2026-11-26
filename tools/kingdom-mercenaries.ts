@@ -26,7 +26,7 @@
 
 import {
   KingdomWorld, kingdomHash, saveToJson, loadFromJson, serialize, deserialize, replayLog, migrate, KINGDOM_SAVE_VERSION,
-  TICKS_PER_DAY, armyById, armyMen, standsIn, credit, debit, flowOf, netOf, removeArmy, raiseArmy, renewFee, bidFor,
+  TICKS_PER_DAY, DAYS_PER_SEASON, armyById, armyMen, standsIn, credit, debit, flowOf, netOf, removeArmy, raiseArmy, renewFee, bidFor,
   offersAt, companyOf,
   type Army, type Company, type Holding, type KingdomEvent, type KingdomOrderBody, type LedgerDay,
 } from "../src/sim/kingdom/index.ts";
@@ -376,7 +376,7 @@ section("poaching: the crown's bid, matched or not");
   check("loyalty below the line (" + POACH.below.turncoats + ")", c.loyalty < POACH.below.turncoats);
   const ev: KingdomEvent[] = [];
   let n = 0;
-  while (c.bid === 0 && n < 31) { nextDay(w, (e) => ev.push(...e)); n++; }
+  while (c.bid === 0 && n < DAYS_PER_SEASON + 1) { nextDay(w, (e) => ev.push(...e)); n++; }
   check("on a bid day the crown bids", c.bid === bidFor(HALLOWAY) && c.bidDays > 0 && POACH.onDays.includes(w.date.dayOfSeason) &&
     ev.some((e) => e.kind === "companyBid"));
   const coin0 = w.kingStocks.stocks.coin;
@@ -391,7 +391,7 @@ section("poaching: the crown's bid, matched or not");
   const pa = hire(p.w, HALLOWAY);
   const pc = co(p.w, HALLOWAY);
   n = 0;
-  while (pc.bid === 0 && n < 31) { nextDay(p.w); n++; }
+  while (pc.bid === 0 && n < DAYS_PER_SEASON + 1) { nextDay(p.w); n++; }
   const pev: KingdomEvent[] = [];
   days(p.w, POACH.days, (e) => pev.push(...e));
   check("unmatched in " + POACH.days + " days, they are poached: the crown's", pc.state === "turned" && pa.owner === USURPER &&
@@ -425,6 +425,11 @@ section("a bloody company: the town hates the king for it");
   const { w } = realm(4);
   nextDay(w);
   hire(w, CORBIN);
+  // ECON: the season's turn is ninety days off now -- keep the company in service until then
+  // (setup: a long contract, high loyalty, and the coin for its wages).
+  co(w, CORBIN).days = 2 * DAYS_PER_SEASON;
+  co(w, CORBIN).loyalty = LOYALTY.max;
+  give(w, { coin: 2000, grain: 2000 });
   const ev: KingdomEvent[] = [];
   while (w.date.dayOfSeason !== 0) nextDay(w, (e) => ev.push(...e));
   check("and at the season's turn the realm's standing pays for it", flowOf(w.books[KING].closed ?? w.books[KING].open, "legitimacy", "disgrace") >= BLOODY.legitimacy ||
@@ -573,7 +578,7 @@ section("the log replays, hiring and paying included");
   // makes it at the same tick (1) and then submits the whole log, as
   // replayLog does: the hires, renewals and matched bids must bring the
   // world to the same state.
-  const until = 90;
+  const until = DAYS_PER_SEASON + 10; // ECON: past the first bid day of a 90-day season (day 45)
   const run = (): KingdomWorld => {
     const { w } = realm(4, 600);
     nextDay(w);

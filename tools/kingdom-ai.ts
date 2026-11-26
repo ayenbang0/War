@@ -29,7 +29,7 @@
 
 import {
   KingdomWorld, kingdomHash, saveToJson, loadFromJson, serialize, deserialize, replayLog, migrate, KINGDOM_SAVE_VERSION,
-  TICKS_PER_DAY, armyById, armyMen, armyVisible, standsIn, credit, netOf, raiseArmy, setPosture, updateSight,
+  TICKS_PER_DAY, DAYS_PER_YEAR, armyById, armyMen, armyVisible, standsIn, credit, netOf, raiseArmy, setPosture, updateSight,
   debit, perceive, decide, remember, aiFactions, seatOf, warningDays, levyMen, isBurned, buildBattleSpec, knowsHolding,
   isFrontier, holdingKnowledge, fortificationOf, hostile, threatOf, seizeUndefended,
   type Army, type Holding, type KingdomEvent, type KingdomOrderBody, type LedgerDay, type Perception,
@@ -257,8 +257,9 @@ section("the AI does not cheat: every order audited as it is decided, over a thr
     check("seed " + seed + ": every order names only its own, the known and the seen (" + orders + " orders in " + decisions + " decisions)",
       breach === "" && decisions > 3000 && orders > 100, breach);
     check("seed " + seed + ": its memory of the map changes only where it can see (unseen: only the owner of its own towns)", memory === "", memory);
-    check("seed " + seed + ": the steward gives every kind of order it has (march, recruit, sow, harvest)",
-      ["marchArmy", "recruit", "sow", "harvest"].every((k) => kinds.has(k)), [...kinds].join(","));
+    // ECON: a ripe field is reaped by itself, so the steward no longer orders the harvest.
+    check("seed " + seed + ": the steward gives every kind of order it has (march, recruit, sow)",
+      ["marchArmy", "recruit", "sow"].every((k) => kinds.has(k)), [...kinds].join(","));
   }
 }
 
@@ -325,7 +326,7 @@ function soak(seed: number, years: number): { problem: string; hash: string; w: 
   const marching = new Map<number, number>();
   const idleRoad = new Map<number, number>();
   const finite = (n: number): boolean => typeof n === "number" && Number.isFinite(n);
-  while (w.date.day < years * 120 && !problem) {
+  while (w.date.day < years * DAYS_PER_YEAR && !problem) {
     nextDay(w, (ev) => {
       for (const e of ev) {
         if (e.kind === "contact") { contacts++; if (!e.player) aiContacts++; }
@@ -373,11 +374,12 @@ function soak(seed: number, years: number): { problem: string; hash: string; w: 
 
 section("multi-year AI-against-AI soak: no NaN, no negative stocks, no stuck armies, the ledger balances");
 {
-  const YEARS = 5;
+  // ECON: three twelve-month years (1080 days, every wave's day passed); was five four-month ones.
+  const YEARS = 3;
   for (const seed of [SEED, SEED + 7, SEED + 13]) {
     const r = soak(seed, YEARS);
     check("seed " + seed + ": " + YEARS + " years, every invariant holds (" + r.pages + " ledger pages, " + r.contacts + " contacts, " + r.aiContacts + " between machines)",
-      r.problem === "" && r.pages > YEARS * 120 * 10, r.problem);
+      r.problem === "" && r.pages > YEARS * DAYS_PER_YEAR * 10, r.problem);
     if (seed === SEED) {
       const again = soak(seed, YEARS);
       check("the same seed soaks to the same hash", again.hash === r.hash, r.hash + " vs " + again.hash);
@@ -386,7 +388,7 @@ section("multi-year AI-against-AI soak: no NaN, no negative stocks, no stuck arm
       check("the AI's orders are not in the log (regenerated, seq 0 never logged)", r.w.log.every((o) => o.seq !== 0));
       check("every wave rode", r.w.wavesRode.every((x) => x));
       const armies = aiFactions().map((f) => r.w.armies.filter((a) => a.owner === f).length);
-      check("the captains still keep armies after five years (no faction stood itself down for good)", armies.filter((n) => n > 0).length >= 8, armies.join(","));
+      check("the captains still keep armies after " + YEARS + " years (no faction stood itself down for good)", armies.filter((n) => n > 0).length >= 8, armies.join(","));
     }
   }
 }
@@ -495,7 +497,7 @@ section("rumours: warning is proportional to watchtowers and scouts");
     let first = -1;
     let breach = "";
     const overdue: number[] = [];
-    while (x.date.day < 170) {
+    while (x.date.day < INVASION_WAVES[0].day + 50) {
       keepReach(x);
       nextDay(x, (ev) => {
         for (const e of ev) {
@@ -699,18 +701,18 @@ section("taken without a battle: an empty holding falls to whoever stands in it"
 
 section("save v8: the captains round-trip, v7 migrates, tampering is refused");
 {
-  check("the current version is 8", KINGDOM_SAVE_VERSION === 8);
+  check("the current version is at least 8", KINGDOM_SAVE_VERSION >= 8);
   const w = realm();
   reach(w, [["line"]]);
-  untilDay(w, 130);
+  untilDay(w, INVASION_WAVES[0].day + 10);
   check("the fixture has minds, memories, a wave ridden and armies abroad", w.wavesRode[0] && aiFactions().some((f) => w.minds[f].goal !== "consolidate" || w.minds[f].since > 0));
   const json = saveToJson(w);
   const l = loadFromJson(json);
   check("a realm with captains round-trips to the same hash", l.ok && kingdomHash(l.value) === kingdomHash(w), l.ok ? "" : l.error);
   if (l.ok) {
     const a = l.value;
-    untilDay(w, 200);
-    untilDay(a, 200);
+    untilDay(w, INVASION_WAVES[0].day + 80);
+    untilDay(a, INVASION_WAVES[0].day + 80);
     check("and plays on from the load exactly as without it (the AI picks up its own mind)", kingdomHash(a) === kingdomHash(w));
   }
   // A K7 save (no captains): strip K8's fields and the commons' entries.
@@ -723,7 +725,7 @@ section("save v8: the captains round-trip, v7 migrates, tampering is refused");
   v7.snapshot.economy = v7.snapshot.economy.slice(0, COMMONS);
   v7.snapshot.explore = v7.snapshot.explore.slice(0, COMMONS);
   const m = migrate(JSON.parse(JSON.stringify(v7)));
-  check("a version-7 save migrates to 8", m.ok && m.value.version === 8, m.ok ? "" : m.error);
+  check("a version-7 save migrates to 8 and on to " + KINGDOM_SAVE_VERSION, m.ok && m.value.version === KINGDOM_SAVE_VERSION, m.ok ? "" : m.error);
   const lv = deserialize(v7);
   check("and loads with no captains, no minds, no rumours", lv.ok && !lv.value.captains && lv.value.rumours.length === 0, lv.ok ? "" : lv.error);
   if (lv.ok) {

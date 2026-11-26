@@ -27,19 +27,19 @@ import { ceil, floor, max, min } from "../math.ts";
 import { FACTIONS, FACTION_IDS, KING_PLAYER, type FactionId } from "../../content/kingdom/factions.ts";
 import { HOLDING_KINDS, type Season } from "../../content/kingdom/terrain.ts";
 import {
-  AUTUMN_FROST_FROM_DAY, BIOME_ECONOMY, CARRY_PER_PERSON, CELLAR, CLAIM_MIN_LEVY, DEFAULT_TAX, DOLE_PER_100,
-  FAMINE_LOSS_PCT, FARM_EVENT_HARM, FARM_EVENT_ODDS, FIELD_SIZE, FORAGERS_PER_TIMBER, FORAGE_PER_PERSON,
+  AUTO_SOW_DEFAULT, BIOME_ECONOMY, CARRY_PER_PERSON, CELLAR, CLAIM_GRAIN_PER_PERSON, CLAIM_MIN_LEVY, DEFAULT_TAX,
+  DOLE_PER_100, FAMINE_LOSS_PCT, FIELD_SIZE, FIRST_HOLDING_STORES, KING_BARNS, FORAGERS_PER_TIMBER, FORAGE_PER_PERSON,
   GERMINATION_DAYS, HARVEST_VARIANCE_PCT, KING_START, KING_START_LEGITIMACY, MUSTER_PCT, PARTY_RATION,
   RALLY_BRINGS, RALLY_FLOOR_PCT, RALLY_PEOPLE_PER_FOLLOWER, SPOIL_PERMILLE, STOCK_IDS, TAX_RATES, TAX_RATE_IDS,
-  type FarmEventId, type StockId, type TaxRateId,
+  type StockId, type TaxRateId,
 } from "../../content/kingdom/economy.ts";
 import { BUILDINGS, type BuildingDef, type BuildingId, type Cost } from "../../content/kingdom/buildings.ts";
-import { CROPS, type CropDef, type CropId } from "../../content/kingdom/crops.ts";
+import { CROPS, daysToRipe, type CropDef, type CropId } from "../../content/kingdom/crops.ts";
 import { REFUSAL } from "../../content/kingdom/ui-strings.ts";
 import { CAPTAIN_START, CAPTAIN_START_LEGITIMACY, CROWN_TITHE_PER_100 } from "../../content/kingdom/invasions.ts";
 import { moveUnrest } from "./unrest.ts";
 import { CLAIM_UNREST, MERCY_START, MUSTER_UNREST, RESTLESS_AT } from "../../content/kingdom/morale.ts";
-import { calendar, type CalendarDate } from "./clock.ts";
+import type { CalendarDate } from "./clock.ts";
 import type { KingdomOrder, KingdomOrderBody } from "./orders.ts";
 import type { FactionEconomy, FieldPlot, Holding, KingTask, PlotCause, PlotStage } from "./state.ts";
 import {
@@ -57,10 +57,10 @@ export const ECONOMY_FACTIONS: readonly FactionId[] = ["king"];
 
 /** The economy orders (everything but the march). */
 export type EconomyOrderBody = Extract<KingdomOrderBody, {
-  kind: "forage" | "rally" | "claimHolding" | "setTax" | "build" | "sow" | "harvest";
+  kind: "forage" | "rally" | "claimHolding" | "setTax" | "build" | "sow" | "harvest" | "setAutoSow";
 }>;
 
-const ECONOMY_KINDS: ReadonlySet<string> = new Set(["forage", "rally", "claimHolding", "setTax", "build", "sow", "harvest"]);
+const ECONOMY_KINDS: ReadonlySet<string> = new Set(["forage", "rally", "claimHolding", "setTax", "build", "sow", "harvest", "setAutoSow"]);
 
 export function isEconomyOrder(b: KingdomOrderBody): b is EconomyOrderBody {
   return ECONOMY_KINDS.has(b.kind);
@@ -68,14 +68,15 @@ export function isEconomyOrder(b: KingdomOrderBody): b is EconomyOrderBody {
 
 // -- construction -----------------------------------------------------------------
 
-export function newFactionEconomy(id: FactionId, captains = false): FactionEconomy {
+export function newFactionEconomy(id: FactionId, captains = false, autoFarm = false): FactionEconomy {
   const king = id === "king";
   // K8: in a realm with captains every faction with a persona starts with a steward's stores.
   const captain = !king && captains && FACTIONS[id].persona !== null;
   const stocks = {} as Record<StockId, number>;
   for (const s of STOCK_IDS) stocks[s] = king ? KING_START[s] : captain ? CAPTAIN_START[s] : 0;
   const legitimacy = king ? KING_START_LEGITIMACY : captain ? CAPTAIN_START_LEGITIMACY : 0;
-  return { stocks, legitimacy, hunger: 0, defaultTax: DEFAULT_TAX, mercy: MERCY_START };
+  // ECON: a new campaign's king has every field he comes to hold resow itself (KingdomConfig.autoFarm).
+  return { stocks, legitimacy, hunger: 0, defaultTax: DEFAULT_TAX, mercy: MERCY_START, autoSow: king && autoFarm ? AUTO_SOW_DEFAULT : null };
 }
 
 export function newBook(e: FactionEconomy): FactionBook {
@@ -143,12 +144,36 @@ export function hasStanding(h: Holding, id: BuildingId, activeOnly = false): boo
 export function storageOf(world: KingdomWorld, faction: number): { granary: number; loose: number } {
   let granary = 0;
   let loose = faction === KING_PLAYER ? partySize(world, faction) * CARRY_PER_PERSON : 0;
-  for (const h of ownedBy(world, faction)) {
+  const owned = ownedBy(world, faction);
+  for (const h of owned) {
     loose += CELLAR[h.kind];
     for (const s of standing(h)) granary += s.def.economy.storage ?? 0;
   }
+  // ECON: the crown's barns, a granary's worth that never spoils, as soon as the king holds a town.
+  if (faction === KING_PLAYER && owned.length > 0) granary += KING_BARNS;
   granary += upgradeStorage(world, faction);
   return { granary, loose };
+}
+
+/**
+ * ECON: where the faction's grain lies today, by the order it fills the
+ * stores (granaries first, then cellars and packs, then heaps past the
+ * room), and what each loses a day -- the readout behind the resources bar
+ * and the granary's card, computed exactly as spoil() takes it.
+ */
+export function grainStores(world: KingdomWorld, faction: number): {
+  grain: number; granary: number; loose: number; capacity: number;
+  inGranary: number; inLoose: number; heap: number; spoilsToday: number;
+} {
+  const { granary, loose } = storageOf(world, faction);
+  const grain = world.economy[faction].stocks.grain;
+  const inGranary = min(grain, granary);
+  const inLoose = min(grain - inGranary, loose);
+  const heap = grain - inGranary - inLoose;
+  const looseRate = (SPOIL_PERMILLE.loose * (100 + spoilagePct(world, faction))) / 100;
+  const spoilsToday = floor((inGranary * SPOIL_PERMILLE.granary) / 1000) + floor((inLoose * looseRate) / 1000) +
+    ceil((heap * SPOIL_PERMILLE.heap) / 1000);
+  return { grain, granary, loose, capacity: granary + loose, inGranary, inLoose, heap, spoilsToday };
 }
 
 /** Grain a holding draws today (without consuming its remainder). */
@@ -284,6 +309,8 @@ export function checkEconomyOrder(world: KingdomWorld, body: EconomyOrderBody, p
       if (p.stage === "harvested" && p.crop && CROPS[p.crop as CropId]?.regrowDays) return REFUSAL.orchardStands;
       if (p.stage !== "empty" && p.stage !== "harvested" && p.stage !== "spoiled") return REFUSAL.plotInUse;
       if (!crop.sow.includes(world.date.season)) return REFUSAL.wrongSeason(crop.name);
+      // ECON: no field is sown to die -- a tender crop that could not ripen before the winter is refused, and says why.
+      if (daysToRipe(crop, world.date.dayOfYear) === null) return REFUSAL.tooLate(crop.name);
       if (!canAfford(e, seedCost(crop, found.holding))) return REFUSAL.cannotAfford;
       return null;
     }
@@ -294,8 +321,42 @@ export function checkEconomyOrder(world: KingdomWorld, body: EconomyOrderBody, p
       if (found.plot.stage !== "ripe") return REFUSAL.notRipe;
       return null;
     }
+    case "setAutoSow": {
+      if (body.crop !== null && !CROPS[body.crop]) return REFUSAL.noSuchCrop;
+      if (body.holding === 0) return body.plot === 0 ? null : REFUSAL.noSuchPlot;
+      const h = world.holding(body.holding);
+      if (!h) return REFUSAL.noSuchHolding;
+      if (!owns(h)) return REFUSAL.notYours;
+      if (body.plot !== 0 && !h.plots.some((p) => p.id === body.plot)) return REFUSAL.noSuchPlot;
+      return null;
+    }
   }
 }
+
+/**
+ * ECON: why a field set to resow itself is not sown today, or null if it
+ * would be. Read by the auto-sow and by the field card (which says what the
+ * field is waiting for), so the two never disagree. A field is sown by itself
+ * only in the crop's own season, while it is open, when the seed is in the
+ * stores, and only if the crop would ripen before a winter that kills it:
+ * auto-sowing never plants a crop to die.
+ */
+export function autoSowWaits(world: KingdomWorld, h: Holding, p: FieldPlot): AutoSowWait | null {
+  if (p.auto === null || h.owner === null) return "off";
+  const crop = CROPS[p.auto as CropId];
+  if (!crop) return "off";
+  if (p.stage === "harvested" && p.crop && CROPS[p.crop as CropId]?.regrowDays) return "standing";
+  if (p.stage !== "empty" && p.stage !== "harvested" && p.stage !== "spoiled") return "inUse";
+  const d = world.date;
+  if (!crop.sow.includes(d.season)) return "season";
+  if (daysToRipe(crop, d.dayOfYear) === null) return "late";
+  const f = FACTION_IDS.indexOf(h.owner);
+  if (!canAfford(world.economy[f], seedCost(crop, h))) return "seed";
+  return null;
+}
+
+/** Why an auto-sown field waits (autoSowWaits). The field card words each. */
+export type AutoSowWait = "off" | "standing" | "inUse" | "season" | "late" | "seed";
 
 /**
  * Men of the army the king rides with (K4). Summed here rather than imported
@@ -316,8 +377,10 @@ function rallyFloor(world: KingdomWorld, h: Holding): number {
 function setPlot(world: KingdomWorld, h: Holding, p: FieldPlot, stage: PlotStage, cause: PlotCause): void {
   p.stage = stage;
   p.days = 0;
-  if (stage === "sown") { p.progress = 0; p.health = 100; }
+  if (stage === "sown") { p.progress = 0; p.health = 100; p.lost = null; }
   if (stage === "ripe") p.progress = 1;
+  // ECON: a lost crop remembers why, for the field card, until the field is sown again.
+  if (stage === "spoiled") p.lost = cause;
   world.events.push({ kind: "plotStage", holding: h.id, plot: p.id, stage, cause });
 }
 
@@ -356,6 +419,13 @@ export function applyEconomyOrder(world: KingdomWorld, order: KingdomOrder & Eco
       h.festival = 0;
       // A rally is for unclaimed hamlets; the people of your own are taxed and mustered instead.
       if (world.king.task === "rally") setTask(world, "none");
+      // ECON: its fields resow as the realm's switch says, and its stores come with it --
+      // the people's own cellars, and for the first holding a winter's start besides.
+      for (const p of h.plots) p.auto = e.autoSow;
+      const first = ownedBy(world, f).length === 1;
+      const gift: Partial<Record<StockId, number>> = { grain: h.population * CLAIM_GRAIN_PER_PERSON };
+      if (first) for (const st of STOCK_IDS) gift[st] = (gift[st] ?? 0) + (FIRST_HOLDING_STORES[st] ?? 0);
+      receive(e, book, gift, "finds");
       world.events.push({ kind: "claimed", holding: h.id, faction: f });
       return null;
     }
@@ -390,46 +460,50 @@ export function applyEconomyOrder(world: KingdomWorld, order: KingdomOrder & Eco
     }
     case "harvest": {
       const { holding: h, plot: p } = findPlot(world, order.plot)!;
-      const full = expectedYield(world, h, p);
-      // One draw per harvest, from the economy's own stream.
-      const luck = 100 - HARVEST_VARIANCE_PCT + world.rng.economy.int(2 * HARVEST_VARIANCE_PCT + 1);
-      const gains: Partial<Record<StockId, number>> = {};
-      for (const s of STOCK_IDS) {
-        const v = full[s] ?? 0;
-        if (v) gains[s] = floor((v * luck) / 100);
+      reap(world, f, h, p, "harvested");
+      return null;
+    }
+    case "setAutoSow": {
+      const crop = order.crop;
+      const targets = order.holding === 0 ? ownedBy(world, f) : [world.holding(order.holding) as Holding];
+      if (order.holding === 0) e.autoSow = crop;
+      for (const h of targets) {
+        for (const p of h.plots) if (order.plot === 0 || p.id === order.plot) p.auto = crop;
       }
-      receive(e, book, gains, "harvest");
-      setPlot(world, h, p, "harvested", "harvested");
-      world.events.push({ kind: "harvested", holding: h.id, plot: p.id, gains });
+      world.events.push({ kind: "autoSowSet", holding: order.holding, plot: order.plot, crop });
       return null;
     }
   }
 }
 
-// -- the day ---------------------------------------------------------------------------
-
-/** Today's farm event, from one draw of the weather stream (always made). */
-function rollFarmEvent(world: KingdomWorld, d: CalendarDate): FarmEventId | null {
-  const roll = world.rng.weather.int(100);
-  const odds = FARM_EVENT_ODDS[d.season][world.weather];
-  if (!odds) return null;
-  const [event, pct] = odds;
-  if (event === "frost" && d.season === "autumn" && d.dayOfSeason < AUTUMN_FROST_FROM_DAY) return null;
-  return roll < pct ? event : null;
+/**
+ * Reap a ripe plot into its lord's stores: the yield at the plot's health
+ * and the farm's bonus, times one draw of harvest luck from the economy's
+ * own stream. The order's harvest and the day's auto-harvest are this one
+ * function, so a field reaped by itself yields exactly what a hand would.
+ */
+function reap(world: KingdomWorld, f: number, h: Holding, p: FieldPlot, cause: "harvested" | "autoReaped"): void {
+  const full = expectedYield(world, h, p);
+  const luck = 100 - HARVEST_VARIANCE_PCT + world.rng.economy.int(2 * HARVEST_VARIANCE_PCT + 1);
+  const gains: Partial<Record<StockId, number>> = {};
+  for (const s of STOCK_IDS) {
+    const v = full[s] ?? 0;
+    if (v) gains[s] = floor((v * luck) / 100);
+  }
+  receive(world.economy[f], world.books[f], gains, "harvest");
+  setPlot(world, h, p, "harvested", cause);
+  world.events.push({ kind: "harvested", holding: h.id, plot: p.id, gains });
 }
 
-function harmPlots(world: KingdomWorld, event: FarmEventId): void {
-  for (const h of world.holdings) {
-    if (event === "flood" && !BIOME_ECONOMY[h.biome].floods) continue;
-    for (const p of h.plots) {
-      if (p.stage !== "sown" && p.stage !== "growing" && p.stage !== "ripe") continue;
-      if (event === "drought" && p.stage === "ripe") continue;
-      const crop = CROPS[p.crop as CropId];
-      const harm = crop.hardy ? FARM_EVENT_HARM[event].hardy : FARM_EVENT_HARM[event].tender;
-      p.health = max(0, p.health - harm);
-      if (p.health === 0) setPlot(world, h, p, "spoiled", "weather");
-    }
-  }
+// -- the day ---------------------------------------------------------------------------
+
+/**
+ * ECON: K3's farm weather is gone (no draw decides a field's fate), but its
+ * one draw of the weather stream a day is still made, so the weather that
+ * follows -- and every realm's marches through it -- is what it always was.
+ */
+function keepFarmWeatherDraw(world: KingdomWorld): void {
+  world.rng.weather.int(100);
 }
 
 function growPlots(world: KingdomWorld, d: CalendarDate): void {
@@ -446,7 +520,13 @@ function growPlots(world: KingdomWorld, d: CalendarDate): void {
           if (crop.grows.includes(s)) {
             p.days++;
             p.progress = p.days / crop.growDays;
-            if (p.days >= crop.growDays) setPlot(world, h, p, "ripe", "ripened");
+            if (p.days >= crop.growDays) {
+              setPlot(world, h, p, "ripe", "ripened");
+              // ECON (owner: "the fields should be auto harvested"): a ripe
+              // field of a lord who keeps stores is reaped the day it ripens.
+              const f = h.owner === null ? -1 : FACTION_IDS.indexOf(h.owner);
+              if (f >= 0 && economyActive(world, f)) reap(world, f, h, p, "autoReaped");
+            }
           }
           break;
         case "ripe":
@@ -492,6 +572,27 @@ function turnSeason(world: KingdomWorld, d: CalendarDate): void {
       if (n > 0) moveUnrest(world, h, MUSTER_UNREST);
     }
     seasonalBoons(world, f);
+  }
+}
+
+/**
+ * ECON (owner: "the king can automatically make them sowed"): every open
+ * field of the faction set to resow itself is sown with its crop, paying the
+ * seed from the stores, on the first day its season, its seed and the
+ * calendar allow (autoSowWaits). In holding and plot id order, so a short
+ * seed store goes to the first fields first, the same every run.
+ */
+function autoSow(world: KingdomWorld, f: number): void {
+  const e = world.economy[f];
+  const book = world.books[f];
+  for (const h of ownedBy(world, f)) {
+    for (const p of h.plots) {
+      if (autoSowWaits(world, h, p) !== null) continue;
+      const crop = CROPS[p.auto as CropId];
+      pay(e, book, seedCost(crop, h), "seed");
+      p.crop = crop.id;
+      setPlot(world, h, p, "sown", "autoSown");
+    }
   }
 }
 
@@ -635,16 +736,7 @@ function eat(world: KingdomWorld, f: number, season: Season): void {
 }
 
 function spoil(world: KingdomWorld, f: number): void {
-  const e = world.economy[f];
-  const { granary, loose } = storageOf(world, f);
-  const g = e.stocks.grain;
-  const inGranary = min(g, granary);
-  const inLoose = min(g - inGranary, loose);
-  const heap = g - inGranary - inLoose;
-  const looseRate = (SPOIL_PERMILLE.loose * (100 + spoilagePct(world, f))) / 100;
-  const lost = floor((inGranary * SPOIL_PERMILLE.granary) / 1000) + floor((inLoose * looseRate) / 1000) +
-    ceil((heap * SPOIL_PERMILLE.heap) / 1000);
-  debitUpTo(e, world.books[f], "grain", lost, "spoilage");
+  debitUpTo(world.economy[f], world.books[f], "grain", grainStores(world, f).spoilsToday, "spoilage");
 }
 
 /**
@@ -652,23 +744,21 @@ function spoil(world: KingdomWorld, f: number): void {
  * day, after the weather is rolled and before the day's orders apply.
  */
 export function runEconomyDay(world: KingdomWorld): void {
-  const d = calendar(world.now);
+  const d = world.date;
   const before = world.economy.map((e, f) => (economyActive(world, f) ? snapshotStocks(e).join() : ""));
   for (let f = 0; f < FACTION_IDS.length; f++) {
     const book = world.books[f];
     if (book.open.day !== d.day) turnPage(book, d.day, world.economy[f]);
   }
 
-  const event = rollFarmEvent(world, d);
-  if (event) {
-    world.events.push({ kind: "farmWeather", event });
-    harmPlots(world, event);
-  }
+  keepFarmWeatherDraw(world);
   if (d.dayOfSeason === 0 && d.day > 0) turnSeason(world, d);
   growPlots(world, d);
 
   for (let f = 0; f < FACTION_IDS.length; f++) {
     if (!economyActive(world, f)) continue;
+    // ECON: fields set to resow themselves are sown (after the day's harvest, before the day's bread).
+    autoSow(world, f);
     buildAndProduce(world, f);
     collectTaxes(world, f);
     creditDailyBoons(world, f);

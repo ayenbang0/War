@@ -14,8 +14,12 @@
 
 import { TICKS_PER_DAY } from "../sim/kingdom/clock.ts";
 
-/** 1x: one day every two real seconds (docs/kingdom.md; PROVISIONAL K1.2). */
-export const DAY_SECONDS_AT_1X = 2;
+/**
+ * 1x: one day every real second (docs/kingdom.md; PROVISIONAL K1.2, ECON.1).
+ * ECON: was two seconds when a year was 120 days; with the twelve-month year
+ * a year at 1x is six minutes (it was four), a season a minute and a half.
+ */
+export const DAY_SECONDS_AT_1X = 1;
 export const TICKS_PER_SECOND_AT_1X = TICKS_PER_DAY / DAY_SECONDS_AT_1X;
 
 export type KingdomSpeed = 1 | 2 | 4;

@@ -8,7 +8,7 @@
  * Plain data and pure formatting; no DOM.
  */
 
-import type { HoldingKind, Season, WeatherId } from "./terrain.ts";
+import { MONTHS, type HoldingKind, type Season, type WeatherId } from "./terrain.ts";
 
 /** Why a pen stroke on the kingdom map did nothing. Every reason is said. */
 export type KingdomNoneReason =
@@ -69,9 +69,25 @@ function ordinal(n: number): string {
   }
 }
 
-/** "Day 3 · 4th of Autumn, year 1" -- day counts from 1 for the player. */
-export function dateLine(p: { day: number; dayOfSeason: number; season: Season; year: number }): string {
-  return "Day " + (p.day + 1) + " · " + ordinal(p.dayOfSeason + 1) + " of " + SEASON_NAME[p.season] + ", year " + p.year;
+/**
+ * ECON: "14 Harvestmoon, Year 2 · Autumn" -- the day of the month counts from
+ * 1 for the player, the month by its name (terrain.ts MONTHS), and the
+ * season after it because the farms run by the season.
+ */
+export function dateLine(p: { month: number; dayOfMonth: number; season: Season; year: number }): string {
+  return (p.dayOfMonth + 1) + " " + MONTHS[p.month].name + ", Year " + p.year + " · " + SEASON_NAME[p.season];
+}
+
+/** The date's long form, for the HUD's tooltip: "Day 3 of the exile; the 1st month of autumn". */
+export function dateTitle(p: { day: number; month: number; season: Season }): string {
+  const nth = (p.month % 3) + 1;
+  return "Day " + (p.day + 1) + " of the exile; the " + ordinal(nth) + " month of " + SEASON_NAME[p.season].toLowerCase() + " (twelve months to the year)";
+}
+
+/** "3 Thawmoon" -- a day of the year by month, for warnings and the field card ("ripe about 9 Reapmoon"). */
+export function monthDay(dayOfYear: number): string {
+  const m = Math.floor(dayOfYear / 30) % 12;
+  return (dayOfYear - Math.floor(dayOfYear / 30) * 30 + 1) + " " + MONTHS[m].name;
 }
 
 /**
@@ -195,6 +211,7 @@ export const REFUSAL = {
   orchardStands: "the orchard will fruit again next year; it needs no sowing",
   plotInUse: "the field is already sown",
   wrongSeason: (crop: string) => crop + " cannot be sown in this season",
+  tooLate: (crop: string) => "too late in the year for " + crop.toLowerCase() + ": the winter would kill it before it ripens",
   notRipe: "it is not ripe",
 } as const;
 
@@ -219,12 +236,6 @@ export const STAGE_NAME = {
   empty: "lying fallow", sown: "sown", growing: "growing", ripe: "ripe", harvested: "harvested", spoiled: "spoiled",
 } as const;
 
-export const FARM_EVENT_LINE = {
-  drought: "Drought: the fields parch.",
-  frost: "A hard frost on the fields.",
-  flood: "Floods in the low fields.",
-} as const;
-
 export const TASK_NAME = { none: "resting", forage: "foraging", rally: "rallying followers" } as const;
 
 function signed(n: number): string {
@@ -239,6 +250,22 @@ export const E = {
   noChange: "no change",
   grainLasts: (days: number) => days >= 999 ? "nothing eats it" : "lasts about " + days + (days === 1 ? " day" : " days"),
   grainStore: (n: number) => "stores hold " + n,
+  // ECON: the realm's granary readout (owner: "the granary should actually store food that the king can access").
+  storedOf: (p: { grain: number; capacity: number }) => "stored " + p.grain + " of " + p.capacity,
+  granaryHolds: (p: { inGranary: number; granary: number }) =>
+    p.granary > 0 ? "granaries " + p.inGranary + " of " + p.granary : "no granary yet",
+  overflow: (p: { heap: number; spoils: number }) =>
+    p.heap + " grain past the stores' room is rotting (" + p.spoils + " a day): build a granary",
+  breadRunsOut: (days: number) => "Bread runs out in " + days + (days === 1 ? " day" : " days") + " at today's need",
+  winterComing: (p: { days: number; need: number }) =>
+    "Winter in " + p.days + (p.days === 1 ? " day" : " days") + ": the towns will eat " + p.need + " a day",
+  /** The tooltip of a stock: what moved it yesterday, the biggest causes first. */
+  flowTitle: (p: { name: string; value: number; net: number; parts: readonly string[] }) =>
+    p.name + " " + p.value + ". Yesterday " + signed(p.net) + (p.parts.length ? ": " + p.parts.join(", ") : "") + ".",
+  flowPart: (p: { label: string; n: number }) => p.label + " " + signed(p.n),
+  grainTitle: (p: { stored: string; granary: string; spoils: number }) =>
+    p.stored + " (" + p.granary + "). The realm's one store: the towns and the armies at home eat from it, wherever the grain was reaped. " +
+    (p.spoils > 0 ? p.spoils + " spoil a day in cellars and heaps; " : "") + "a granary keeps grain without spoiling.",
   hungry: (days: number) => "Hungry: the party has gone short " + days + (days === 1 ? " day" : " days"),
   famineAt: (p: { name: string; days: number }) => "Famine at " + p.name + " (" + p.days + (p.days === 1 ? " day" : " days") + ")",
   // The economy panel.
@@ -264,7 +291,7 @@ export const E = {
   fields: "Fields",
   field: (n: number) => "Field " + n,
   plotLine: (p: { crop: string; stage: string; pct: number; health: number }) =>
-    p.crop + ", " + p.stage + (p.stage === "growing" ? " (" + p.pct + "%)" : "") + (p.health < 100 ? ", " + p.health + "% left after the weather" : ""),
+    p.crop + ", " + p.stage + (p.stage === "growing" ? " (" + p.pct + "%)" : "") + (p.health < 100 ? ", " + p.health + "% left after foraging" : ""),
   plotEmpty: "lying fallow",
   coinAmount: (n: number) => (Math.round(n * 10) / 10) + " coin",
   sow: "Sow…",
@@ -284,6 +311,9 @@ export const E = {
   daysLine: (p: { days: number; upkeep: string }) => p.days + (p.days === 1 ? " day" : " days") + " to build" + (p.upkeep ? "; upkeep " + p.upkeep + " a day" : ""),
   yieldLine: (s: string) => "Yields about " + s,
   seasonLine: (s: string) => "Sow in " + s,
+  // ECON: what a sowing today would come to, from the calendar (crops.ts daysToRipe).
+  ripeBy: (p: { when: string; days: number }) => "Ripe about " + p.when + " (" + p.days + " days)",
+  tooLate: "Too late this year: winter would kill it before it ripens",
   notNow: (why: string) => "Not now: " + why + ".",
   chosen: "Ordered.",
   queued: (said: string) => said + " (Time is paused: it is done when time runs again.)",
@@ -310,10 +340,23 @@ export const E = {
   claimed: (name: string) => "The king claims " + name + ".",
   ripe: (p: { crop: string; name: string }) => p.crop + " is ripe at " + p.name + ": harvest it before it spoils.",
   spoiled: (p: { crop: string; name: string; cause: string }) => p.crop + " at " + p.name + " is lost (" + p.cause + ").",
-  causeWeather: "the weather",
-  causeWinter: "killed by the winter",
-  causeOverripe: "left too long",
+  autoSown: (p: { crop: string; name: string }) => p.crop + " is sown at " + p.name + " (the field resows itself).",
+  /** Why a crop was lost, in words (FieldPlot.lost; the feed and the field card). */
+  lostCause: (cause: string) => LOST_CAUSE[cause] ?? "lost",
 } as const;
+
+/**
+ * ECON: every way a crop can be lost, in words. None is a dice roll: each is
+ * a cause the field card warns of before it happens (docs/PROVISIONAL.md ECON.5).
+ */
+export const LOST_CAUSE: Readonly<Record<string, string>> = {
+  winter: "killed by the winter: sown too late to ripen",
+  overripe: "left ripe too long",
+  foraged: "stripped by an army foraging",
+  burned: "burned",
+  trampled: "trampled in a battle",
+  weather: "the weather",
+};
 
 /** "12 coin, 6 timber" -- a cost or a gain, in stock order, in words. */
 export function amountsLine(c: Readonly<Partial<Record<"coin" | "grain" | "timber" | "iron" | "levy", number>>>): string {

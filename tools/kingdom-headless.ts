@@ -51,7 +51,7 @@ import { KingdomClock, MAX_TICKS_PER_FRAME, type KingdomSpeed } from "../src/app
 import { KingdomCamera, OPENING_MILES, TABLE_MARGIN_MILES } from "../src/render/kingdom/camera.ts";
 import { KING_COUNTER_OFFSET_PX, kingCounterAt } from "../src/render/kingdom/layout.ts";
 import { interpretStroke, kingdomContext } from "../src/input/kingdom-commander.ts";
-import { K, NONE_PLATE, NONE_REASON, WEATHER_LINE, dateLine, etaWords } from "../src/content/kingdom/ui-strings.ts";
+import { K, NONE_PLATE, NONE_REASON, WEATHER_LINE, dateLine, dateTitle, etaWords } from "../src/content/kingdom/ui-strings.ts";
 import { buildKingdomCorpus } from "./gesture-corpus.ts";
 import { KINGDOM_LABELS, printKingdomMatrix, runKingdomConfusionMatrix } from "./test-gestures.ts";
 
@@ -292,7 +292,9 @@ section("rng streams");
 section("clock");
 {
   check("a day is a fixed number of kingdom ticks", calendar(TICKS_PER_DAY - 1).day === 0 && calendar(TICKS_PER_DAY).day === 1);
-  check("a year is four seasons of thirty days", DAYS_PER_YEAR === 120 && TICKS_PER_YEAR === 120 * TICKS_PER_DAY);
+  // ECON (owner: "actual 12 month years rather than the fake 4 month ones").
+  check("a year is twelve months of thirty days, three to a season", DAYS_PER_YEAR === 360 && DAYS_PER_SEASON === 90 &&
+    TICKS_PER_YEAR === 360 * TICKS_PER_DAY);
   const d0 = calendar(0);
   check("the exile begins on the first day of autumn, year 1",
     d0.year === 1 && d0.season === "autumn" && d0.dayOfSeason === 0 && d0.tickOfDay === 0);
@@ -309,7 +311,7 @@ section("clock");
     prev = c;
   }
   check("dates only ever run forwards, a day at a time", ordered);
-  check("ten years is under ten thousand ticks", DECADE < 10000, String(DECADE));
+  check("ten years is under thirty thousand ticks", DECADE < 30000, String(DECADE));
 
   // The weather is rolled once a day, and winter brings snow.
   const w = new KingdomWorld({ seed: SEED });
@@ -980,9 +982,10 @@ section("K2 real-time clock");
     for (let i = 0; i < frames; i++) ticks += c.advance(1 / hz, held);
     return ticks;
   };
-  check("1x: one day every two seconds", run(1, 60, 2) === TICKS_PER_DAY, run(1, 60, 2) + " ticks in 2 s");
-  check("2x: two days every two seconds", run(2, 60, 2) === 2 * TICKS_PER_DAY, String(run(2, 60, 2)));
-  check("4x: four days every two seconds", run(4, 60, 2) === 4 * TICKS_PER_DAY, String(run(4, 60, 2)));
+  // ECON: one day a second at 1x (was one every two), so a twelve-month year is six minutes.
+  check("1x: one day every second", run(1, 60, 2) === 2 * TICKS_PER_DAY, run(1, 60, 2) + " ticks in 2 s");
+  check("2x: two days every second", run(2, 60, 2) === 4 * TICKS_PER_DAY, String(run(2, 60, 2)));
+  check("4x: four days every second", run(4, 60, 2) === 8 * TICKS_PER_DAY, String(run(4, 60, 2)));
   check("the rate does not depend on the frame rate",
     run(1, 30, 10) === run(1, 144, 10) && run(4, 30, 10) === run(4, 144, 10),
     run(1, 30, 10) + "/" + run(1, 144, 10) + ", " + run(4, 30, 10) + "/" + run(4, 144, 10));
@@ -1058,7 +1061,9 @@ section("K2 strings");
   check("ETA in half days beyond", etaWords(36, TICKS_PER_DAY) === "about 4½ days", etaWords(36, TICKS_PER_DAY));
   check("ETA of one day", etaWords(8, TICKS_PER_DAY) === "about 1 day", etaWords(8, TICKS_PER_DAY));
   const d = calendar(0);
-  check("the date line counts days from 1", dateLine(d).startsWith("Day 1 · "), dateLine(d));
+  check("the date line names the day and month, counting days from 1", dateLine(d) === "1 Harvestmoon, Year 1 · Autumn", dateLine(d));
+  check("and the long form still counts the exile's days", dateTitle(calendar(4 * TICKS_PER_DAY)).startsWith("Day 5 of the exile"),
+    dateTitle(calendar(4 * TICKS_PER_DAY)));
 }
 
 // -- summary ---------------------------------------------------------------------

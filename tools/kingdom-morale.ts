@@ -397,7 +397,8 @@ section("army morale: pay, bread, the king, the cause, terror, victory");
   const hungry = army((w, a) => { a.supply = 0; take(w, "grain"); });
   nextDay(hungry.w);
   check("hungry, it falls", hungry.a.morale === 50 - ARMY_MORALE.hungry, String(hungry.a.morale));
-  const unpaid = army((w) => { take(w, "coin"); });
+  // ECON: wages are a third of the points now, and a day's tax would pay them: no tax here.
+  const unpaid = army((w) => { take(w, "coin"); for (const h of w.holdingsOf("king")) h.tax = "none"; });
   nextDay(unpaid.w);
   check("unpaid, it falls", unpaid.a.morale === 50 - ARMY_MORALE.unpaid, String(unpaid.a.morale));
 

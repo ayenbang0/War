@@ -43,7 +43,7 @@ import {
 import { MORALE_REFUSAL } from "../../content/kingdom/morale-strings.ts";
 import { REFUSAL } from "../../content/kingdom/ui-strings.ts";
 import { UNIT_TYPES } from "../../content/unit-types.ts";
-import { DAYS_PER_SEASON, calendar } from "./clock.ts";
+import { DAYS_PER_SEASON } from "./clock.ts";
 import type { KingdomOrder, KingdomOrderBody } from "./orders.ts";
 import type { Army, Holding } from "./state.ts";
 import { adjustLegitimacy, canAfford, debit, pay, snapshotStocks } from "./ledger.ts";
@@ -71,9 +71,14 @@ export function isRestless(h: Holding): boolean {
   return h.unrest >= RESTLESS_AT;
 }
 
-/** The absolute season a day is in (0 = the exile's first autumn), for "once a season". */
+/**
+ * The absolute season a day is in, counted from the spring of year 1 (so the
+ * exile's first autumn is 2), for "once a season". From the calendar, not
+ * from the days since the start, so it turns with the seasons even in a realm
+ * whose epoch is not a season's first day (a converted old save: ECON.9).
+ */
 export function seasonIndex(world: KingdomWorld): number {
-  return floor(calendar(world.now).day / DAYS_PER_SEASON);
+  return floor(world.date.absoluteDay / DAYS_PER_SEASON);
 }
 
 /** Armies of the holding's lord standing in it unpaid or hungry: they live on the townsfolk. */
@@ -322,7 +327,7 @@ function armyMoraleDay(world: KingdomWorld, a: Army): boolean {
  * today's famine, foraging and wages are what it reads.
  */
 export function runMoraleDay(world: KingdomWorld): void {
-  const d = calendar(world.now);
+  const d = world.date;
   const turn = d.dayOfSeason === 0 && d.day > 0;
   for (let f = 0; f < FACTION_IDS.length; f++) {
     if (!economyActive(world, f)) continue;

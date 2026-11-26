@@ -28,7 +28,7 @@ import {
   type WeatherId,
 } from "../../content/kingdom/terrain.ts";
 import { levelById } from "../../content/levels/index.ts";
-import { TICKS_PER_DAY, calendar, isDayStart, type CalendarDate } from "./clock.ts";
+import { START_DAY_OF_YEAR, TICKS_PER_DAY, calendar, isDayStart, type CalendarDate } from "./clock.ts";
 import { KingdomOrderQueue, type KingdomOrder, type KingdomOrderBody } from "./orders.ts";
 import {
   advanceMover, buildGraph, findRoute, moverAt, moverPosition, roadLength, setRoute,
@@ -100,6 +100,21 @@ export type KingdomConfig = {
    * save remembers it (docs/PROVISIONAL.md K8.2).
    */
   readonly captains?: boolean;
+  /**
+   * ECON: the realm's fields resow themselves -- every field the king comes
+   * to hold is set to resow `AUTO_SOW_DEFAULT` when its season comes
+   * (economy.ts autoSow). Off by default, so the K3 suites sow by hand and
+   * the bare test worlds keep their realm; a new campaign turns it on and
+   * the save remembers it (docs/PROVISIONAL.md ECON.4). Ripe fields are
+   * reaped by themselves in every realm.
+   */
+  readonly autoFarm?: boolean;
+  /**
+   * ECON: the day of year 1 the exile began on (clock.ts calendar). The
+   * first day of autumn for every new game; a save from the old four-month
+   * calendar converts to whatever keeps its date (save.ts migrate8to9).
+   */
+  readonly epoch?: number;
 };
 
 export type KingdomRng = {
@@ -159,6 +174,10 @@ export class KingdomWorld {
   readonly companies: Company[] = newCompanies();
   /** K8: whether the captains run their realms (KingdomConfig.captains). Set by the constructor, or by a load. */
   captains: boolean;
+  /** ECON: whether new fields of the king's resow themselves (KingdomConfig.autoFarm). */
+  readonly autoFarm: boolean;
+  /** ECON: the day of year 1 the realm began on (KingdomConfig.epoch); the calendar reads every date from it. */
+  readonly epoch: number;
   /** K8: each faction's strategic AI's goal, in FACTION_IDS order (ai.ts; only AI factions' are read). */
   readonly minds: AiMind[];
   /** K8: each faction's memory of the map, in FACTION_IDS order (empty for factions no AI reads). */
@@ -199,6 +218,8 @@ export class KingdomWorld {
   constructor(config: KingdomConfig) {
     this.seed = config.seed | 0;
     this.map = config.map ?? RIMAROS;
+    this.autoFarm = config.autoFarm === true;
+    this.epoch = config.epoch ?? START_DAY_OF_YEAR;
     this.rng = {
       economy: Rng.create(this.seed, Stream.Economy),
       events: Rng.create(this.seed, Stream.Events),
@@ -263,7 +284,7 @@ export class KingdomWorld {
     for (const h of this.holdings) {
       const n = HOLDING_KINDS[h.kind].fieldPlots;
       for (let i = 0; i < n; i++) {
-        const plot: FieldPlot = { id: this.nextId++, crop: null, stage: "empty", progress: 0, days: 0, health: 100 };
+        const plot: FieldPlot = { id: this.nextId++, crop: null, stage: "empty", progress: 0, days: 0, health: 100, auto: null, lost: null };
         h.plots.push(plot);
       }
     }
@@ -282,7 +303,7 @@ export class KingdomWorld {
     // Stores are not entities and take no ids: the id sequence above is the
     // same as K1's, which keeps old saves' fingerprints valid (save.ts v1 -> v2).
     this.captains = config.captains === true;
-    this.economy = FACTION_IDS.map((f) => newFactionEconomy(f, this.captains));
+    this.economy = FACTION_IDS.map((f) => newFactionEconomy(f, this.captains, this.autoFarm));
     this.books = this.economy.map((e) => newBook(e));
     // K3a: what each faction knows on day one, then what it can see from there.
     this.explore = FACTION_IDS.map((_, f) => newExploration(this, f));
@@ -402,7 +423,7 @@ export class KingdomWorld {
 
   private beginDay(): void {
     this.weather = this.rollWeather();
-    this.events.push({ kind: "dayBegan", day: calendar(this.now).day, weather: this.weather });
+    this.events.push({ kind: "dayBegan", day: this.date.day, weather: this.weather });
   }
 
   /**
@@ -414,7 +435,7 @@ export class KingdomWorld {
    * stream is consumed identically on every machine.
    */
   private rollWeather(): WeatherId {
-    const odds = WEATHER_ODDS[calendar(this.now).season];
+    const odds = WEATHER_ODDS[this.date.season];
     const r = this.rng.weather;
     const current = WEATHER_IDS.indexOf(this.weather);
     if (odds[current] > 0 && r.chance(WEATHER_PERSISTENCE)) return this.weather;
@@ -557,7 +578,7 @@ export class KingdomWorld {
   // -- queries (read-only; for the UI, the AI and the tests) ------------------
 
   get date(): CalendarDate {
-    return calendar(this.now);
+    return calendar(this.now, this.epoch);
   }
 
   holding(id: number): Holding | undefined {

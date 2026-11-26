@@ -21,12 +21,12 @@ import { FNV_OFFSET, mixF64, mixU32 } from "../hash.ts";
 import { FACTION_IDS, type FactionId } from "../../content/kingdom/factions.ts";
 import { ROAD_TERRAIN_IDS, WEATHER_IDS } from "../../content/kingdom/terrain.ts";
 import { BUILDING_IDS } from "../../content/kingdom/buildings.ts";
-import { CROP_IDS } from "../../content/kingdom/crops.ts";
+import { CROP_IDS, type CropId } from "../../content/kingdom/crops.ts";
 import { JUSTICE_IDS } from "../../content/kingdom/morale.ts";
 import { STOCK_IDS, TAX_RATE_IDS } from "../../content/kingdom/economy.ts";
 import { CONTACT_CHOICES, KINGDOM_ORDER_KINDS, type KingdomOrder } from "./orders.ts";
 import { mixBattleResult } from "../layers.ts";
-import { KING_TASKS, PLOT_STAGES, type Mover } from "./state.ts";
+import { KING_TASKS, PLOT_CAUSES, PLOT_STAGES, type Mover } from "./state.ts";
 import type { LedgerDay } from "./ledger.ts";
 import { UPGRADE_IDS } from "../../content/story/upgrades.ts";
 import { UNIT_TYPE_IDS } from "../../content/unit-types.ts";
@@ -111,6 +111,7 @@ export function mixOrder(h: number, o: KingdomOrder): number {
     case "callLevy": return mixU32(h, o.holding);
     case "burnFields": return mixU32(h, o.holding);
     case "ambush": return mixU32(h, o.army);
+    case "setAutoSow": return mixU32(mixU32(mixU32(h, o.holding), o.plot), o.crop === null ? 0 : CROP_IDS.indexOf(o.crop) + 1);
   }
 }
 
@@ -167,6 +168,9 @@ export function kingdomHash(world: KingdomWorld): string {
   h = mixU32(h, world.nextId);
   h = mixStr(h, world.map.id);
   h = mixU32(h, WEATHER_IDS.indexOf(world.weather));
+  // ECON: the realm's calendar start and whether its fields resow themselves.
+  h = mixU32(h, world.epoch);
+  h = mixU32(h, world.autoFarm ? 1 : 0);
 
   h = mixU32(h, world.holdings.length);
   for (const x of world.holdings) {
@@ -192,6 +196,9 @@ export function kingdomHash(world: KingdomWorld): string {
       h = mixF64(h, p.progress);
       h = mixU32(h, p.days);
       h = mixU32(h, p.health);
+      // ECON: what it resows by itself, and why it was last lost.
+      h = mixU32(h, p.auto === null ? 0 : CROP_IDS.indexOf(p.auto as CropId) + 1);
+      h = mixU32(h, p.lost === null ? 0 : PLOT_CAUSES.indexOf(p.lost) + 1);
     }
     h = mixU32(h, TAX_RATE_IDS.indexOf(x.tax));
     h = mixU32(h, x.taxCarry);
@@ -303,6 +310,7 @@ export function kingdomHash(world: KingdomWorld): string {
     h = mixU32(h, e.hunger);
     h = mixU32(h, TAX_RATE_IDS.indexOf(e.defaultTax));
     h = mixU32(h, e.mercy + 0x8000); // K6: Mercy/Terror, offset so it is never negative
+    h = mixU32(h, e.autoSow === null ? 0 : CROP_IDS.indexOf(e.autoSow as CropId) + 1); // ECON
     h = mixLedgerDay(h, world.books[f].open);
     h = mixLedgerDay(h, world.books[f].closed);
   });

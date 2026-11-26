@@ -2,7 +2,7 @@
   "kingdom": {
     "seed": "0x6b1d0001",
     "years": 10,
-    "ticks": 9600,
-    "final": "51e0098e"
+    "ticks": 28800,
+    "final": "bf9431cc"
   }
 }

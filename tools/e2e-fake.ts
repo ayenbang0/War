@@ -39,6 +39,7 @@ await import("../src/e2e/scenarios-k5.ts");
 await import("../src/e2e/scenarios-k6.ts");
 await import("../src/e2e/scenarios-k7.ts");
 await import("../src/e2e/scenarios-k8.ts");
+await import("../src/e2e/scenarios-econ.ts");
 const only = process.argv[2];
 const results = await runFromQuery(only ? "?only=" + only : "", out as unknown as HTMLElement);
 clearInterval(pump);

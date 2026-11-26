@@ -22,7 +22,7 @@ import type { LayerKeys } from "../ui/keys.ts";
 import type { KingdomWorld } from "../sim/kingdom/world.ts";
 import type { KingdomEvent } from "../sim/kingdom/state.ts";
 import { KING_PLAYER } from "../content/kingdom/factions.ts";
-import { E, FARM_EVENT_LINE, K, WEATHER_LINE, amountsLine, dateLine } from "../content/kingdom/ui-strings.ts";
+import { E, K, WEATHER_LINE, amountsLine, dateLine } from "../content/kingdom/ui-strings.ts";
 import { BUILDINGS, type BuildingId } from "../content/kingdom/buildings.ts";
 import { CROPS, type CropId } from "../content/kingdom/crops.ts";
 import type { KingdomOrderBody } from "../sim/kingdom/orders.ts";
@@ -607,20 +607,19 @@ export class KingdomLayer implements LayerKeys {
       case "upkeepUnpaid":
         this.hud.alert(day, E.upkeepUnpaid({ building: BUILDINGS[e.building as BuildingId].name, name: name(e.holding) }));
         return false;
-      case "farmWeather":
-        this.hud.alert(day, FARM_EVENT_LINE[e.event]);
-        return false;
       case "plotStage": {
         const plot = w.holding(e.holding)?.plots.find((p) => p.id === e.plot);
         const crop = plot?.crop ? CROPS[plot.crop as CropId].name : "";
-        if (e.stage === "ripe") this.hud.alert(day, E.ripe({ crop, name: name(e.holding) }));
+        // ECON: a field reaped the day it ripens says so once, as its harvest (below).
+        if (e.stage === "ripe" && plot?.stage === "ripe") this.hud.alert(day, E.ripe({ crop, name: name(e.holding) }));
+        if (e.stage === "sown" && e.cause === "autoSown") this.hud.alert(day, E.autoSown({ crop, name: name(e.holding) }));
         // K8: a burned field has its own line (fieldsBurned).
-        if (e.stage === "spoiled" && e.cause !== "burned") {
-          const cause = e.cause === "winter" ? E.causeWinter : e.cause === "overripe" ? E.causeOverripe : E.causeWeather;
-          this.hud.alert(day, E.spoiled({ crop, name: name(e.holding), cause }));
-        }
+        if (e.stage === "spoiled" && e.cause !== "burned") this.hud.alert(day, E.spoiled({ crop, name: name(e.holding), cause: E.lostCause(e.cause) }));
         return false;
       }
+      case "autoSowSet":
+        this.storesDirty = true;
+        return false;
       case "harvested":
         this.hud.alert(day, E.harvestDone({ name: name(e.holding), gains: amountsLine(e.gains) }));
         return false;

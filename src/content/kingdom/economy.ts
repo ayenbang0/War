@@ -118,6 +118,27 @@ export const LEDGER_CATEGORY_IDS: readonly LedgerCategoryId[] = LEDGER_CATEGORIE
 export const KING_START: Readonly<Record<StockId, number>> = { coin: 0, grain: 12, timber: 0, iron: 0, levy: 0 };
 export const KING_START_LEGITIMACY = 10;
 
+/**
+ * ECON (owner: "the game needs to be a lot easier with managing resources"):
+ * the from-nothing start is kept, but the first holding the king claims opens
+ * its stores to the banner -- a winter's bread for a hamlet and a little coin
+ * and wood to start building with -- and every holding claimed brings its
+ * people's own cellars, CLAIM_GRAIN_PER_PERSON a head. Booked as `finds`
+ * (finds and gifts), so the ledger says where it came from
+ * (docs/PROVISIONAL.md ECON.6).
+ */
+export const FIRST_HOLDING_STORES: Readonly<Partial<Record<StockId, number>>> = { grain: 2000, coin: 30, timber: 20 };
+export const CLAIM_GRAIN_PER_PERSON = 8;
+/**
+ * ECON (owner: "the granary should actually store food that the king can
+ * access"): the crown's barns. From the day the king holds a town the realm
+ * has a granary's worth of store that never spoils -- the stores the first
+ * holding opens, and the first harvests, have somewhere to go before the
+ * player has built anything, and without taking a hamlet's one building lot
+ * (docs/PROVISIONAL.md ECON.3). Counted with the granaries.
+ */
+export const KING_BARNS = 1500;
+
 // -- taxes ------------------------------------------------------------------------
 
 export type TaxRateId = "none" | "low" | "normal" | "high" | "harsh";
@@ -154,9 +175,11 @@ export const DEFAULT_TAX: TaxRateId = "normal";
  * day, by season. Peasants feed themselves from their own plots and gardens
  * for most of the year; the lord's granary is what carries them through the
  * lean months -- hence the winter figure, which is what makes winter the
- * pressure of Act I (§A.5, §B.3).
+ * pressure of Act I (§A.5, §B.3). ECON ("a lot easier"): was spring 6,
+ * winter 10; winter is still the lean season, but a held town no longer
+ * eats a season's harvest in it.
  */
-export const DOLE_PER_100: Readonly<Record<Season, number>> = { spring: 6, summer: 2, autumn: 2, winter: 10 };
+export const DOLE_PER_100: Readonly<Record<Season, number>> = { spring: 4, summer: 2, autumn: 2, winter: 6 };
 
 /** People in the king's party (the king, companions, followers) each eat this many grain a day. */
 export const PARTY_RATION = 1;
@@ -164,28 +187,48 @@ export const PARTY_RATION = 1;
 /**
  * A holding in famine loses this percentage of its people each day, spread
  * evenly over the famine's days (see famineDeaths in sim/kingdom/economy.ts):
- * a month of famine costs a hamlet about half its people.
+ * a month of famine costs a hamlet about a third of its people. ECON halved
+ * it (it was 2): a famine is a warning to answer, not a sentence
+ * (docs/PROVISIONAL.md ECON.6).
  */
-export const FAMINE_LOSS_PCT = 2;
+export const FAMINE_LOSS_PCT = 1;
+
+/**
+ * ECON: the resources bar warns while the bread will run out within this many
+ * days at today's need, so a famine is seen coming, not met.
+ */
+export const BREAD_WARNING_DAYS = 20;
 
 /** Share of a fed holding's people called to the levy at the start of each season, in percent. */
 export const MUSTER_PCT = 3;
 
 // -- storage and spoilage ---------------------------------------------------------
 
-/** Grain a holding of each kind can keep in its cellars and barns, without a granary. */
-export const CELLAR: Readonly<Record<HoldingKind, number>> = { hamlet: 30, village: 80, town: 300, keep: 120, city: 1200 };
+/**
+ * Grain a holding of each kind can keep in its cellars and barns, without a
+ * granary. ECON: K3's were 30/80/300/120/1200; three times that with the
+ * season (a season's dole is three times as much grain), and a hamlet's and
+ * keep's again doubled-and-more so the first holding's stores (below) fit in
+ * them -- "larger buffers once a holding exists".
+ */
+export const CELLAR: Readonly<Record<HoldingKind, number>> = { hamlet: 1500, village: 1800, town: 3600, keep: 1500, city: 7200 };
 
-/** Grain each person in the king's party can carry. */
-export const CARRY_PER_PERSON = 12;
+/** Grain each person in the king's party can carry (ECON: three times K3's, with the season). */
+export const CARRY_PER_PERSON = 36;
 
 /**
  * Spoilage per day, in tenths of a percent, by where the grain is kept.
  * Grain fills granaries first, then cellars and packs, and what is left over
  * lies in heaps and rots fast. Spoilage of the first two is rounded down (a
  * small store loses nothing in a day); of the heap, rounded up.
+ *
+ * ECON (owner: "the granary should actually store food that the king can
+ * access"): a granary keeps grain whole -- nothing in it spoils -- and the
+ * cellars lose little, so the stores are a store and not a leak. Only grain
+ * heaped past the stores' room rots fast, and the resources bar says so
+ * while any does (docs/PROVISIONAL.md ECON.3). K3: granary 3, loose 15, heap 250.
  */
-export const SPOIL_PERMILLE = { granary: 3, loose: 15, heap: 250 } as const;
+export const SPOIL_PERMILLE = { granary: 0, loose: 1, heap: 10 } as const;
 
 // -- foraging and rallying (the from-nothing start) --------------------------------
 
@@ -235,33 +278,15 @@ export const RALLY_BRINGS: Readonly<Partial<Record<StockId, number>>> = { grain:
 /** Followers needed to claim a holding: it must be held by somebody. */
 export const CLAIM_MIN_LEVY = 3;
 
-// -- farm weather (from the weather stream, at day scale) ---------------------------
+// -- farm weather: retired (ECON) ------------------------------------------------
 
-export type FarmEventId = "drought" | "frost" | "flood";
-/** Hash order. Append only. */
-export const FARM_EVENT_IDS: readonly FarmEventId[] = ["drought", "frost", "flood"];
-
-/**
- * Chance in percent of a farm event today, by season and today's weather.
- * Drawn once every day whatever the farms hold, so the draw never depends on
- * what anyone planted and the weather stream is consumed identically however
- * the realm is farmed. Frost in autumn only in its second half.
+/*
+ * K3 drew drought, frost and flood from the weather stream every day and let
+ * them harm or kill crops. ECON removed them (owner: "the fields sowed with
+ * plants shouldn't just randomly die without reason"): no random draw decides
+ * a field's fate. The daily draw itself is still made (economy.ts
+ * runEconomyDay), so the weather that follows is the weather it always was.
  */
-export const FARM_EVENT_ODDS: Readonly<Record<Season, Readonly<Partial<Record<string, readonly [FarmEventId, number]>>>>> = {
-  spring: { clear: ["frost", 10], fog: ["frost", 8], rain: ["flood", 6], storm: ["flood", 30] },
-  summer: { clear: ["drought", 15], storm: ["flood", 20] },
-  autumn: { clear: ["frost", 10], fog: ["frost", 8], rain: ["flood", 5], storm: ["flood", 25] },
-  winter: {},
-};
-/** Autumn frost waits for the season's second half. */
-export const AUTUMN_FROST_FROM_DAY = 15;
-
-/** Health lost by a plot, by event and hardiness. A plot at 0 health is spoiled. */
-export const FARM_EVENT_HARM: Readonly<Record<FarmEventId, { readonly tender: number; readonly hardy: number }>> = {
-  drought: { tender: 6, hardy: 3 },
-  frost: { tender: 30, hardy: 5 },
-  flood: { tender: 35, hardy: 25 },
-};
 
 /** Fields per holding scale up with its kind: a town's "field" is a whole open field. */
 export const FIELD_SIZE: Readonly<Record<HoldingKind, number>> = { hamlet: 1, village: 2, town: 6, keep: 1, city: 12 };
@@ -271,6 +296,16 @@ export const HARVEST_VARIANCE_PCT = 10;
 
 /** Days a sown plot takes to come up (sown -> growing), counted only in a season it grows in. */
 export const GERMINATION_DAYS = 3;
+
+/**
+ * ECON: the crop every field a new campaign's king comes to hold resows by
+ * itself (KingdomConfig.autoFarm; FactionEconomy.autoSow). Rye: hardy, so
+ * it is sown the autumn the exile begins in, sleeps through the winter that
+ * would kill wheat, and is reaped in late spring -- the one grain a field
+ * claimed in the first autumn can bring in before the second
+ * (docs/PROVISIONAL.md ECON.4).
+ */
+export const AUTO_SOW_DEFAULT = "rye";
 
 /** Every problem with the tables above. Empty means valid. */
 export function validateEconomy(): string[] {

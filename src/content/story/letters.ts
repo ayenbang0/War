@@ -118,7 +118,7 @@ export const STORY_LETTERS: readonly StoryLetterDef[] = [
   },
   {
     id: "offer-harker", act: 1, kind: "offer", from: "Captain Harker, of Harker's Outriders", title: "Scouts for Hire",
-    trigger: all({ kind: "holdingsHeld", n: 1 }, { kind: "daysPassed", n: 30 }),
+    trigger: all({ kind: "holdingsHeld", n: 1 }, { kind: "daysPassed", n: 90 }),
     text: "Six riders, good eyes, no illusions. Our last employer was the Hare, who paid in promises; we would like to try coin, even an exile's coin.",
     choices: [
       { label: "Hire them (8 coin)", result: "Harker's Outriders take the coin and the road. The map is bigger by the next morning.", effects: [{ kind: "pay", cost: { coin: 8 } }, { kind: "hire", company: "harker-outriders" }] },
@@ -127,7 +127,7 @@ export const STORY_LETTERS: readonly StoryLetterDef[] = [
   },
   {
     id: "enc-burning-farms", act: 1, kind: "encounter", from: "The reeve of Hareford", title: "The Burning Farms",
-    trigger: all({ kind: "holdingHeld", holding: "rookstead" }, any({ kind: "winterSurvived" }, all(flag("banner-raised"), { kind: "daysPassed", n: 45 }))),
+    trigger: all({ kind: "holdingHeld", holding: "rookstead" }, any({ kind: "winterSurvived" }, all(flag("banner-raised"), { kind: "daysPassed", n: 135 }))),
     text: "The Hare's riders are burning the farms along the valley floor again, as they did in the old war. The Regent wrote then that the Hare does not stand, does not dig and does not stop, and that there is nothing behind the first rush; that is still true.",
     choices: [
       { label: "Ride to Hareford", result: "The followers take up what they have. Brother Aldous takes up the ledger.", effects: [{ kind: "battle", encounter: "burning-farms" }] },

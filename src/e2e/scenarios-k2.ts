@@ -8,6 +8,7 @@
 import type { KingdomLayer } from "../app/kingdom-layer.ts";
 import { kingCounterAt } from "../render/kingdom/layout.ts";
 import { K, NONE_REASON } from "../content/kingdom/ui-strings.ts";
+import { MONTHS } from "../content/kingdom/terrain.ts";
 import { KINGDOM_SAVE_KEY } from "../app/kingdom-save.ts";
 import { memoryStorage, scenario, type Driver, type Pt } from "./harness.ts";
 
@@ -70,7 +71,7 @@ scenario("k2-open-exile", "Home's Exile button opens the kingdom map over Home",
   const k = await openExile(t);
   t.expect(t.hook.screens().join(">") === "home>kingdom", "stack is home>kingdom (" + t.hook.screens().join(">") + ")");
   t.expect(k.world.now === 0, "a fresh realm starts at tick 0 (was " + k.world.now + ")");
-  t.expect(kingdomText(t).includes("Day 1"), "the HUD shows the date (" + kingdomText(t).slice(0, 80) + ")");
+  t.expect(kingdomText(t).includes("1 Harvestmoon, Year 1"), "the HUD shows the twelve-month date (" + kingdomText(t).slice(0, 80) + ")");
 });
 
 scenario("k2-map-renders", "the parchment map draws, with the king's counter on it", async (t) => {
@@ -188,7 +189,9 @@ scenario("k2-step-day", "'.' steps exactly one day while paused, and asks to pau
   t.key("Period");
   t.expect(k.world.now === now + 8, "one day is eight ticks (" + now + " -> " + k.world.now + ")");
   t.expect(k.world.date.day === day + 1, "the day advances by one");
-  t.expect(k.hud.dateText.includes("Day " + (day + 2)), "the HUD shows it (" + k.hud.dateText + ")");
+  // ECON: the HUD reads the twelve-month date ("2 Harvestmoon, Year 1 · Autumn").
+  t.expect(k.hud.dateText.startsWith((k.world.date.dayOfMonth + 1) + " " + MONTHS[k.world.date.month].name + ", Year "),
+    "the HUD shows it (" + k.hud.dateText + ")");
 });
 
 scenario("k2-speed", "4x runs the realm faster than 1x", async (t) => {

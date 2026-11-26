@@ -111,7 +111,14 @@ export type KingdomOrderBody =
   // K8: the defence tools (sim/kingdom/invasions.ts). Garrisoning is K4's `garrison`.
   | { kind: "callLevy"; holding: number }
   | { kind: "burnFields"; holding: number }
-  | { kind: "ambush"; army: number };
+  | { kind: "ambush"; army: number }
+  // ECON: auto-farming (sim/kingdom/economy.ts autoSow).
+  /**
+   * Set the crop a field resows by itself when its season comes (null: by
+   * hand only). `plot` 0 sets every field of `holding`; `holding` 0 as well
+   * sets every field the king holds and the crop his later claims start with.
+   */
+  | { kind: "setAutoSow"; holding: number; plot: number; crop: CropId | null };
   // Append new kinds; never renumber the existing ones.
 
 export type KingdomOrderKind = KingdomOrderBody["kind"];
@@ -129,6 +136,8 @@ export const KINGDOM_ORDER_KINDS: readonly KingdomOrderKind[] = [
   "hireCompany", "renewContract", "matchBid",
   // K8
   "callLevy", "burnFields", "ambush",
+  // ECON
+  "setAutoSow",
 ];
 
 /** The K6 order kinds (src/sim/kingdom/morale.ts applies them). */

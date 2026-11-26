@@ -1,4 +1,4 @@
-# The kingdom layer — sim core (K1), map (K2) and economy (K3)
+# The kingdom layer — sim core (K1), map (K2) and economy (K3, ECON)
 
 For the agents building K2 onwards. PLAN.md Part B is the design; this file is
 what K1 actually built and the contracts later phases must keep.
@@ -30,11 +30,17 @@ recursively). The only browser-side piece is `src/app/kingdom-save.ts`.
 | Constant | Value | Meaning |
 |---|---|---|
 | `TICKS_PER_DAY` | 8 | a kingdom tick is three hours |
-| `DAYS_PER_SEASON` | 30 | |
-| `SEASONS_PER_YEAR` | 4 | spring, summer, autumn, winter |
-| `DAYS_PER_YEAR` | 120 | |
-| `TICKS_PER_YEAR` | 960 | ten years = 9600 ticks |
-| `START_DAY_OF_YEAR` | 60 | the exile begins on the first day of autumn, year 1 |
+| `DAYS_PER_MONTH` | 30 | ECON: twelve named months (`MONTHS` in content/kingdom/terrain.ts) |
+| `DAYS_PER_SEASON` | 90 | three months: spring, summer, autumn, winter |
+| `SEASONS_PER_YEAR` | 4 | |
+| `DAYS_PER_YEAR` | 360 | ECON: a real twelve-month year (it was 120, four 30-day "months") |
+| `TICKS_PER_YEAR` | 2880 | ten years = 28800 ticks |
+| `START_DAY_OF_YEAR` | 180 | the exile begins on 1 Harvestmoon, the first day of autumn, year 1 |
+
+ECON: a realm's dates are read from its `epoch` (`KingdomConfig.epoch`,
+default `START_DAY_OF_YEAR`): `calendar(now, epoch)`. A new game never sets
+it; an old save gets one that keeps its year, season and share of the season
+(see "ECON" below). The HUD reads "14 Harvestmoon, Year 1 · Autumn".
 
 The tick counter is `world.now` (not `tick`, which is the method). Day, season
 and year are derived by `calendar(now)` / `world.date` and never stored.
@@ -42,8 +48,8 @@ and year are derived by `calendar(now)` / `world.date` and never stored.
 The kingdom tick is **not** coupled to the 20 Hz battle tick. Only one layer
 is live at a time (§B.1): the layer controller simply stops calling
 `kingdom.tick()` while a battle runs. **Pause and speed are UI-only**: the UI
-decides how many `tick()` calls to make per frame. Suggested: 1× = one day per
-2 s (4 ticks/s), 2× and 4× scale that, `.` while paused runs `TICKS_PER_DAY`
+decides how many `tick()` calls to make per frame. 1× = one day per
+second (ECON; it was 2 s, so a 360-day year is six minutes at 1×, 90 s at 4×), 2× and 4× scale that, `.` while paused runs `TICKS_PER_DAY`
 ticks. None of this is an order and none of it is saved.
 
 ## The tick
@@ -1286,3 +1292,75 @@ armies); a revolt put down by its captain through K5's auto-resolve; the
 garrisoned, and a thin garrison fought; rumours against `warningDays`
 (towers, scouts, the cap, never before it is due); each defence tool; save
 v8, the v7 migration (to the same hash) and tampering refused.
+
+## ECON — a real year, a real granary, fields that farm themselves
+
+The owner's four steers (PLAN.md, amendment 7): a twelve-month year; a granary
+that really stores food the king can use, and no crop dying without a reason;
+fields reaped by themselves and resown by the king's say-so; and resources far
+easier to manage. Choices are `ECON.n` in docs/PROVISIONAL.md.
+
+### The calendar
+Twelve months of thirty days (Thawmoon, Seedmoon, Blossommoon — spring;
+Sunmoon, Haymoon, Reapmoon — summer; Harvestmoon, Leafmoon, Mistmoon —
+autumn; Frostmoon, Snowmoon, Wolfmoon — winter). Everything keyed to the old
+120-day year is rescaled by three: crop growing and ripe days, the AI's grace
+(300 days) and the invasion waves (days 360, 600, 840), the story letters'
+days, the mercenaries' poaching days. Things measured in plain days (a march,
+a contract, hunger and wage graces) keep their day counts.
+
+### The granary and the stores
+Grain is one realm pool per faction (`grainStores()`: granary, loose, heap,
+capacity, spoiling today). A granary holds 1500 and never rots it; a holding's
+own cellars hold more than before (hamlet 1500 … city 7200) and lose 1‰ a
+day; only grain past all storage (the heap) rots, 1% a day. Once the king holds
+a town his own barns add 1500 of granary room (`KING_BARNS`). The resources bar
+says how much is stored, of how much, how many days it lasts, and warns before
+winter if it will not last; each stock's tooltip lists the day's sources and
+sinks from the ledger. Nothing leaves the stores without a ledger entry.
+
+### Crops: no random death
+Farm weather is gone: no draw decides a field's fate (one weather draw a day
+is still taken, so the weather stream is unchanged for everything else). A
+crop is lost only to winter (a tender crop still standing), an army foraging
+or a battle trampling it, burning, or standing ripe too long — and the field
+card says which ("Last lost"). A sowing that could not ripen before winter is
+refused (`REFUSAL.tooLate`), and the sow menu says when each crop would ripen.
+
+### Auto-harvest and auto-resow
+A ripe field is reaped the day it ripens, into the stores (`autoReaped`),
+always, for every lord whose economy runs. Each field may resow a crop by
+itself in its season (`FieldPlot.auto`), paying its seed from the stores; the
+city panel's "Resow all fields automatically" switch sets every field of the
+realm at once (`setAutoSow {holding: 0, plot: 0, crop}`, appended to the
+orders), and the field card's "Resow automatically…" sets one. The card says
+why an auto-sown field waits (out of season, too late to ripen, no seed…).
+Sowing by hand still works. A new game starts with the switch on, sowing rye
+(`KingdomConfig.autoFarm`); an old save loads with it off.
+
+### Easier numbers
+The first holding brings 2000 grain, 30 coin and 20 timber, plus 8 grain a
+head claimed; yields are scaled to the longer year; the winter dole is
+smaller and famine takes 1% of the people a day, not 2%; the king's party carries three times as much; trained squads cost a third of their old daily wage; hunger and
+unpaid graces are longer. With `node tools/kingdom-balance.ts 2 1` (two years,
+seed 1) a passive king who claims Cold Hearth and does nothing else ends with
+0 hungry days and 2728 grain (before: 235 hungry days, 49 of famine, the
+holding lost); a careful player ends with 7599 grain and 1438 coin.
+
+### Save format version 9
+Adds `epoch`, `autoFarm`, each plot's `auto` and `lost`, and each economy's
+`autoSow`. `migrate8to9` gives an old save an epoch that keeps its date's year,
+season and share of the season, triples the days counted on growing and ripe
+plots, and leaves auto-resow off. tools/fixtures/kingdom-save-v8.json is a
+real v8 save; the economy suite loads it.
+
+### Determinism and the golden
+The kingdom golden is now ten 360-day years (28800 ticks, `bf9431cc`): the
+year, the crops and the economy changed. The battle goldens did not move.
+
+### The proof
+tools/kingdom-economy.ts (164 checks) has "two years, passive and active",
+"no random death" and "migration v8 -> v9"; src/e2e/scenarios-econ.ts
+(`econ-auto-farm`) turns the switch on in a city with real clicks and keys,
+runs at 4x through the turn of summer, and sees the wheat reaped into the
+stores, the field resown with rye in autumn and a twelve-month date on the HUD.

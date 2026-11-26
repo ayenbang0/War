@@ -8,7 +8,7 @@
  * (UNIT_TYPES.soldiers), its point cost, its speed and the per-type caps
  * (UNIT_TYPES.maxPerArmy, MAX_SQUADS, MAX_OF_ONE_ABILITY). The numbers here
  * only turn those into kingdom stocks -- coin is points x COIN_PER_POINT, a
- * day's wage is half the points -- so retuning a unit in the battle game
+ * day's wage is a third of the points (ECON; was half) -- so retuning a unit in the battle game
  * retunes its price on the map in the same edit, and the K4 test holds the two
  * together.
  *
@@ -51,10 +51,14 @@ export const LEVY_MIN_MEN = 4;
 /** The doctrine an army is raised under until the player sets one. */
 export const DEFAULT_ARMY_DOCTRINE: DoctrineId = "defensive";
 
-/** A trained squad's daily wage: half its battle points, rounded up. Levy squads serve for bread. */
+/**
+ * A trained squad's daily wage: a third of its battle points, rounded up.
+ * Levy squads serve for bread. ECON (owner: "a lot easier with managing
+ * resources"): was half the points.
+ */
 export function dailyWage(points: number, levy: boolean): number {
   // Integer arithmetic (points are whole): the sim reads this, and its Math is sim/math.ts's.
-  return levy ? 0 : (points + (points % 2)) / 2;
+  return levy ? 0 : (points + ((3 - (points % 3)) % 3)) / 3;
 }
 
 /** Grain (person-days) one man eats a day: the same ration as the king's party. */
@@ -86,7 +90,7 @@ export const START_MORALE = 60;
 // -- hunger and unpaid wages ------------------------------------------------------
 
 /** Days an army can go short of bread before men start to leave (it is the same grace for every army). */
-export const HUNGER_GRACE_DAYS = 2;
+export const HUNGER_GRACE_DAYS = 4; // ECON: was 2 (gentler hunger)
 /** Each hungry day past the grace, per mille of the men who walk home. */
 export const HUNGER_DESERT_PERMILLE = 50;
 /** ... and per mille who die of hunger and the sickness that follows it. */
@@ -94,7 +98,7 @@ export const HUNGER_DIE_PERMILLE = 20;
 /** ... and per mille of the fit men who fall sick (counted with the wounded until they mend). */
 export const HUNGER_SICK_PERMILLE = 60;
 /** Days trained men will serve with wages owed before they start to go. */
-export const UNPAID_GRACE_DAYS = 3;
+export const UNPAID_GRACE_DAYS = 5; // ECON: was 3
 /** Each day past the grace with wages owed, per mille of the trained men who leave. Levy squads are not paid and do not go. */
 export const UNPAID_DESERT_PERMILLE = 30;
 /**

@@ -26,19 +26,20 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   KingdomWorld, kingdomHash, calendar, saveToJson, loadFromJson, replayLog, migrate, deserialize, mapFingerprint,
-  TICKS_PER_DAY, DAYS_PER_SEASON, KINGDOM_SAVE_VERSION,
+  TICKS_PER_DAY, DAYS_PER_SEASON, DAYS_PER_YEAR, KINGDOM_SAVE_VERSION,
   credit, debit, netOf, flowOf, adjustLegitimacy, storageOf, famineDeaths, taxPerDay, checkEconomyOrder,
   changeLegitimacy, dailyNeed, MIGRATIONS, K3_MAP,
   type KingdomEvent, type KingdomOrderBody, type Holding, type LedgerDay,
 } from "../src/sim/kingdom/index.ts";
 import {
   BUILDINGS, BUILDING_IDS, CROPS, CROP_IDS, LEDGER_CATEGORIES, LEDGER_STOCK_IDS, STOCK_IDS, TAX_RATES, TAX_RATE_IDS,
-  KING_START, CELLAR, CARRY_PER_PERSON, SPOIL_PERMILLE, FARM_EVENT_HARM, BIOME_ECONOMY, GERMINATION_DAYS,
+  KING_START, CELLAR, CARRY_PER_PERSON, SPOIL_PERMILLE, GERMINATION_DAYS,
   HARVEST_VARIANCE_PCT, FIELD_SIZE, CLAIM_MIN_LEVY, FAMINE_LOSS_PCT, LEGITIMACY_MAX,
   validateBuildings, validateCrops, validateEconomy, type BuildingDef, type CropDef,
 } from "../src/content/kingdom/index.ts";
-import { E, REFUSAL, STOCK_NAME, STOCK_ABOUT, STAGE_NAME, FARM_EVENT_LINE, TASK_NAME, amountsLine } from "../src/content/kingdom/ui-strings.ts";
-import { CAREFUL, CARELESS, BUILDER, FORAGER, STRATEGIES, runStrategy, steward, type RunResult } from "./kingdom-strategies.ts";
+import { E, REFUSAL, STOCK_NAME, STOCK_ABOUT, STAGE_NAME, LOST_CAUSE, TASK_NAME, amountsLine, dateLine } from "../src/content/kingdom/ui-strings.ts";
+import { MONTHS, SEASONS } from "../src/content/kingdom/terrain.ts";
+import { CAREFUL, CARELESS, BUILDER, FORAGER, IDLE, PASSIVE, STRATEGIES, runStrategy, steward, type RunResult } from "./kingdom-strategies.ts";
 
 let failures = 0;
 let checks = 0;
@@ -161,7 +162,7 @@ section("ledger");
  * Hold a run to conservation, day by day, for every faction. Returns the
  * number of days checked and the first problem found.
  */
-function auditRun(seed: number, strategyName: string, days: number, tamperOnDay = -1): { days: number; problem: string } {
+function auditRun(seed: number, strategyName: string, days: number, tamperOnDay = -1, autoFarm = false): { days: number; problem: string } {
   const s = STRATEGIES.find((x) => x.name === strategyName)!;
   let checked = 0;
   let problem = "";
@@ -169,6 +170,7 @@ function auditRun(seed: number, strategyName: string, days: number, tamperOnDay 
   const keep = steward(["cold-hearth", "greyshaw", "rookstead"]);
   runStrategy(seed, s, days, {
     everyDay: keep,
+    autoFarm,
     onTick: (w) => {
       for (let f = 0; f < w.books.length; f++) {
         const e = w.economy[f];
@@ -205,10 +207,10 @@ function auditRun(seed: number, strategyName: string, days: number, tamperOnDay 
 
 section("conservation");
 {
-  for (const [name, seed] of [["careful", SEED], ["builder", 7], ["careless", 11], ["forager", 3]] as const) {
-    const r = auditRun(seed, name, 3 * 120);
-    check("three years of '" + name + "' balance every day, every stock, every faction", r.problem === "" && r.days >= 3 * 120 * 6 - 6,
-      r.problem || r.days + " pages");
+  for (const [name, seed, auto] of [["careful", SEED, false], ["builder", 7, true], ["careless", 11, false], ["forager", 3, false], ["passive", 5, true]] as const) {
+    const r = auditRun(seed, name, 3 * DAYS_PER_YEAR, -1, auto);
+    check("three years of '" + name + "'" + (auto ? " (fields resowing themselves)" : "") + " balance every day, every stock, every faction",
+      r.problem === "" && r.days >= 3 * DAYS_PER_YEAR * 6 - 6, r.problem || r.days + " pages");
   }
   const t = auditRun(SEED, "careful", 40, 20);
   check("a stock changed behind the ledger's back is caught", t.problem.includes("timber"), t.problem);
@@ -220,9 +222,16 @@ section("seasons");
 {
   const seasonOf = (d: number) => calendar(d * TICKS_PER_DAY).season;
   check("the game opens on the first day of autumn", seasonOf(0) === "autumn");
-  check("the first winter is days 30-59", seasonOf(29) === "autumn" && seasonOf(30) === "winter" && seasonOf(59) === "winter");
-  check("then spring, summer, autumn again", seasonOf(60) === "spring" && seasonOf(90) === "summer" && seasonOf(120) === "autumn");
-  check("a season is " + DAYS_PER_SEASON + " days", DAYS_PER_SEASON === 30);
+  check("the first winter is days 90-179", seasonOf(89) === "autumn" && seasonOf(90) === "winter" && seasonOf(179) === "winter");
+  check("then spring, summer, autumn again", seasonOf(180) === "spring" && seasonOf(270) === "summer" && seasonOf(360) === "autumn");
+  check("a season is " + DAYS_PER_SEASON + " days: three months of thirty", DAYS_PER_SEASON === 90 && DAYS_PER_YEAR === 360);
+  const d0 = calendar(0);
+  check("the exile begins on 1 Harvestmoon, Year 1", d0.dayOfMonth === 0 && MONTHS[d0.month].name === "Harvestmoon" && d0.year === 1,
+    dateLine(d0));
+  check("the HUD reads a twelve-month date", dateLine(calendar(13 * TICKS_PER_DAY)) === "14 Harvestmoon, Year 1 · Autumn" &&
+    dateLine(calendar(200 * TICKS_PER_DAY)).startsWith("21 Thawmoon, Year 2"), dateLine(calendar(200 * TICKS_PER_DAY)));
+  check("twelve months, three to a season, in order", MONTHS.length === 12 &&
+    MONTHS.every((m, i) => m.season === SEASONS[Math.floor(i / 3)]));
 
   const w = new KingdomWorld({ seed: SEED });
   const h = own(w, "greyshaw");
@@ -230,7 +239,7 @@ section("seasons");
   const pop0 = h.population;
   const levy0 = kingE(w).stocks.levy;
   let musters = 0;
-  runToDay(w, 30, () => undefined);
+  runToDay(w, DAYS_PER_SEASON, () => undefined);
   musters = flowOf(kingBook(w).open, "levy", "muster");
   check("a season's turn musters followers from an owned holding", musters > 0 && kingE(w).stocks.levy === levy0 + musters, musters + " mustered");
   const growth = TAX_RATES.find((t) => t.id === "normal")!.growthPct;
@@ -266,34 +275,36 @@ section("plots");
   const p1 = plot.progress;
   runDays(w, 5, record);
   check("progress rises while it grows", plot.progress > p1 && plot.progress < 1, p1 + " -> " + plot.progress);
-  runToDay(w, 32, record);
+  runToDay(w, DAYS_PER_SEASON + 2, record);
   const pw = plot.progress;
   runDays(w, 10, record);
   check("rye is hardy: it lives through winter, not growing", plot.stage === "growing" && plot.progress === pw);
-  let ripeDay = -1;
-  while (plot.stage !== "ripe" && day(w) < 200) runDays(w, 1, record);
-  ripeDay = day(w);
-  check("it ripens in spring", plot.stage === "ripe" && calendar(w.now).season === "spring", stages.join(" "));
-  check("progress is 1 when ripe", plot.progress === 1);
   const full = Math.floor(((CROPS.rye.yield.grain ?? 0) * FIELD_SIZE.hamlet * plot.health) / 100);
-  while (w.now % TICKS_PER_DAY !== 2) w.tick();
-  const g0 = flowOf(kingBook(w).open, "grain", "harvest");
-  const evH = issue(w, { kind: "harvest", plot: plot.id });
-  record(w, evH);
-  const got = flowOf(kingBook(w).open, "grain", "harvest") - g0;
-  check("harvest yields within the variance", got >= Math.floor((full * (100 - HARVEST_VARIANCE_PCT)) / 100) &&
+  let got = 0;
+  let reapEv = false;
+  while (plot.stage !== "harvested" && day(w) < 400) runDays(w, 1, (_w, ev) => {
+    record(_w, ev);
+    got += ev.filter((x) => x.kind === "harvested").reduce((n, x) => n + (x.kind === "harvested" ? x.gains.grain ?? 0 : 0), 0);
+    reapEv ||= ev.some((x) => x.kind === "harvested" && x.plot === plot.id);
+  });
+  check("it ripens in spring", stages.some((x) => x.startsWith("ripe:")) && calendar(w.now).season === "spring", stages.join(" "));
+  check("and is reaped by itself the day it ripens (ECON: auto-harvest)", plot.stage === "harvested" && reapEv &&
+    stages.some((x) => x.startsWith("harvested:autoReaped")) &&
+    stages.find((x) => x.startsWith("ripe:"))!.split("@")[1] === stages.find((x) => x.startsWith("harvested:"))!.split("@")[1], stages.join(" "));
+  check("harvest yields within the variance, into the stores", got >= Math.floor((full * (100 - HARVEST_VARIANCE_PCT)) / 100) &&
     got <= Math.floor((full * (100 + HARVEST_VARIANCE_PCT)) / 100), got + " of " + full);
-  check("harvested, with an event", plot.stage === "harvested" && evH.some((x) => x.kind === "harvested"));
-  check("a harvested field can be sown again in season", w.check({ kind: "sow", plot: plot.id, crop: "wheat" }) === null);
+  check("a harvested field can be sown again in season", w.check({ kind: "sow", plot: plot.id, crop: "herbs" }) === null);
+  check("but not with a crop too late to ripen before the winter: refused, saying why (ECON)",
+    w.check({ kind: "sow", plot: plot.id, crop: "wheat" }) === REFUSAL.tooLate(CROPS.wheat.name), String(w.check({ kind: "sow", plot: plot.id, crop: "wheat" })));
   check("the path was sown -> growing -> ripe -> harvested",
     ["sown", "growing", "ripe", "harvested"].every((s) => stages.some((x) => x.startsWith(s + ":"))), stages.join(" "));
-  void ripeDay;
 
-  // Left ripe too long: spoiled.
+  // A field nobody keeps (no lord's stores to reap into) still spoils if left ripe; the king's never is.
   const p2 = h.plots[1];
-  p2.crop = "wheat"; p2.stage = "ripe"; p2.days = 0; p2.progress = 1;
+  p2.crop = "wheat"; p2.stage = "growing"; p2.days = CROPS.wheat.growDays - 1; p2.progress = p2.days / CROPS.wheat.growDays;
   runDays(w, CROPS.wheat.ripeDays + 2, () => calm(h));
-  check("a ripe field left too long spoils", (p2.stage as string) === "spoiled");
+  check("a ripe field of the king's is reaped, never left to spoil", (p2.stage as string) === "harvested");
+  p2.stage = "spoiled"; p2.lost = "overripe";
   check("a spoiled field can be sown again (in the crop's season)", w.check({ kind: "sow", plot: p2.id, crop: "wheat" }) !== REFUSAL.plotInUse &&
     w.check({ kind: "sow", plot: p2.id, crop: "herbs" }) === null, String(w.check({ kind: "sow", plot: p2.id, crop: "herbs" })));
 
@@ -304,8 +315,9 @@ section("plots");
   a.crop = "herbs"; a.stage = "growing"; a.days = 5;
   b.crop = "rye"; b.stage = "growing"; b.days = 5;
   const causes: string[] = [];
-  runToDay(w2, 30, (_w, ev) => { for (const x of ev) if (x.kind === "plotStage") causes.push(x.plot + ":" + x.stage + ":" + x.cause); });
+  runToDay(w2, DAYS_PER_SEASON, (_w, ev) => { for (const x of ev) if (x.kind === "plotStage") causes.push(x.plot + ":" + x.stage + ":" + x.cause); });
   check("winter kills a tender crop still in the ground", (a.stage as string) === "spoiled" && causes.includes(a.id + ":spoiled:winter"), causes.join(" "));
+  check("and the field remembers why (the card says so)", a.lost === "winter" && E.lostCause(a.lost).includes("winter"));
   check("and spares a hardy one", b.stage === "growing");
 
   // An orchard comes back in spring.
@@ -314,45 +326,45 @@ section("plots");
   const o = h3.plots[0];
   o.crop = "orchard"; o.stage = "harvested";
   check("a harvested orchard needs no sowing", w3.check({ kind: "sow", plot: o.id, crop: "wheat" }) === REFUSAL.orchardStands);
-  runToDay(w3, 60);
+  runToDay(w3, 2 * DAYS_PER_SEASON);
   check("an orchard regrows in spring", (o.stage as string) === "growing" && o.days >= (CROPS.orchard.growDays - (CROPS.orchard.regrowDays ?? 0)));
 
-  // The weather: every farm event harms the crops in the ground, hardy ones less; floods only low country.
+  // ECON (owner: "the fields sowed with plants shouldn't just randomly die without
+  // reason"): no draw harms a crop. Over three years, every field of every holding
+  // sown with every crop on the first day of its sowing seasons ripens and is
+  // reaped; nothing is lost but to a cause the player can see coming.
   const w4 = new KingdomWorld({ seed: 1234 });
   for (const hh of w4.holdings) hh.owner = "king";
-  const seen = new Set<string>();
-  let weatherOk = true;
-  let detail = "";
-  let spoiledByWeather = false;
-  for (let d = 1; d < 400 && seen.size < 3; d++) {
-    const ds = calendar(d * TICKS_PER_DAY);
-    for (const hh of w4.holdings) {
-      hh.plots.forEach((p, i) => {
-        p.crop = i % 2 === 0 ? "wheat" : "rye";
-        p.stage = "growing"; p.days = 1; p.progress = 0.1;
-        p.health = d % 7 === 0 ? 1 : 100;
-      });
-    }
-    const ev: KingdomEvent[] = [];
-    runToDay(w4, d, (_w, x) => ev.push(...x));
-    if (ds.dayOfSeason === 0) continue;
-    const fe = ev.find((x) => x.kind === "farmWeather");
-    for (const hh of w4.holdings) {
-      hh.plots.forEach((p, i) => {
-        const start = d % 7 === 0 ? 1 : 100;
-        let expect = start;
-        if (fe && fe.kind === "farmWeather" && !(fe.event === "flood" && !BIOME_ECONOMY[hh.biome].floods)) {
-          expect = Math.max(0, start - (i % 2 === 0 ? FARM_EVENT_HARM[fe.event].tender : FARM_EVENT_HARM[fe.event].hardy));
+  give(w4, { grain: 200000, coin: 20000, timber: 2000 });
+  const lostTo = new Map<string, number>();
+  let reaped = 0;
+  let farmEvents = 0;
+  const sowable = CROP_IDS.filter((c) => !CROPS[c].regrowDays);
+  for (let d = 1; d < 3 * DAYS_PER_YEAR; d++) {
+    const date = calendar(d * TICKS_PER_DAY);
+    if (date.dayOfSeason === 0) {
+      let i = 0;
+      for (const hh of w4.holdings) for (const p of hh.plots) {
+        const crop = sowable[i++ % sowable.length];
+        if ((p.stage === "empty" || p.stage === "harvested" || p.stage === "spoiled") && CROPS[crop].sow.includes(date.season)) {
+          p.crop = crop; p.stage = "sown"; p.days = 0; p.progress = 0; p.lost = null;
         }
-        if (expect === 0) { spoiledByWeather ||= p.stage === "spoiled"; if (p.stage !== "spoiled") { weatherOk = false; detail ||= "day " + d + " not spoiled"; } }
-        else if (p.health !== expect) { weatherOk = false; detail ||= "day " + d + " " + hh.key + " health " + p.health + " expected " + expect; }
-      });
+      }
     }
-    if (fe && fe.kind === "farmWeather") seen.add(fe.event);
+    runToDay(w4, d, (_w, ev) => {
+      for (const hh of _w.holdings) calm(hh);
+      for (const x of ev) {
+        if (x.kind === "plotStage" && x.stage === "spoiled") lostTo.set(x.cause, (lostTo.get(x.cause) ?? 0) + 1);
+        if (x.kind === "harvested") reaped++;
+        if ((x.kind as string) === "farmWeather") farmEvents++;
+      }
+    });
   }
-  check("drought, frost and flood all come from the weather", seen.size === 3, [...seen].join(","));
-  check("each harms the crops in the ground by the table, floods only in low country", weatherOk, detail);
-  check("a crop beaten to nothing by the weather is spoiled", spoiledByWeather);
+  check("no farm weather any more: no drought, frost or flood draws", farmEvents === 0);
+  check("crops sown in their season are all reaped, none lost", reaped > 100 && lostTo.size === 0, reaped + " reaped, lost " + JSON.stringify([...lostTo]));
+  check("a crop's health is only ever taken by an army or a fire", w4.holdings.every((hh) => hh.plots.every((p) => p.health === 100)));
+  check("every way to lose a crop has words (the field card says why)",
+    ["winter", "overripe", "foraged", "burned", "trampled"].every((c) => E.lostCause(c) !== "lost"));
 
   // Planting never moves the weather: one farm draw a day either way.
   const wa = new KingdomWorld({ seed: 99 });
@@ -456,10 +468,12 @@ section("storage");
     const expect = Math.floor((inG * SPOIL_PERMILLE.granary) / 1000) + Math.floor((inL * SPOIL_PERMILLE.loose) / 1000) + Math.ceil((heap * SPOIL_PERMILLE.heap) / 1000);
     return { lost: flowOf(page, "grain", "spoilage"), expect };
   };
-  const withG = lossOn(true, 400);
-  const without = lossOn(false, 400);
+  const withG = lossOn(true, 4000);
+  const without = lossOn(false, 4000);
   check("spoilage follows the storage table", withG.lost === withG.expect && without.lost === without.expect, JSON.stringify([withG, without]));
-  check("a granary keeps grain that would rot in heaps", withG.lost * 10 < without.lost, withG.lost + " vs " + without.lost);
+  check("a granary keeps grain that would rot in heaps", withG.lost < without.lost, withG.lost + " vs " + without.lost);
+  check("nothing in a granary spoils (ECON: the granary is a store, not a leak)", SPOIL_PERMILLE.granary === 0);
+  check("a small store in the cellars loses nothing in a day", lossOn(false, 400).lost === 0);
   const w = new KingdomWorld({ seed: SEED });
   const people = 1 + w.king.companions.length + kingE(w).stocks.levy;
   check("loose storage is the cellars of owned holdings plus what the party carries",
@@ -629,13 +643,47 @@ section("migration");
   }
 }
 
+section("migration v8 -> v9: the four-month calendar to the twelve-month one");
+{
+  const here = fileURLToPath(new URL(".", import.meta.url));
+  // A real save written by the K8 game (before ECON): Cold Hearth claimed, rye
+  // sown in the first autumn and asleep in the ground, day 46 -- the 16th of
+  // the old thirty-day winter.
+  const text = readFileSync(here + "fixtures/kingdom-save-v8.json", "utf8");
+  const v8 = JSON.parse(text);
+  check("the fixture is a version-8 save", v8.version === 8 && v8.epoch === undefined);
+  const loaded = loadFromJson(text);
+  check("it migrates and loads", loaded.ok, loaded.ok ? "" : loaded.error);
+  if (loaded.ok) {
+    const w = loaded.value;
+    const d = w.date;
+    check("the days lived stay lived: the same tick, the same day count", w.now === v8.snapshot.now && d.day === 45);
+    check("the date keeps its place in the year: the 16th day of winter becomes the 46th, 16 Snowmoon, Year 1",
+      d.season === "winter" && d.dayOfSeason === 45 && d.year === 1 && dateLine(d) === "16 Snowmoon, Year 1 · Winter", dateLine(d));
+    const ch = w.holdingByKey("cold-hearth")!;
+    const was = v8.snapshot.holdings.find((h: { key: string }) => h.key === "cold-hearth").plots[0];
+    const p = ch.plots[0];
+    check("the rye in the ground keeps its share of its growth", p.crop === "rye" && p.stage === "growing" &&
+      p.days === was.days * 3 && p.progress === p.days / CROPS.rye.growDays, was.days + " -> " + p.days);
+    check("nothing resows itself until the player says so", !w.autoFarm && kingE(w).autoSow === null && ch.plots.every((x) => x.auto === null));
+    let reaped = false;
+    runDays(w, 200, (_w, ev) => { calm(ch); reaped ||= ev.some((x) => x.kind === "harvested" && x.plot === p.id); });
+    check("it sleeps through the winter and is reaped by itself in the spring", reaped && p.stage === "harvested");
+    const again = loadFromJson(saveToJson(w));
+    check("and saves again as version " + KINGDOM_SAVE_VERSION + ", the same realm", again.ok && kingdomHash(again.value) === kingdomHash(w) &&
+      JSON.parse(saveToJson(w)).epoch === w.epoch);
+  }
+}
+
 // -- 11. strings ----------------------------------------------------------------------------
 
 section("strings");
 {
   const all: string[] = [];
   const sample: Record<string, unknown> = { name: "Greyshaw", days: 3, n: 2, building: "Granary", crop: "Rye", stage: "growing", pct: 40,
-    health: 70, coin: "4 coin", growth: "grow 2%", rate: "Low", gains: "200 grain", field: "Field 1", cause: "the weather", upkeep: "1 coin" };
+    health: 70, coin: "4 coin", growth: "grow 2%", rate: "Low", gains: "200 grain", field: "Field 1", cause: "the weather", upkeep: "1 coin",
+    grain: 120, capacity: 1500, heap: 30, spoils: 1, inGranary: 100, granary: 1500, need: 6, value: 120, net: -6, parts: ["seed -6"],
+    label: "seed", when: "9 Reapmoon", stored: "stored 1 of 2", month: 6, dayOfMonth: 0, season: "autumn", year: 1, day: 3 };
   const take = (v: unknown): void => {
     if (typeof v === "string") all.push(v);
     else if (typeof v === "function") {
@@ -652,7 +700,7 @@ section("strings");
       all.push(last);
     } else if (v && typeof v === "object") for (const x of Object.values(v)) take(x);
   };
-  for (const t of [E, REFUSAL, STOCK_NAME, STOCK_ABOUT, STAGE_NAME, FARM_EVENT_LINE, TASK_NAME]) take(t);
+  for (const t of [E, REFUSAL, STOCK_NAME, STOCK_ABOUT, STAGE_NAME, LOST_CAUSE, TASK_NAME]) take(t);
   for (const id of BUILDING_IDS) { all.push(BUILDINGS[id].name, BUILDINGS[id].purpose); }
   for (const id of CROP_IDS) { all.push(CROPS[id].name, CROPS[id].about); }
   all.push(amountsLine({ coin: 4, timber: 6 }), amountsLine({}));
@@ -667,7 +715,7 @@ section("strings");
 
 section("first winter");
 {
-  const FIRST_WINTER_ENDS = 60;
+  const FIRST_WINTER_ENDS = 2 * DAYS_PER_SEASON; // ECON: autumn days 0-89, winter 90-179 (was 60)
   const verdict = (r: RunResult) => {
     const run = r.days.filter((d) => d.day >= 1 && d.day <= FIRST_WINTER_ENDS);
     return {
@@ -683,12 +731,17 @@ section("first winter");
   const vc = verdict(careful);
   const vx = verdict(careless);
   // Before the snow: a holding with a standing granary.
-  const atSnow = replayLog(SEED, careful.world.log.filter((o) => o.tick < 30 * TICKS_PER_DAY), 30 * TICKS_PER_DAY);
+  const atSnow = replayLog(SEED, careful.world.log.filter((o) => o.tick < DAYS_PER_SEASON * TICKS_PER_DAY), DAYS_PER_SEASON * TICKS_PER_DAY);
   const granaryBeforeWinter = atSnow.holdingsOf("king").some((h) => h.buildings.some((b, i) => b === "granary" && h.works[i] === 0));
   check("the careful log holds a holding with a standing granary before the first winter", granaryBeforeWinter);
   check("and its grain never runs out through the first winter", vc.minGrain > 0, "lowest " + vc.minGrain);
   check("no one goes hungry, no famine", vc.hungry === 0 && vc.famine === 0, JSON.stringify(vc));
-  check("the careless log, from the same start, ends in famine that winter", vx.famine > 0 && vx.minGrain === 0, JSON.stringify(vx));
+  // ECON ("a lot easier"): the careless start still goes hungry -- everyone rallied on
+  // ten days' bread -- but the hamlet it claims opens its stores, so no town starves.
+  check("the careless log, from the same start, goes hungry before its claim", vx.hungry > 0 && vx.minGrain === 0, JSON.stringify(vx));
+  check("but the claimed hamlet's stores carry it through the winter: no famine (ECON)", vx.famine === 0, JSON.stringify(vx));
+  const idle = verdict(runStrategy(SEED, IDLE, FIRST_WINTER_ENDS + 1));
+  check("an exile who claims nothing still starves", idle.hungry > FIRST_WINTER_ENDS / 2, JSON.stringify(idle));
   check("both logs are ordinary order logs: they replay", kingdomHash(replayLog(SEED, careful.world.log, careful.world.now)) === kingdomHash(careful.world) &&
     kingdomHash(replayLog(SEED, careless.world.log, careless.world.now)) === kingdomHash(careless.world));
   let robust = true;
@@ -696,11 +749,51 @@ section("first winter");
   for (let s = 1; s <= 8; s++) {
     const a = verdict(runStrategy(s * 7919, CAREFUL, FIRST_WINTER_ENDS + 1));
     const b = verdict(runStrategy(s * 7919, CARELESS, FIRST_WINTER_ENDS + 1));
-    if (a.famine || a.hungry || a.minGrain <= 0 || b.famine === 0) { robust = false; bad ||= "seed " + s * 7919 + " " + JSON.stringify([a, b]); }
+    if (a.famine || a.hungry || a.minGrain <= 0 || b.famine > 0 || b.hungry === 0) { robust = false; bad ||= "seed " + s * 7919 + " " + JSON.stringify([a, b]); }
   }
-  check("the same holds on eight other seeds (the weather is no excuse)", robust, bad);
-  const doing = runStrategy(SEED, FORAGER, 120);
+  check("the same holds on eight other seeds", robust, bad);
+  const doing = runStrategy(SEED, FORAGER, 360);
   check("a forager who claims nothing lives, but owns nothing", doing.days.every((d) => d.hunger === 0) && doing.world.holdingsOf("king").length === 0);
+}
+
+// -- 13. ECON: the passive king lives two years; the active one grows ----------------------
+
+section("two years, passive and active");
+{
+  const two = 2 * DAYS_PER_YEAR;
+  const sum = (r: RunResult) => ({
+    hungry: r.days.filter((d) => d.hunger > 0).length,
+    famine: r.days.filter((d) => d.famine > 0).length,
+    towns: r.world.holdingsOf("king").length,
+    grain: r.world.kingStocks.stocks.grain,
+    coin: r.world.kingStocks.stocks.coin,
+  });
+  for (const seed of [SEED, 7, 42]) {
+    const passive = sum(runStrategy(seed, PASSIVE, two, { autoFarm: true }));
+    check("seed " + seed + ": a king who claims Cold Hearth and does nothing more lives two years, fed, the hamlet kept",
+      passive.hungry === 0 && passive.famine === 0 && passive.towns === 1, JSON.stringify(passive));
+  }
+  const handOnly = sum(runStrategy(SEED, PASSIVE, two, { autoFarm: false }));
+  check("without the fields resowing themselves the same king starves (auto-resow is what carries it)",
+    handOnly.famine > 0, JSON.stringify(handOnly));
+  const active = sum(runStrategy(SEED, BUILDER, two, { everyDay: steward(["greyshaw", "rookstead"]), autoFarm: true }));
+  const passive = sum(runStrategy(SEED, PASSIVE, two, { autoFarm: true }));
+  check("an active king grows: more towns, more grain and coin than the passive one",
+    active.hungry === 0 && active.famine === 0 && active.towns > passive.towns && active.grain > passive.grain && active.coin > passive.coin,
+    JSON.stringify([active, passive]));
+  // Auto-resow sows and auto-harvest reaps (the ledger audit above runs it too).
+  let sown = 0;
+  let reaped = 0;
+  runStrategy(SEED, PASSIVE, two, {
+    autoFarm: true,
+    onTick: (w) => {
+      for (const e of w.events) {
+        if (e.kind === "plotStage" && e.cause === "autoSown") sown++;
+        if (e.kind === "plotStage" && e.cause === "autoReaped") reaped++;
+      }
+    },
+  });
+  check("the fields resowed and reaped themselves, year after year", sown >= 4 && reaped >= 4, sown + " sown, " + reaped + " reaped");
 }
 
 console.log("\n" + (failures === 0 ? "all " + checks + " economy checks passed" : failures + " of " + checks + " economy check(s) FAILED"));

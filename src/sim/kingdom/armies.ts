@@ -58,7 +58,7 @@ import { ARMY_REFUSAL, armyName } from "../../content/kingdom/army-strings.ts";
 import { REFUSAL } from "../../content/kingdom/ui-strings.ts";
 import { EXPLORE_REFUSAL } from "../../content/story/strings.ts";
 import { KNOW_SEEN } from "../../content/kingdom/exploration.ts";
-import { TICKS_PER_DAY, calendar } from "./clock.ts";
+import { TICKS_PER_DAY } from "./clock.ts";
 import { advanceMover, findRoute, moverAt, moverPosition, setRoute, type Route } from "./graph.ts";
 import { ARMY_ORDER_KIND_SET, type KingdomOrder, type KingdomOrderBody } from "./orders.ts";
 import type { Army, ArmyDayReport, ArmyGoneReason, ArmyPosture, ArmySquad, Holding, Mover } from "./state.ts";
@@ -865,7 +865,7 @@ function followersDesert(world: KingdomWorld, f: number): void {
  * Called once a day by KingdomWorld.tick, right after the economy's day.
  */
 export function runArmyDay(world: KingdomWorld): void {
-  const d = calendar(world.now);
+  const d = world.date;
   const before = world.economy.map((e) => snapshotStocks(e).join());
   // A new season: the fields an army stripped last season have had time to forgive it.
   if (d.dayOfSeason === 0) for (const h of world.holdings) h.foraged = 0;
@@ -1026,6 +1026,7 @@ function forageHarm(world: KingdomWorld, h: Holding): void {
     if (p.health === 0) {
       p.stage = "spoiled";
       p.days = 0;
+      p.lost = "foraged";
       world.events.push({ kind: "plotStage", holding: h.id, plot: p.id, stage: "spoiled", cause: "foraged" });
     }
   }

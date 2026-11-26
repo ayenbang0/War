@@ -32,7 +32,7 @@ import {
 } from "../../content/kingdom/invasions.ts";
 import { MAX_ARMIES_PER_SIDE } from "../../content/kingdom/armies.ts";
 import { INVASION_REFUSAL } from "../../content/kingdom/invasion-strings.ts";
-import { TICKS_PER_DAY, calendar } from "./clock.ts";
+import { TICKS_PER_DAY } from "./clock.ts";
 import type { KingdomOrder, KingdomOrderBody } from "./orders.ts";
 import type { Army, FactionIntel, Holding } from "./state.ts";
 import {
@@ -161,7 +161,7 @@ export function threatOf(world: KingdomWorld, a: Army): { target: number; days: 
  * orders, so a march ordered this morning is heard of this morning.
  */
 export function updateRumours(world: KingdomWorld): void {
-  const day = calendar(world.now).day;
+  const day = world.date.day;
   for (let i = world.rumours.length - 1; i >= 0; i--) {
     const r = world.rumours[i];
     const a = armyById(world, r.army);
@@ -183,7 +183,7 @@ export function updateRumours(world: KingdomWorld): void {
 
 /** Days before `holding` can be called out again (0: now). */
 export function levyCooldown(world: KingdomWorld, holding: number): number {
-  const day = calendar(world.now).day;
+  const day = world.date.day;
   let left = 0;
   for (const l of world.levied) if (l.holding === holding) left = l.day + LEVY_CALL.cooldownDays - day;
   return left > 0 ? left : 0;
@@ -254,7 +254,7 @@ export function applyInvasionOrder(world: KingdomWorld, order: KingdomOrder & In
       h.garrison.sort((x, y) => x - y);
     }
     for (let i = world.levied.length - 1; i >= 0; i--) if (world.levied[i].holding === h.id) world.levied.splice(i, 1);
-    world.levied.push({ holding: h.id, day: calendar(world.now).day });
+    world.levied.push({ holding: h.id, day: world.date.day });
     addUnrest(world, h, LEVY_CALL.unrest);
     world.events.push({ kind: "levyCalled", holding: h.id, army: a.id, men });
     return null;
@@ -264,6 +264,7 @@ export function applyInvasionOrder(world: KingdomWorld, order: KingdomOrder & In
     if (p.stage !== "sown" && p.stage !== "growing" && p.stage !== "ripe") continue;
     p.stage = "spoiled";
     p.days = 0;
+    p.lost = "burned";
     world.events.push({ kind: "plotStage", holding: h.id, plot: p.id, stage: "spoiled", cause: "burned" });
   }
   world.burned.push({ holding: h.id, days: BURN_FIELDS.days });

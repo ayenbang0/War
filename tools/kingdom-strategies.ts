@@ -130,9 +130,11 @@ export type RunResult = {
  */
 export function runStrategy(
   seed: number, strategy: Strategy, days: number,
-  opts: { everyDay?: (w: KingdomWorld) => KingdomOrderBody[]; onTick?: (w: KingdomWorld) => void } = {},
+  opts: { everyDay?: (w: KingdomWorld) => KingdomOrderBody[]; onTick?: (w: KingdomWorld) => void; autoFarm?: boolean } = {},
 ): RunResult {
-  const w = new KingdomWorld({ seed });
+  // ECON: autoFarm (a new game's default, field auto-resow) is off unless asked for,
+  // so the hand-farming proofs below test the hand-farming they describe.
+  const w = new KingdomWorld({ seed, autoFarm: opts.autoFarm ?? false });
   const trace: string[] = [];
   const out: DayRecord[] = [];
   let i = -1;
@@ -179,7 +181,7 @@ export function runStrategy(
 
 // -- the strategies ---------------------------------------------------------------------
 
-const firstWinterEnd = 60; // day index: autumn is days 0-29, winter 30-59
+const firstWinterEnd = 180; // day index: autumn is days 0-89, winter 90-179 (ECON: was 60 on the old year)
 
 /**
  * The careful exile: rally a handful at Cold Hearth, forage while autumn
@@ -240,8 +242,21 @@ export const BUILDER: Strategy = {
     ...buildWhenAffordable("rookstead", "woodcutter", 60),
     ...buildWhenAffordable("rookstead", "granary", 60),
     ...buildWhenAffordable("rookstead", "farm", 120),
-    forageUntil("at Rookstead a while", (w) => day(w) >= 200),
+    forageUntil("at Rookstead a while", (w) => day(w) >= 600),
   ],
 };
 
-export const STRATEGIES: readonly Strategy[] = [CAREFUL, CARELESS, IDLE, FORAGER, BUILDER];
+/**
+ * The passive king: rallies a handful at Cold Hearth, claims it where the
+ * party stands, and then does nothing at all -- no foraging, no sowing by
+ * hand, no building, no march. The ECON pass's floor: with the default
+ * auto-farming and a claimed holding's stores the realm must still live
+ * through two years (tools/kingdom-balance.ts, tools/kingdom-economy.ts).
+ */
+export const PASSIVE: Strategy = {
+  name: "passive",
+  about: "rally a few, claim Cold Hearth, then nothing: no forage, no sowing by hand, no building",
+  steps: [rallyUntil(4, 8), claim("cold-hearth"), rest, waitUntilDay(100000)],
+};
+
+export const STRATEGIES: readonly Strategy[] = [CAREFUL, CARELESS, IDLE, FORAGER, BUILDER, PASSIVE];

@@ -129,7 +129,8 @@ section("one rulebook");
   for (const u of UNIT_TYPE_IDS) {
     const c = recruitCost(u, false, 1000);
     if (c.levy !== UNIT_TYPES[u].soldiers || c.coin !== UNIT_TYPES[u].cost * COIN_PER_POINT || c.iron !== (RECRUIT_IRON[u] ?? 0)) same = false;
-    if (dailyWage(UNIT_TYPES[u].cost, false) * 2 < UNIT_TYPES[u].cost) same = false;
+    // ECON: a day's wage is a third of the points, rounded up (was half).
+    if (dailyWage(UNIT_TYPES[u].cost, false) * 3 < UNIT_TYPES[u].cost || (dailyWage(UNIT_TYPES[u].cost, false) - 1) * 3 >= UNIT_TYPES[u].cost) same = false;
   }
   check("a trained squad costs its battle points in coin, its men in followers", same);
   check("a levy squad takes only the followers who form it", recruitCost("line", true, 7).levy === 7 &&

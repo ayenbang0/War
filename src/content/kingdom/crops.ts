@@ -7,8 +7,18 @@
  *   empty --sow--> sown --(GERMINATION_DAYS in a growing season)--> growing(progress)
  *         --(growDays of growing seasons)--> ripe --harvest--> harvested
  *                                                 \--(ripeDays unharvested)--> spoiled
- *   any stage --(weather harm takes health to 0, or winter kills a tender crop)--> spoiled
+ *   any stage --(an army foraging it takes health to 0, an enemy burns it,
+ *                or winter finds a tender crop still in the ground)--> spoiled
  *   harvested | spoiled --sow--> sown   (a perennial goes harvested --spring--> growing)
+ *
+ * ECON (owner, 2026-11-25: "the fields sowed with plants shouldn't just
+ * randomly die without reason"): no draw of any stream decides a field's fate
+ * any more -- the K3 farm weather (drought, frost, flood) is gone. A crop is
+ * lost only to a cause the player can see coming: winter, for a tender crop
+ * sown too late to ripen (daysToRipe says so before it is sown, and the field
+ * card while it grows), an army foraging it, or an enemy's torch. A ripe field
+ * is reaped by itself the day it ripens (economy.ts growPlots), so none
+ * stands ripe until it spoils in a realm that keeps its stores.
  *
  * Growth counts only days in a season the crop grows in, so rye sown in
  * autumn sleeps through the winter and ripens in spring, and wheat sown in
@@ -19,13 +29,26 @@
  * the seed, for bigger holdings), before the farm's bonus, the plot's health
  * and the year's variance.
  *
+ * ECON: the year became twelve thirty-day months (sim/kingdom/clock.ts), each
+ * season three times as long as K3's. Growth and ripe days were scaled by
+ * three with it, so a crop still fills the same share of its seasons
+ * (docs/PROVISIONAL.md ECON.2); germination stayed three days. The grains'
+ * yields were then raised past that (owner: "a lot easier with managing
+ * resources") -- wheat 2100 (x3 would be 1260), rye 1500 (780) -- and their
+ * seed cut to half of x3 (wheat 45, rye 30), so a hamlet's two fields feed
+ * the king's party and the hamlet through the year, and the steward who sows
+ * a town's fields in its first autumn is not left without bread for its men
+ * before the first harvest (ECON.6). Flax, herbs and the orchard are x3.
+ *
  * What a crop does beyond the five stocks is recorded in `later` for the
  * phase that uses it: flax's clothing feeds morale (K6), herbs feed the
  * healers' mend and the upkeep of healer and mage squads (K4).
  */
 
-import type { Season } from "./terrain.ts";
+import { SEASONS, type Season } from "./terrain.ts";
 import type { Cost } from "./buildings.ts";
+import { GERMINATION_DAYS } from "./economy.ts";
+import { DAYS_PER_SEASON, DAYS_PER_YEAR } from "../../sim/kingdom/clock.ts";
 
 export type CropId = "wheat" | "rye" | "flax" | "herbs" | "orchard";
 
@@ -61,31 +84,54 @@ export type CropDef = {
 
 export const CROPS: Readonly<Record<CropId, CropDef>> = {
   wheat: {
-    id: "wheat", name: "Wheat and barley", about: "Sown in spring, reaped at summer's end. The staple.",
+    id: "wheat", name: "Wheat and barley", about: "Sown in spring's first month, reaped at summer's end. The staple.",
     sow: ["spring"], grows: ["spring", "summer"], hardy: false,
-    growDays: 48, ripeDays: 14, seed: { grain: 30 }, yield: { grain: 420 }, later: {},
+    growDays: 150, ripeDays: 30, seed: { grain: 45 }, yield: { grain: 2100 }, later: {},
   },
   rye: {
     id: "rye", name: "Rye", about: "Hardy: sown in autumn, sleeps through winter, reaped in late spring. Smaller yield.",
     sow: ["autumn"], grows: ["autumn", "spring"], hardy: true,
-    growDays: 52, ripeDays: 14, seed: { grain: 20 }, yield: { grain: 260 }, later: {},
+    growDays: 150, ripeDays: 30, seed: { grain: 30 }, yield: { grain: 1500 }, later: {},
   },
   flax: {
     id: "flax", name: "Flax", about: "Linen to sell, and cloth for the army's backs (later).",
     sow: ["spring"], grows: ["spring", "summer"], hardy: false,
-    growDays: 40, ripeDays: 12, seed: { grain: 10, coin: 2 }, yield: { coin: 36 }, later: { morale: 1 },
+    growDays: 120, ripeDays: 30, seed: { grain: 30, coin: 6 }, yield: { coin: 108 }, later: { morale: 1 },
   },
   herbs: {
     id: "herbs", name: "Herbs and poppy", about: "Simples to sell; later they feed the healers.",
     sow: ["spring", "summer"], grows: ["spring", "summer", "autumn"], hardy: false,
-    growDays: 36, ripeDays: 10, seed: { coin: 4 }, yield: { coin: 22 }, later: { herbs: 10 },
+    growDays: 108, ripeDays: 30, seed: { coin: 12 }, yield: { coin: 66 }, later: { herbs: 10 },
   },
   orchard: {
     id: "orchard", name: "Orchard", about: "Slow: fruit only after two summers, then every year without resowing.",
     sow: ["spring", "autumn"], grows: ["spring", "summer", "autumn"], hardy: true,
-    growDays: 170, ripeDays: 20, regrowDays: 60, seed: { coin: 12, timber: 4 }, yield: { grain: 380, coin: 20 }, later: {},
+    growDays: 510, ripeDays: 60, regrowDays: 180, seed: { coin: 12, timber: 4 }, yield: { grain: 1140, coin: 60 }, later: {},
   },
 };
+
+/**
+ * Days from now until a crop is ripe, counted the way the sim grows it
+ * (sim/kingdom/economy.ts growPlots), or null if a tender crop would still be
+ * in the ground when winter comes and kills it. `dayOfYear` is today; today's
+ * growth has already been counted (a field sown today first grows tomorrow:
+ * an order, and the day's own sowing, come after the day's growth). `need`
+ * is the growing-season days it still wants: GERMINATION_DAYS + growDays for
+ * a field sown today. Pure calendar arithmetic, no draw: what the sow menu
+ * warns of, what the field card promises, and what auto-sowing waits for.
+ */
+export function daysToRipe(crop: CropDef, dayOfYear: number, need = GERMINATION_DAYS + crop.growDays): number | null {
+  if (need <= 0) return 0;
+  let counted = 0;
+  for (let i = 1; i <= 3 * DAYS_PER_YEAR; i++) {
+    const doy = (dayOfYear + i) % DAYS_PER_YEAR;
+    // Whole-number division without Math: the sim reads this (sim/math.ts rule).
+    const season = SEASONS[(doy - (doy % DAYS_PER_SEASON)) / DAYS_PER_SEASON];
+    if (season === "winter" && !crop.hardy) return null;
+    if (crop.grows.includes(season) && ++counted >= need) return i;
+  }
+  return null;
+}
 
 /** Every problem with the crops table. Empty means valid. */
 export function validateCrops(table: Readonly<Record<string, CropDef>> = CROPS): string[] {
@@ -108,6 +154,13 @@ export function validateCrops(table: Readonly<Record<string, CropDef>> = CROPS):
     // A tender crop must be able to ripen before the winter it cannot survive:
     // its growing seasons from the first sowing season must hold its growth.
     if (!c.hardy && c.grows.includes("winter")) problems.push(id + " is tender but grows in winter");
+    // ECON: sown on the first day of any season it may be sown in, it ripens
+    // before the winter that would kill it -- so a field that resows itself
+    // at its season's turn never sows a crop to die.
+    for (const season of c.sow) {
+      const day0 = SEASONS.indexOf(season) * DAYS_PER_SEASON;
+      if (daysToRipe(c, day0) === null) problems.push(id + " sown on the first day of " + season + " dies before it ripens");
+    }
   }
   return problems;
 }

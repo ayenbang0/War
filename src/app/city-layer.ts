@@ -36,6 +36,7 @@ import { pickAt, planFor, type CityPick, type CityPlan } from "../render/city/la
 import { CityPanel, type CityOpen } from "../ui/city/panel.ts";
 import { fieldCard, lotCard, politicsCard, type CityCardHooks, type CityCardView } from "../ui/city/cards.ts";
 import { C } from "../content/kingdom/city-strings.ts";
+import { AUTO_SOW_DEFAULT } from "../content/kingdom/economy.ts";
 import { reducedMotion, type KingdomLayer } from "./kingdom-layer.ts";
 
 export type CityEnv = {
@@ -136,6 +137,9 @@ export class CityLayer {
       field: (i) => this.openField(i),
       politics: () => this.openPolitics(),
       leave: () => this.leave(),
+      // ECON: the realm's switch -- on resows every field with the realm's crop (rye unless one was chosen).
+      resowAll: (on) => this.issue(
+        { kind: "setAutoSow", holding: 0, plot: 0, crop: on ? AUTO_SOW_DEFAULT : null }, C.resowAllSaid(on)),
     });
 
     const sink: KingdomStrokeSink = {

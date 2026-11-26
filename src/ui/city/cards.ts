@@ -19,7 +19,11 @@ import type { Holding } from "../../sim/kingdom/state.ts";
 import type { KingdomOrderBody } from "../../sim/kingdom/orders.ts";
 import type { Screen } from "../screen-stack.ts";
 import { cardFrame, make, row, setText, type FrameHooks } from "../kingdom/cards.ts";
-import { buildMenu, economyPanel, sowMenu, type EconomyHooks, type EconomyPanel } from "../kingdom/economy-panel.ts";
+import {
+  buildMenu, economyPanel, nextSowing, resowMenu, ripeEstimate, sowMenu, type EconomyHooks, type EconomyPanel,
+} from "../kingdom/economy-panel.ts";
+import { autoSowWaits, grainStores, seedCost } from "../../sim/kingdom/economy.ts";
+import { KING_PLAYER } from "../../content/kingdom/factions.ts";
 import { BUILDINGS, BUILDING_IDS, type BuildingId } from "../../content/kingdom/buildings.ts";
 import { CROPS, type CropId } from "../../content/kingdom/crops.ts";
 import { E, STAGE_NAME, amountsLine } from "../../content/kingdom/ui-strings.ts";
@@ -101,7 +105,9 @@ export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, h
       setText(about, def.purpose);
       const up = h.works[index] > 0 ? null : upgradeOf(id);
       const ring = id === "palisade" || id === "wall" || id === "keep";
-      setText(note, [up ? C.upgrade(BUILDINGS[up].name) : "", ring ? C.enclosure : ""].filter(Boolean).join(" ")
+      // ECON: a granary's card shows the store it is part of.
+      const store = id === "granary" && h.works[index] === 0 ? C.granaryLot(grainStores(world, KING_PLAYER)) : "";
+      setText(note, [store, up ? C.upgrade(BUILDINGS[up].name) : "", ring ? C.enclosure : ""].filter(Boolean).join(" ")
         || (next < 0 ? C.lotCardFull : ""));
       if (up) {
         buildLabel = C.buildHere;
@@ -191,16 +197,37 @@ export function fieldCard(root: HTMLElement, doc: Document, world: KingdomWorld,
   let health: HTMLElement | null = null;
   let sow: HTMLElement | null = null;
   let harvest: HTMLElement | null = null;
+  let resow: HTMLElement | null = null;
+  let ripe: HTMLElement | null = null;
+  let resows: HTMLElement | null = null;
+  let lost: HTMLElement | null = null;
+  let waits: HTMLElement | null = null;
   let heading: HTMLElement | null = null;
   let last: HTMLElement | null = null;
 
   const refresh = (): void => {
-    if (!crop || !stage || !health || !sow || !harvest) return;
+    if (!crop || !stage || !health || !sow || !harvest || !resow || !ripe || !resows || !lost || !waits) return;
     const p = h.plots[index];
     const def = p.crop ? CROPS[p.crop as CropId] : null;
     setText(crop, def && p.stage !== "empty" ? def.name : C.nothingSown);
     setText(stage, STAGE_NAME[p.stage] + (p.stage === "growing" ? " " + Math.floor(p.progress * 100) + "%" : ""));
     setText(health, C.healthLine(p.health));
+    // ECON: when it will be ripe, that it reaps itself, whether it resows, and why it was lost.
+    const inGround = def !== null && (p.stage === "sown" || p.stage === "growing");
+    const when = inGround ? ripeEstimate(world, def, p) : null;
+    setText(ripe, !inGround ? "" : when ? C.ripeOn(when) : C.ripeNever);
+    const auto = p.auto ? CROPS[p.auto as CropId] : null;
+    setText(resows, auto ? C.resowsCrop(auto.name) : C.resowsOff);
+    setText(lost, p.lost ? E.lostCause(p.lost) : "");
+    const wait = autoSowWaits(world, h, p);
+    let why = "";
+    if (auto && wait === "season") why = C.waits.season({ crop: auto.name, when: nextSowing(world, auto) });
+    else if (auto && wait === "late") why = C.waits.late({ crop: auto.name, when: nextSowing(world, auto) });
+    else if (auto && wait === "seed") why = C.waits.seed({ seed: amountsLine(seedCost(auto, h)) });
+    else if (wait === "standing") why = C.waits.standing;
+    setText(waits, why);
+    show(waits, why !== "", "block");
+    show(resow, h.owner === "king");
     const open = p.stage === "empty" || p.stage === "harvested" || p.stage === "spoiled";
     const canSow = open && !(p.stage === "harvested" && def?.regrowDays) && h.owner === "king";
     const canReap = p.stage === "ripe" && h.owner === "king";
@@ -217,7 +244,13 @@ export function fieldCard(root: HTMLElement, doc: Document, world: KingdomWorld,
     crop = row(doc, dl, C.crop);
     stage = row(doc, dl, C.stage);
     health = row(doc, dl, C.health);
+    ripe = row(doc, dl, C.ripe);
+    row(doc, dl, C.reaped).textContent = C.reapedAuto;
+    resows = row(doc, dl, C.resows);
+    lost = row(doc, dl, C.lostTo);
     body.appendChild(dl);
+    waits = make(doc, "p", "c-note c-waits");
+    body.appendChild(waits);
     sow = button(doc, E.sow, "sow");
     sow.setAttribute("aria-haspopup", "dialog");
     sow.setAttribute("aria-label", E.sowField(index + 1));
@@ -229,7 +262,10 @@ export function fieldCard(root: HTMLElement, doc: Document, world: KingdomWorld,
       hooks.issue({ kind: "harvest", plot: plot.id }, E.chosen);
       pressed(harvest as HTMLElement, e);
     };
-    actions.append(sow, harvest);
+    resow = button(doc, C.resowButton, "resow");
+    resow.setAttribute("aria-haspopup", "dialog");
+    resow.onclick = () => { last = resow; hooks.economy.openMenu(resowMenu(doc, world, h, index, hooks.economy)); };
+    actions.append(sow, harvest, resow);
   }, refresh, () => (last && last.style.display !== "none" ? last : null));
   return { screen, kind: "field", index, refresh };
 }
