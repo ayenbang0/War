@@ -12,7 +12,7 @@
  * ("Learn the gestures") into the story's opening: a new exile plays the
  * cutscene and then the tutorial, and the tutorial is replayed from Menu on
  * the map -- so Home has no tutorial button of its own (docs/PROVISIONAL.md
- * K9.12). Continue goes straight back to the saved realm.
+ * K9.14). Continue goes straight back to the saved realm.
  *
  * The figures shown here are COUNTED from the content, never typed in. A hand
  * written "ten unit types" becomes a lie the moment someone adds an eleventh,

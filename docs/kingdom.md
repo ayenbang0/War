@@ -1364,3 +1364,96 @@ tools/kingdom-economy.ts (164 checks) has "two years, passive and active",
 (`econ-auto-farm`) turns the switch on in a city with real clicks and keys,
 runs at 4x through the turn of summer, and sees the wheat reaped into the
 stores, the field resown with rye in autumn and a twelve-month date on the HUD.
+
+## K9 — the story, its opening and its tutorial
+
+The owner: "There should be no more battle/campaign. ONLY the storyline
+gameplay"; the king "has nothing, to ruling"; "The game should also start with
+a storyline animation/cutscene and then a tutorial to teach ALL gestures
+controls". K9 runs the story in the kingdom sim and puts the opening in front
+of it. Choices are in docs/PROVISIONAL.md K9s.1–9 and K9.1–22.
+
+### The story in the sim (`sim/kingdom/story.ts`, `content/story/`)
+- Off unless `KingdomConfig.story` (K9.1); a new campaign sets it. Every older
+  suite and the kingdom golden keep their realm byte for byte.
+- **Acts by state.** Four acts; an act ends the day all its goals hold against
+  the realm (K9.2). `actBegan` is the event.
+- **Letters as orders.** 53 letters, each sent once when its trigger first
+  holds (daily, table order); `letterArrived`. The player answers with the
+  order `answerLetter {letter, choice}` -- checked, logged, hashed, saved --
+  whose effects go through the sim's own paths (ledger, morale, mercenaries,
+  armies). A gamble rolls once on the events stream; no other story code rolls.
+  Forks are letters whose choices set flags later triggers read.
+- **Encounters.** The Marchwarden chapters re-cast as 13 scripted battles: a
+  `battle` effect stands a host at the encounter's holding; a contact with it
+  is fought on the encounter's level under its captain (K9.4). The capital
+  siege is an assault on fixed walls (K9.8, the plan's named scope cut).
+- **The chronicle** is written from the tick's events at its end, as a ledger
+  (K9.10). **Endings**: Restored King, Iron Crown, Hollow Crown (Legitimacy ×
+  Mercy the day the crown is taken), The Chronicle Closes (the king lost, or
+  the capital another's for 30 days, K9.6); `storyEnded`, and the realm holds.
+- **Save version 10**: `story` (null for every v9 save, `migrate9to10`, K9.12).
+
+### The opening (`app/app.ts`, `ui/story/`)
+1. **The cutscene** (`ui/story/cutscene.ts`, art in `render/story/`): twelve
+   beats of Brother Aldous over the realm's map. Skip (the primary button) and
+   Esc end it at any beat; Next, any other key or a tap go on a beat; a beat
+   moves on by itself no sooner than it can be read (K9.16). Narration is DOM
+   text at 1.25rem in a live region (15.6:1); reduced motion cuts the camera.
+2. **The tutorial** (`content/story/tutorial.ts`, runner `ui/story/coach.ts`):
+   69 steps in four lessons -- the map, the town, the drill, armies on the map
+   -- in a practice realm that is never saved (K9.11; `sim/kingdom/tutorial.ts`
+   sets each lesson up). Every step waits for the real control: the layers
+   emit `TutorialSignal`s (`ui/story/signals.ts`) only when the control did its
+   thing -- a stroke the pen accepted, an order the world allowed, a camera that
+   moved -- and camera, key and time signals count only on the step's own
+   layer. Each step shows what to draw, a hint after 12 s, "Skip this step" and
+   "Skip the tutorial" (asks first). Fight in the armies lesson ends it (K9.19).
+3. **The king's own realm** begins at day one, story running.
+
+Continue goes straight to the saved realm. Home has no "Learn the gestures"
+(K9.14); the map's **Menu** (Back to the realm · Read the chronicle · Replay
+the tutorial · Save and go to the front screen) replays the tutorial in a
+fresh practice realm and returns to the realm as it was.
+
+### On the map
+The top bar gains a story group: **Letters** (only while one waits),
+**Chronicle**, **Menu**. A letter opens by itself (K9.7) as a modal card that
+holds the clock: who wrote, the letter, each answer with its cost, battle or
+chance, a refused answer saying why; "Decide later". The chronicle screen
+shows what the act asks and the book so far. An ending pushes the end screen
+(title, epilogue for this realm, days and holdings; Read the chronicle, Back to
+the front screen, Begin a new exile behind a confirm, K9.22).
+
+### Screen contracts
+| Screen | First focus | Traps | Holds the clock | Esc |
+|---|---|---|---|---|
+| `story-cutscene` (full) | Next | yes | yes | skips the film |
+| coach (not a screen) | -- | no | no | -- (Esc in the practice realm or drill asks to skip) |
+| `story-letter` (overlay) | title | yes | yes | decide later |
+| `story-chronicle` (overlay) | title | yes | yes | close |
+| `story-menu` (overlay) | Back to the realm | yes | yes | close |
+| `story-end` (full) | title | yes | yes | front screen |
+
+### Testing
+`AppEnv.skipOpening` is the documented test path (K9.13): the harness's
+`boot()` opens a new exile straight on the map with no story, as K8 did, so
+the K2–K8 scenarios are unchanged; `boot({ opening: true })` is the real flow.
+
+### The proof
+- `tools/story-check.ts` (98 checks): content, the lesson realm (deterministic,
+  idempotent, every lesson's set-up), the coach's matcher.
+- `tools/story-playthrough.ts` (33 checks): four scripted runs through
+  `world.issue`, one per ending, replayed from their logs and round-tripped
+  through the save every season.
+- `src/e2e/scenarios-k9.ts` (9 scenarios): the cutscene; each lesson by real
+  pointer and key events -- a real stroke for every battle gesture and glyph
+  and every map order, real wheel notches and drags; a letter answered and the
+  chronicle read; Continue skipping the opening; a replay from the Menu; Esc in
+  the drill; an ending.
+- `tools/ui-check.ts`: the opening, skip, replay and Continue through the app;
+  the drill's config and enemy in sight; story.css floor, focus and motion.
+
+### Determinism and the golden
+No golden moved: the story is off in the golden realm, and the drill's
+config is not a golden battle.
