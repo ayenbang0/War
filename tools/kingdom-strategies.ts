@@ -11,7 +11,7 @@
  * (the economy test checks it).
  */
 
-import { KingdomWorld, TICKS_PER_DAY, type KingdomOrderBody } from "../src/sim/kingdom/index.ts";
+import { KingdomWorld, TICKS_PER_DAY, type KingdomConfig, type KingdomOrderBody } from "../src/sim/kingdom/index.ts";
 import type { BuildingId } from "../src/content/kingdom/buildings.ts";
 import type { CropId } from "../src/content/kingdom/crops.ts";
 
@@ -130,11 +130,15 @@ export type RunResult = {
  */
 export function runStrategy(
   seed: number, strategy: Strategy, days: number,
-  opts: { everyDay?: (w: KingdomWorld) => KingdomOrderBody[]; onTick?: (w: KingdomWorld) => void; autoFarm?: boolean } = {},
+  opts: {
+    everyDay?: (w: KingdomWorld) => KingdomOrderBody[]; onTick?: (w: KingdomWorld) => void; autoFarm?: boolean;
+    /** K11: the rest of a new game's realm (hosts, captains, story) and its difficulty, for the difficulty sweep. */
+    config?: Omit<KingdomConfig, "seed" | "autoFarm">;
+  } = {},
 ): RunResult {
   // ECON: autoFarm (a new game's default, field auto-resow) is off unless asked for,
   // so the hand-farming proofs below test the hand-farming they describe.
-  const w = new KingdomWorld({ seed, autoFarm: opts.autoFarm ?? false });
+  const w = new KingdomWorld({ ...opts.config, seed, autoFarm: opts.autoFarm ?? false });
   const trace: string[] = [];
   const out: DayRecord[] = [];
   let i = -1;
@@ -150,6 +154,18 @@ export function runStrategy(
   };
   startStep();
   while (w.now < days * TICKS_PER_DAY) {
+    // K11: a realm whose story has ended holds still for ever (story.ts): the run is over.
+    if (w.story && w.story.ending !== null) break;
+    // K11: in a full realm a host can meet the king's party or a town of his,
+    // and the realm waits on him. A scripted player settles it as a player who
+    // will not draw the battle would: the auto-resolve, else withdraw, else
+    // open the gates. (The bare realms of the older suites never meet anyone.)
+    if (w.contact && !w.orders.queued().some((o) => o.kind === "resolveContact")) {
+      for (const choice of ["auto", "withdraw", "yield", "keep"] as const) {
+        const body: KingdomOrderBody = { kind: "resolveContact", contact: w.contact.id, choice, result: null };
+        if (w.check(body) === null) { w.issue(body); break; }
+      }
+    }
     if (w.now % TICKS_PER_DAY === 0 && i >= strategy.steps.length && opts.everyDay) {
       for (const b of opts.everyDay(w)) w.issue(b);
     }

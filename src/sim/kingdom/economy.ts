@@ -207,16 +207,25 @@ export function grainStores(world: KingdomWorld, faction: number): {
 }
 
 /** Grain a holding draws today (without consuming its remainder). */
-function doleDue(h: Holding, season: Season): { draw: number; carry: number } {
-  const owed = h.population * DOLE_PER_100[season] + h.doleCarry;
+function doleDue(h: Holding, season: Season, pct = 100): { draw: number; carry: number } {
+  // K11: the difficulty's dole (the king's towns only; 100 is the old sum exactly).
+  const owed = floor((h.population * DOLE_PER_100[season] * pct) / 100) + h.doleCarry;
   const draw = floor(owed / 100);
   return { draw, carry: owed - draw * 100 };
+}
+
+/**
+ * K11: the difficulty's numbers are the KING's (content/kingdom/difficulty.ts):
+ * the rival captains run the same economy at every setting.
+ */
+function dolePct(world: KingdomWorld, faction: number): number {
+  return faction === KING_PLAYER ? world.tuning.dolePct : 100;
 }
 
 /** What a faction must find in grain each day at today's season: the party and the towns. */
 export function dailyNeed(world: KingdomWorld, faction: number, season: Season = world.date.season): number {
   let n = partySize(world, faction) * PARTY_RATION;
-  if (drawsDole(faction)) for (const h of ownedBy(world, faction)) n += doleDue(h, season).draw;
+  if (drawsDole(faction)) for (const h of ownedBy(world, faction)) n += doleDue(h, season, dolePct(world, faction)).draw;
   return n;
 }
 
@@ -251,7 +260,8 @@ export function expectedYield(world: KingdomWorld, h: Holding, plot: FieldPlot):
   const out: Partial<Record<StockId, number>> = {};
   for (const s of STOCK_IDS) {
     const base = crop.yield[s] ?? 0;
-    if (base) out[s] = floor((base * FIELD_SIZE[h.kind] * plot.health * (100 + farm)) / 10000);
+    // K11: the difficulty's harvest is applied last, to the king's fields alone.
+    if (base) out[s] = floor((floor((base * FIELD_SIZE[h.kind] * plot.health * (100 + farm)) / 10000) * (f === KING_PLAYER ? world.tuning.yieldPct : 100)) / 100);
   }
   return out;
 }
@@ -464,7 +474,8 @@ export function applyEconomyOrder(world: KingdomWorld, order: KingdomOrder & Eco
       for (const p of h.plots) p.auto = e.autoSow;
       const first = ownedBy(world, f).length === 1;
       const gift: Partial<Record<StockId, number>> = { grain: h.population * CLAIM_GRAIN_PER_PERSON };
-      if (first) for (const st of STOCK_IDS) gift[st] = (gift[st] ?? 0) + (FIRST_HOLDING_STORES[st] ?? 0);
+      // K11: the first holding's gift is the difficulty's share of it.
+      if (first) for (const st of STOCK_IDS) gift[st] = (gift[st] ?? 0) + floor(((FIRST_HOLDING_STORES[st] ?? 0) * world.tuning.firstStoresPct) / 100);
       receive(e, book, gift, "finds");
       world.events.push({ kind: "claimed", holding: h.id, faction: f });
       return null;
@@ -721,7 +732,7 @@ function kingAtWork(world: KingdomWorld, d: CalendarDate): void {
   if (k.task === "forage") {
     const people = partySize(world, KING_PLAYER);
     const eco = BIOME_ECONOMY[h.biome];
-    const grain = withPct(floor((people * FORAGE_PER_PERSON[d.season] * eco.fertility) / 100), foragePct(world, KING_PLAYER));
+    const grain = withPct(floor((people * FORAGE_PER_PERSON[d.season] * eco.fertility) / 100), foragePct(world, KING_PLAYER) + world.tuning.forageBonusPct);
     const timber = floor((people * eco.wood) / (100 * FORAGERS_PER_TIMBER));
     credit(e, book, "grain", grain, "forage");
     credit(e, book, "timber", timber, "forage");
@@ -766,7 +777,7 @@ function eat(world: KingdomWorld, f: number, season: Season): void {
   const book = world.books[f];
   const holdings = ownedBy(world, f);
   const party = partySize(world, f) * PARTY_RATION;
-  const draws = holdings.map((h) => (drawsDole(f) ? doleDue(h, season) : { draw: 0, carry: 0 }));
+  const draws = holdings.map((h) => (drawsDole(f) ? doleDue(h, season, dolePct(world, f)) : { draw: 0, carry: 0 }));
   let total = party;
   for (const d of draws) total += d.draw;
   const grain = e.stocks.grain;

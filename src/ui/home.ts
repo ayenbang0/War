@@ -34,6 +34,7 @@ import { BATTLE_GESTURE_CLASSES, KINGDOM_PEN_CLASSES } from "../content/story/tu
 
 import { K } from "../content/kingdom/ui-strings.ts";
 
+import { KINGDOM_DIFFICULTIES, KINGDOM_DIFFICULTY_IDS, type KingdomDifficultyId } from "../content/kingdom/difficulty.ts";
 import { domScreen, el } from "./dom-screen.ts";
 import type { Screen } from "./screen-stack.ts";
 
@@ -48,6 +49,15 @@ export type ExileStatus =
   | { readonly kind: "saved"; readonly when: string }
   /** A save is there but cannot be read; the Exile button asks before replacing it. */
   | { readonly kind: "unreadable" };
+
+/**
+ * K11: the new game's difficulty, as Home reads and sets it. The app keeps it
+ * (in the same storage as the save, so it is remembered); Home only shows it.
+ */
+export type NewGameDifficulty = {
+  get(): KingdomDifficultyId;
+  set(id: KingdomDifficultyId): void;
+};
 
 /** One counted figure with its label. */
 function figure(value: number, label: string): HTMLElement {
@@ -86,6 +96,7 @@ export function homeFigures(): readonly { readonly value: number; readonly label
  */
 export function homeScreen(
   root: HTMLElement, choose: (choice: HomeChoice) => void, exile: () => ExileStatus = () => ({ kind: "none" }),
+  newGame: NewGameDifficulty | null = null,
 ): Screen {
   let play: HTMLButtonElement | null = null;
   let exileNew: HTMLElement | null = null;
@@ -126,6 +137,34 @@ export function homeScreen(
       play.onclick = () => choose("exile");
       exileNew.onclick = () => choose("exile-new");
       showExile();
+      // K11: how hard a NEW exile is (a game under way keeps the difficulty it
+      // began with -- the save carries it). Three toggle buttons in a labelled
+      // group, the choice in words beside them; Gentle until the player picks.
+      if (newGame) {
+        const box = el("div", "home-difficulty");
+        box.setAttribute("role", "group");
+        const label = el("p", "home-note home-difficulty-label", K.homeDifficulty);
+        label.id = "home-difficulty-label";
+        box.setAttribute("aria-labelledby", label.id);
+        const row = el("div", "home-difficulty-row");
+        const blurb = el("p", "home-note home-difficulty-blurb");
+        const buttons: HTMLElement[] = [];
+        const show = (): void => {
+          const cur = newGame.get();
+          KINGDOM_DIFFICULTY_IDS.forEach((id, i) => buttons[i].setAttribute("aria-pressed", String(id === cur)));
+          blurb.textContent = KINGDOM_DIFFICULTIES[cur].name + ": " + KINGDOM_DIFFICULTIES[cur].blurb;
+        };
+        for (const id of KINGDOM_DIFFICULTY_IDS) {
+          const b = el("button", "home-teach home-difficulty-choice", KINGDOM_DIFFICULTIES[id].name);
+          b.setAttribute("data-difficulty", id);
+          b.onclick = () => { newGame.set(id); show(); };
+          buttons.push(b);
+          row.appendChild(b);
+        }
+        box.append(label, row, blurb);
+        panel.appendChild(box);
+        show();
+      }
 
       panel.appendChild(el("p", "home-note",
         "New here? A new exile opens with the story so far and then a tutorial of every control -- every order, on the map and on the field, is a stroke of the pen."));

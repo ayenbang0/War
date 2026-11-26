@@ -112,7 +112,7 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
       const home = at && at.owner === "king";
       setText(els.supply, AC.supplyLine({ grain: a.supply, days: supplyDays(a) }) + (home || k.army === a.id ? " · " + AC.supplyHome : "") +
         (a.hunger > 0 ? " · " + AC.hunger(a.hunger) : ""));
-      const wage = armyWage(a);
+      const wage = armyWage(a, world);
       setText(els.wages, wage > 0 ? AC.wagesLine({ coin: wage, unpaid: a.unpaid }) : AC.wagesNone);
       setText(els.morale, AC.moraleLine({ morale: a.morale, rest: armyRestMorale(world, a), falling: a.hunger > 0 || a.unpaid > 0 }));
       setText(els.doing, doingLine(a));

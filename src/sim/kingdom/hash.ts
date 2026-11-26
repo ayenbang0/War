@@ -212,6 +212,10 @@ export function kingdomHash(world: KingdomWorld, opts: KingdomHashOptions = {}):
   // ECON: the realm's calendar start and whether its fields resow themselves.
   h = mixU32(h, world.epoch);
   h = mixU32(h, world.autoFarm ? 1 : 0);
+  // K11: the difficulty, mixed only when it is not Standard -- the tuning every
+  // realm had before K11 -- so the kingdom golden (a Standard realm) keeps its
+  // hash while any two realms that differ in it still hash apart.
+  if (world.difficulty !== "standard") h = mixStr(h, world.difficulty);
 
   h = mixU32(h, world.holdings.length);
   for (const x of world.holdings) {

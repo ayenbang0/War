@@ -41,6 +41,7 @@ import type { EncounterDef } from "../../content/story/encounters.ts";
 import { abs, floor, max, min, round } from "../math.ts";
 import { FACTIONS, FACTION_IDS, KING_PLAYER } from "../../content/kingdom/factions.ts";
 import { UNIT_TYPES } from "../../content/unit-types.ts";
+import { DIFFICULTY_IDS, type DifficultyId } from "../../content/difficulty.ts";
 import { HOLD_DIG_IN_DAYS } from "../../content/kingdom/armies.ts";
 import { BIOMES } from "../../content/kingdom/terrain.ts";
 import { levelById } from "../../content/levels/index.ts";
@@ -306,12 +307,25 @@ export function militiaSquads(h: Holding, fort: Fortification): SpecSquad[] {
   return out;
 }
 
+/**
+ * K11: the realm's difficulty moves the machine's commander along the battle
+ * ladder (content/difficulty.ts DIFFICULTY_IDS) -- Gentle one step down,
+ * Hard one up, clamped at its ends. It changes how well the machine commands,
+ * never how many men it has (the battle layer's own rule).
+ */
+export function battleDifficultyShifted(world: KingdomWorld, d: DifficultyId): DifficultyId {
+  const shift = world.tuning.battleShift;
+  if (shift === 0) return d;
+  const i = DIFFICULTY_IDS.indexOf(d);
+  return DIFFICULTY_IDS[max(0, min(DIFFICULTY_IDS.length - 1, i + shift))];
+}
+
 function sideOf(world: KingdomWorld, s: ContactSide, h: Holding, fort: Fortification, enc: EncounterDef | null): BattleSide {
   const fid = FACTION_IDS[s.faction];
   const f = FACTIONS[fid];
   // K9: a story encounter is fought against ITS captain at ITS difficulty (encounters.ts).
   const commander = s.faction === KING_PLAYER ? null : enc ? enc.commander : FACTION_BATTLE_COMMANDER[fid];
-  const difficulty = s.faction !== KING_PLAYER && enc ? enc.difficulty : FACTION_BATTLE_DIFFICULTY[fid];
+  const difficulty = battleDifficultyShifted(world, s.faction !== KING_PLAYER && enc ? enc.difficulty : FACTION_BATTLE_DIFFICULTY[fid]);
   const a = armyById(world, s.army);
   if (!a) {
     return {

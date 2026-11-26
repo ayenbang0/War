@@ -446,7 +446,7 @@ section("the save: v11");
   h.walls = 640;
   h.mend = 300;
   const raw = serialize(w);
-  check("saved as version 11", raw.version === 11);
+  check("saved as the current version (11 or later)", raw.version >= 11);
   const back = deserialize(JSON.parse(JSON.stringify(raw)));
   check("walls and mending round-trip", back.ok && kingdomHash(back.value) === kingdomHash(w) &&
     (back.value.holding(h.id) as Holding).walls === 640 && (back.value.holding(h.id) as Holding).mend === 300);

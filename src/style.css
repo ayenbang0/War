@@ -154,6 +154,11 @@ canvas.panning { cursor: grabbing; }
 .home-teach { background: var(--panel-2); border: 1px solid #b9a880; color: var(--ink); }
 .home-teach:hover { background: #f6f0e0; }
 .home-note { margin: 6px 0 4px; color: var(--ink-2); }
+/* K11: the new game's difficulty. Pressed is said by a heavier border and bold, not by colour alone. */
+.home-difficulty { margin: 8px 0 6px; }
+.home-difficulty-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.home-difficulty-choice { padding: 0.5rem 1.2rem; }
+.home-difficulty-choice[aria-pressed="true"] { font-weight: 700; border: 2px solid var(--ink); background: #f6f0e0; }
 .home-panel h2 {
   font-size: var(--text); letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--ink-2); margin: 24px 0 8px; font-weight: 600; text-align: left;

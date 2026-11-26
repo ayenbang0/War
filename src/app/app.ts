@@ -54,6 +54,10 @@ import { STORY_UI } from "../content/story/strings.ts";
 import { signal } from "../ui/story/signals.ts";
 import type { TutorialStep } from "../content/story/tutorial.ts";
 import { lessonArmies, lessonLetter, lessonRealm, lessonTown } from "../sim/kingdom/tutorial.ts";
+import { NEW_GAME_DIFFICULTY, isKingdomDifficulty, type KingdomDifficultyId } from "../content/kingdom/difficulty.ts";
+
+/** K11: where the new game's difficulty is remembered (beside the save, never in it). */
+export const DIFFICULTY_KEY = "war.newGameDifficulty";
 
 export type AppEnv = {
   readonly win: Window;
@@ -173,6 +177,8 @@ export class App {
   private readonly env: AppEnv;
   private readonly els: Elements;
   private readonly home: Screen;
+  /** K11: the difficulty picked on Home this visit (kept here too, for when there is no storage). */
+  private chosenDifficulty: KingdomDifficultyId | null = null;
   private readonly detachKeys: () => void;
   private readonly unwatchStack: () => void;
 
@@ -230,7 +236,10 @@ export class App {
     this.menuEl.id = "story-menu";
     this.menuEl.style.display = "none";
     env.doc.body.appendChild(this.menuEl);
-    this.home = homeScreen(this.els.home, (c) => this.choose(c), () => this.exileStatus());
+    this.home = homeScreen(this.els.home, (c) => this.choose(c), () => this.exileStatus(), {
+      get: () => this.newGameDifficulty(),
+      set: (id) => this.setNewGameDifficulty(id),
+    });
     this.stack.push(this.home);
   }
 
@@ -267,6 +276,34 @@ export class App {
     }
   }
 
+  /**
+   * K11: the difficulty a new exile begins on -- Gentle until the player
+   * picks, then whatever they picked last, kept beside the save (a separate
+   * key: clearing or replacing the save never forgets it).
+   */
+  private newGameDifficulty(): KingdomDifficultyId {
+    try {
+      const v = this.kingdomStorage()?.getItem(DIFFICULTY_KEY) ?? null;
+      return isKingdomDifficulty(v) ? v : NEW_GAME_DIFFICULTY;
+    } catch {
+      return NEW_GAME_DIFFICULTY;
+    }
+  }
+
+  /** What a new realm begins on: this visit's pick, else the remembered one, else Gentle. */
+  private difficultyForNewGame(): KingdomDifficultyId {
+    return this.chosenDifficulty ?? this.newGameDifficulty();
+  }
+
+  private setNewGameDifficulty(id: KingdomDifficultyId): void {
+    try {
+      this.kingdomStorage()?.setItem(DIFFICULTY_KEY, id);
+    } catch {
+      /* nowhere to keep it: the choice still holds for this visit's new game */
+    }
+    this.chosenDifficulty = id;
+  }
+
   /** For the front screen. */
   private exileStatus(): ExileStatus {
     const r = loadKingdom(this.kingdomStorage());
@@ -300,7 +337,7 @@ export class App {
   /** A new exile: the cutscene, then the tutorial, then the king's own realm (or straight to it on the test path). */
   private beginExile(storage: StorageLike | null, notice: string | null): void {
     if (this.env.skipOpening) {
-      this.enterRealm(freshRealm(false), "begun", storage, notice);
+      this.enterRealm(freshRealm(false, this.difficultyForNewGame()), "begun", storage, notice);
       return;
     }
     const king = freshKingName();
@@ -387,7 +424,7 @@ export class App {
     this.stack.popTo(this.home);
     this.practice = null;
     const go = (): void => {
-      if (after.kind === "opening") this.enterRealm(freshRealm(), "begun", after.storage, after.notice);
+      if (after.kind === "opening") this.enterRealm(freshRealm(true, this.difficultyForNewGame()), "begun", after.storage, after.notice);
       else this.enterRealm(after.world, "resumed", after.storage);
     };
     if (skipped) {
@@ -406,10 +443,9 @@ export class App {
   private openMenu(layer: KingdomLayer, storage: StorageLike | null): void {
     const menu: Screen = menuScreen(this.menuEl, this.env.doc, {
       close: (sc) => { if (this.stack.top === sc) this.stack.pop(); },
-      chronicle: () => {
-        if (this.stack.top === menu) this.stack.pop();
-        layer.openChronicle();
-      },
+      // U3-12 (K11): the chronicle opens OVER the Menu, so closing it comes
+      // back to the Menu it was opened from (the stack restores its focus).
+      chronicle: () => layer.openChronicle(),
       tutorial: () => {
         const world = layer.world;
         // Leaving the map saves it; the tutorial brings it back as it was.
@@ -724,13 +760,15 @@ export class App {
  * use both (only src/sim/ may not), and the seed is saved with the realm, so
  * a continued game is the same game (docs/PROVISIONAL.md K2.7).
  */
-function freshRealm(story = true): KingdomWorld {
+function freshRealm(story = true, difficulty: KingdomDifficultyId = NEW_GAME_DIFFICULTY): KingdomWorld {
   // K5: a new campaign opens with its first enemy in the field (content/kingdom/descent.ts OPENING_HOSTS).
   // K8: and the rival lords are captains, who play the realm as the king does (sim/kingdom/ai.ts).
   // ECON: and its fields resow themselves (owner: "the king can automatically make them sowed").
   // K9: and the story runs: acts, letters, encounters, the chronicle and its endings (sim/kingdom/story.ts).
   return new KingdomWorld({
     seed: (Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) | 0, hosts: true, captains: true, autoFarm: true, story,
+    // K11: at the difficulty Home shows (Gentle unless the player picked another).
+    difficulty,
   });
 }
 

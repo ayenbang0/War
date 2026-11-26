@@ -841,7 +841,7 @@ const NOT_SWEPT: Readonly<Record<string, string>> = {
 };
 
 /** The world's own scalar fields (the rest of the roots are walked). */
-const SCALARS = ["seed", "now", "nextId", "weather", "captains", "autoFarm", "epoch"];
+const SCALARS = ["seed", "now", "nextId", "weather", "captains", "autoFarm", "epoch", "difficulty"];
 
 type Leaf = { path: string; get: () => unknown; set: (v: unknown) => void };
 
@@ -851,7 +851,7 @@ function stateRoots(w: KingdomWorld): Record<string, unknown> {
     holdings: w.holdings, roads: w.roads, king: w.king, armies: w.armies, companies: w.companies,
     contact: w.contact, disengaged: w.disengaged, economy: w.economy, books: w.books, explore: w.explore,
     minds: w.minds, intel: w.intel, wavesRode: w.wavesRode, rumours: w.rumours, burned: w.burned, levied: w.levied,
-    story: w.story, captains: w.captains, autoFarm: w.autoFarm, epoch: w.epoch,
+    story: w.story, captains: w.captains, autoFarm: w.autoFarm, epoch: w.epoch, difficulty: w.difficulty,
   };
 }
 

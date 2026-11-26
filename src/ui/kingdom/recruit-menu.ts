@@ -45,7 +45,8 @@ function options(world: KingdomWorld, holding: number, units: readonly UnitTypeI
     const u = UNIT_TYPES[unit];
     const order: KingdomOrderBody = { kind: "recruit", at: holding, army: target, unit, levy };
     const c = recruitCost(unit, levy, world.kingStocks.stocks.levy);
-    const wage = dailyWage(u.cost, levy);
+    // K11: as the army card will show it, at the realm's difficulty.
+    const wage = Math.floor((dailyWage(u.cost, levy) * world.tuning.wagePct) / 100);
     return {
       key: (levy ? "levy-" : "recruit-") + unit,
       label: u.name,

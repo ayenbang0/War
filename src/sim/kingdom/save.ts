@@ -20,6 +20,7 @@
  * a healthy world and are refused on load.
  */
 
+import { isKingdomDifficulty, type KingdomDifficultyId } from "../../content/kingdom/difficulty.ts";
 import { ENCOUNTER_STATES, type EncounterState, type StoryState } from "./story.ts";
 import { STORY_LETTERS } from "../../content/story/letters.ts";
 import { ENCOUNTERS } from "../../content/story/encounters.ts";
@@ -65,7 +66,7 @@ import { roadBetween } from "./graph.ts";
 import { KINGDOM_STREAMS, KingdomWorld } from "./world.ts";
 
 export const KINGDOM_SAVE_FORMAT = "war.kingdom";
-export const KINGDOM_SAVE_VERSION = 11;
+export const KINGDOM_SAVE_VERSION = 12;
 
 export type SavedPlot = {
   id: number; crop: string | null; stage: PlotStage; progress: number; days: number; health: number;
@@ -272,8 +273,17 @@ export type KingdomSaveV11 = Omit<KingdomSaveV10, "version"> & {
   version: 11;
 };
 
+/**
+ * Version 12 (K11): the kingdom layer's difficulty (KingdomConfig.difficulty,
+ * content/kingdom/difficulty.ts), which a replay needs, as `hosts`.
+ */
+export type KingdomSaveV12 = Omit<KingdomSaveV11, "version"> & {
+  version: 12;
+  difficulty: KingdomDifficultyId;
+};
+
 /** The current save shape. */
-export type KingdomSave = KingdomSaveV11;
+export type KingdomSave = KingdomSaveV12;
 
 export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
 
@@ -462,7 +472,18 @@ export const MIGRATIONS: Readonly<Record<number, (save: Record<string, unknown>)
   8: migrate8to9,
   9: migrate9to10,
   10: migrate10to11,
+  11: migrate11to12,
 };
+
+/**
+ * Version 11 (K10) -> 12 (K11). Every realm saved before K11 was played on
+ * the numbers that are now Standard, and keeps them: a game under way is
+ * never made easier or harder behind the player's back, and its log replays
+ * exactly as it was played (docs/PROVISIONAL.md K11.2).
+ */
+function migrate11to12(save: Record<string, unknown>): Record<string, unknown> {
+  return { ...save, version: 12, difficulty: "standard" };
+}
 
 /**
  * Version 10 (K9) -> 11 (K10). Before K10 no battle battered a holding's
@@ -739,7 +760,8 @@ export function serialize(world: KingdomWorld): KingdomSave {
   const page = (d: LedgerDay | null): LedgerDay | null => (d === null ? null : { day: d.day, start: [...d.start], flow: [...d.flow] });
   return {
     format: KINGDOM_SAVE_FORMAT,
-    version: 11,
+    version: 12,
+    difficulty: world.difficulty,
     story: world.story === null ? null : JSON.parse(JSON.stringify(world.story)) as StoryState,
     epoch: world.epoch,
     autoFarm: world.autoFarm,
@@ -1369,6 +1391,11 @@ function readCompanies(v: unknown, world: KingdomWorld, armies: Army[]): Company
   return out;
 }
 
+function readDifficulty(v: unknown): KingdomDifficultyId {
+  if (!isKingdomDifficulty(v)) throw new Bad("difficulty is not a difficulty");
+  return v;
+}
+
 function build(save: Record<string, unknown>, resight = false): KingdomWorld {
   const mapId = str(save.map, "map");
   const map = KINGDOM_MAPS[mapId];
@@ -1379,6 +1406,7 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
     kingName: str(save.kingName, "kingName"),
     autoFarm: bool(save.autoFarm, "autoFarm"),
     epoch: int(save.epoch, "epoch"),
+    difficulty: readDifficulty(save.difficulty),
   });
   // K9: read the story before touching the world (it is checked against the map and the content tables).
   const story = save.story === null || save.story === undefined ? null : readStory(save.story, world);
@@ -1632,7 +1660,7 @@ export function loadFromJson(text: string): Result<KingdomWorld> {
  */
 export function replayLog(
   seed: number, log: readonly KingdomOrder[], until: number,
-  config: { map?: KingdomWorld["map"]; kingName?: string; hosts?: boolean; captains?: boolean; autoFarm?: boolean; epoch?: number; story?: boolean } = {},
+  config: { map?: KingdomWorld["map"]; kingName?: string; hosts?: boolean; captains?: boolean; autoFarm?: boolean; epoch?: number; story?: boolean; difficulty?: KingdomDifficultyId } = {},
 ): KingdomWorld {
   const w = new KingdomWorld({ seed, ...config });
   for (const o of log) w.submit(o);

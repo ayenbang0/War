@@ -35,7 +35,7 @@
  */
 
 import { storyHoldsAi } from "./story.ts";
-import { ceil, floor, sqrt } from "../math.ts";
+import { ceil, floor, max, sqrt } from "../math.ts";
 import type { Rng } from "../rng.ts";
 import { FACTIONS, FACTION_IDS, KING_PLAYER } from "../../content/kingdom/factions.ts";
 import { FORTIFICATIONS, MILITIA_SQUADS, AUTORESOLVE } from "../../content/kingdom/descent.ts";
@@ -141,6 +141,12 @@ export type Perception = {
   readonly wavesDue: readonly number[];
   /** The holding the exile was last heard of at (the map's start): common talk, not sight. */
   readonly exile: number;
+  /**
+   * K11: the day the king's holdings stop being off limits (the realm's
+   * difficulty, content/kingdom/difficulty.ts: AI.graceDays at Standard). A
+   * rule of the realm, not a secret of the king's, so the captain may know it.
+   */
+  readonly graceDays: number;
 };
 
 function power(squads: readonly { unit: UnitTypeId; men: number; wounded: number }[], morale: number): number {
@@ -231,13 +237,18 @@ export function perceive(world: KingdomWorld, f: number): Perception {
   const stocks = {} as Record<StockId, number>;
   for (const s of STOCK_IDS) stocks[s] = e.stocks[s];
   const wavesDue: number[] = [];
-  INVASION_WAVES.forEach((w, i) => { if (w.faction === fid && !world.wavesRode[i] && d.day >= w.day) wavesDue.push(i); });
+  // K11: a wave rides on its day moved by the difficulty (never before the first day),
+  // and on Gentle only against a king grown into a threat. The story sends a wave,
+  // not the captain's eyes, so this reads the realm as the story does.
+  const delay = world.tuning.waveDelayDays;
+  const threat = world.tuning.waveMinHoldings === 0 || world.holdingsOf("king").length >= world.tuning.waveMinHoldings;
+  INVASION_WAVES.forEach((w, i) => { if (threat && w.faction === fid && !world.wavesRode[i] && d.day >= max(0, w.day + delay)) wavesDue.push(i); });
   const intel = world.intel[f];
   return {
     faction: f, day: d.day, season: d.season, seat: seatOf(world, f), provinces, stocks,
     armyCount: own.length, own, holdings, enemies,
     intel: { owner: [...intel.owner], men: [...intel.men], walls: [...intel.walls], seen: [...intel.seen] },
-    finds, unfound, wavesDue, exile: world.holdingByKey(world.map.start)?.id ?? 0,
+    finds, unfound, wavesDue, exile: world.holdingByKey(world.map.start)?.id ?? 0, graceDays: world.tuning.graceDays,
   };
 }
 
@@ -346,7 +357,7 @@ export function decide(p: Perception, mind: AiMind, places: readonly Place[], rn
   p.intel.owner.forEach((o, i) => { if (o === KING_PLAYER) kingKnown.push(i); });
   const reach2 = AI.reachMiles * AI.reachMiles;
   const near = (i: number): boolean => !home || dist2(places[i], home) <= reach2;
-  const against = p.day >= AI.graceDays;
+  const against = p.day >= p.graceDays;
   // A holding the field hosts can take, as the faction remembers it: men against men (its memory
   // counts heads, not quality), with the margin a careful captain wants.
   const weak = (i: number): boolean => knownDefence(p, i) * AI.margin <= fieldMen;

@@ -124,11 +124,13 @@ export function armyFitness(a: Army): number {
 }
 
 /** Coin a day the army's trained squads are owed. */
-export function armyWage(a: Army): number {
+export function armyWage(a: Army, world?: KingdomWorld): number {
   // K7: a free company is paid by its contract, not by the head.
   if (a.company > 0) return MERCENARIES[a.company - 1].wage;
   let n = 0;
   for (const s of a.squads) n += dailyWage(UNIT_TYPES[s.unit].cost, s.levy);
+  // K11: the difficulty's wage for the king's own trained squads (a contract is a contract).
+  if (world && a.owner === KING_PLAYER) n = floor((n * world.tuning.wagePct) / 100);
   return n;
 }
 
@@ -155,7 +157,7 @@ export function armyUpkeep(world: KingdomWorld, owner: number): { wage: number; 
   let wage = 0;
   let ration = 0;
   for (const a of armiesOf(world, owner)) {
-    wage += armyWage(a);
+    wage += armyWage(a, world);
     ration += armyRation(a);
   }
   return { wage, ration };
@@ -898,7 +900,7 @@ export function runArmyDay(world: KingdomWorld): void {
     const book = world.books[f];
 
     // Wages first, and what is owed before today's: a captain pays before he buys bread.
-    const wage = armyWage(a);
+    const wage = armyWage(a, world);
     const owed = a.arrears + wage;
     const paid = debitUpTo(e, book, "coin", owed, "wages");
     a.arrears = owed - paid;

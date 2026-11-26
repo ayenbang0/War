@@ -28,6 +28,7 @@ import {
   type WeatherId,
 } from "../../content/kingdom/terrain.ts";
 import { levelById } from "../../content/levels/index.ts";
+import { KINGDOM_DIFFICULTIES, SIM_DEFAULT_DIFFICULTY, type KingdomDifficulty, type KingdomDifficultyId } from "../../content/kingdom/difficulty.ts";
 import { START_DAY_OF_YEAR, TICKS_PER_DAY, calendar, isDayStart, type CalendarDate } from "./clock.ts";
 import { KingdomOrderQueue, type KingdomOrder, type KingdomOrderBody } from "./orders.ts";
 import {
@@ -126,6 +127,14 @@ export type KingdomConfig = {
    * remembers it (docs/PROVISIONAL.md K9.1).
    */
   readonly story?: boolean;
+  /**
+   * K11: the kingdom layer's difficulty (content/kingdom/difficulty.ts).
+   * Defaults to Standard -- the tuning every older suite, save and the
+   * kingdom golden were made under -- so only a new game that asks (Gentle,
+   * by default, app/app.ts freshRealm) changes a number; the save remembers it
+   * (docs/PROVISIONAL.md K11.2).
+   */
+  readonly difficulty?: KingdomDifficultyId;
 };
 
 export type KingdomRng = {
@@ -187,6 +196,8 @@ export class KingdomWorld {
   captains: boolean;
   /** ECON: whether new fields of the king's resow themselves (KingdomConfig.autoFarm). */
   readonly autoFarm: boolean;
+  /** K11: the kingdom layer's difficulty (KingdomConfig.difficulty). Set by the constructor, or by a load. */
+  difficulty: KingdomDifficultyId;
   /** ECON: the day of year 1 the realm began on (KingdomConfig.epoch); the calendar reads every date from it. */
   readonly epoch: number;
   /** K8: each faction's strategic AI's goal, in FACTION_IDS order (ai.ts; only AI factions' are read). */
@@ -232,6 +243,7 @@ export class KingdomWorld {
     this.seed = config.seed | 0;
     this.map = config.map ?? RIMAROS;
     this.autoFarm = config.autoFarm === true;
+    this.difficulty = config.difficulty ?? SIM_DEFAULT_DIFFICULTY;
     this.epoch = config.epoch ?? START_DAY_OF_YEAR;
     this.rng = {
       economy: Rng.create(this.seed, Stream.Economy),
@@ -610,6 +622,11 @@ export class KingdomWorld {
   }
 
   // -- queries (read-only; for the UI, the AI and the tests) ------------------
+
+  /** K11: the numbers this realm's difficulty sets (content/kingdom/difficulty.ts). */
+  get tuning(): KingdomDifficulty {
+    return KINGDOM_DIFFICULTIES[this.difficulty];
+  }
 
   get date(): CalendarDate {
     return calendar(this.now, this.epoch);
