@@ -57,7 +57,7 @@ export const CUTSCENE = {
   beats: [
     {
       id: "realm", stage: { shot: "realm" }, seconds: 7,
-      text: "This is Rimaros as it was drawn when it was whole: eight provinces round a crown seat, and the rivers that feed them. I have kept its chronicle for twenty years, and I did not expect to write this part.",
+      text: "This is Rimaros as it was drawn when it was whole: eleven provinces round a crown seat, and the rivers that feed them. I have kept its chronicle for twenty years, and I did not expect to write this part.",
     },
     {
       id: "council", stage: { shot: "holding", holding: "rimaros", miles: 160 }, seconds: 6,

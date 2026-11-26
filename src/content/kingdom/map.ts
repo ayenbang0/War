@@ -1,7 +1,7 @@
 /**
  * The authored map of Rimaros (PLAN.md §A.3, §B.2).
  *
- * Eight provinces round the Crown Seat, plus the Farthest Reach where the king
+ * Eleven provinces round the Crown Seat, plus the Farthest Reach where the king
  * begins, plus (K3a) three wild countries nobody governs: 72 holdings joined
  * by roads (docs/PROVISIONAL.md B.12.2, the user's "twice the map"). This is the
  * campaign map; a seeded procedural graph for skirmish comes later and only has
