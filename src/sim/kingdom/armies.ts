@@ -360,6 +360,20 @@ export function removeArmy(world: KingdomWorld, a: Army, reason: ArmyGoneReason 
   for (const b of world.armies) {
     if (b.target === a.id) { clearTarget(b); b.mover.route = []; }
   }
+  // K12: and off everything else that names it. Each of these the sim already
+  // reads as "none" once the army is gone -- the next contact scan prunes a
+  // disengaged pair whose army is missing, and a captain's next day finds no
+  // host to ride with -- but until then the realm named an army not on the
+  // map, which the save rightly refuses: a realm saved the tick a host broke
+  // could neither be resumed nor sent to a peer to resynchronise. Clearing
+  // them here changes nothing the sim does, only what a save of it holds.
+  // (Filtering keeps the pairs' canonical order.)
+  for (let j = world.disengaged.length - 1; j >= 0; j--) {
+    const [x, y] = world.disengaged[j];
+    if (x === a.id || y === a.id) world.disengaged.splice(j, 1);
+  }
+  const mind = world.minds[a.owner];
+  if (mind && mind.rides === a.id) world.minds[a.owner] = { ...mind, rides: 0 };
   if (reason) world.events.push({ kind: "armyGone", army: a.id, owner: a.owner, name: a.name, reason });
   // K7: a free company destroyed in the king's service is broken for good.
   if (a.company > 0) companyArmyGone(world, a);
