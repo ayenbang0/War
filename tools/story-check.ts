@@ -29,6 +29,9 @@ import {
 } from "../src/content/story/index.ts";
 import { CHAPTERS } from "../src/content/campaign.ts";
 import { COMMANDER_IDS } from "../src/content/commanders.ts";
+import { ENCOUNTER_HOSTS } from "../src/content/story/encounter-hosts.ts";
+import { UNIT_TYPE_IDS } from "../src/content/unit-types.ts";
+import { MAX_SQUADS } from "../src/content/army.ts";
 
 let failures = 0;
 let checks = 0;
@@ -66,6 +69,11 @@ check("act I starts from nothing: no goal is already met on day one", ACTS[0].go
 check("every Marchwarden chapter is re-cast", CHAPTERS.every((c) => ENCOUNTERS.some((e) => e.chapter === c.id)), CHAPTERS.length + " chapters");
 check("every captain has a first encounter", COMMANDER_IDS.every((c) => ENCOUNTERS.some((e) => e.faction === c && e.first)));
 const crowned = ENDINGS.filter((e) => e.gate.kind === "crowned").map((e) => e.title).sort().join(", ");
+// K9: every encounter puts a host in the field (encounter-hosts.ts), of real units and an army's size.
+check("every encounter has a host, and only encounters do", ENCOUNTERS.every((e) => (ENCOUNTER_HOSTS[e.id]?.length ?? 0) > 0) &&
+  Object.keys(ENCOUNTER_HOSTS).every((id) => ENCOUNTERS.some((e) => e.id === id)));
+check("every host is of real units and fits one army", Object.values(ENCOUNTER_HOSTS).every((h) =>
+  h.length <= MAX_SQUADS && h.every((u) => (UNIT_TYPE_IDS as readonly string[]).includes(u))));
 check("three crowned endings and a failure", crowned === "The Hollow Crown, The Iron Crown, The Restored King" && ENDINGS.some((e) => e.gate.kind === "failure"), crowned);
 check("the battle recogniser has fourteen classes and the tutorial teaches each", BATTLE_GESTURE_CLASSES.length === 14 &&
   BATTLE_GESTURE_CLASSES.every((c) => TUTORIAL.some((t) => t.success.kind === "gesture" && t.success.class === c)));

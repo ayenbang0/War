@@ -20,6 +20,10 @@
  * a healthy world and are refused on load.
  */
 
+import { ENCOUNTER_STATES, type EncounterState, type StoryState } from "./story.ts";
+import { STORY_LETTERS } from "../../content/story/letters.ts";
+import { ENCOUNTERS } from "../../content/story/encounters.ts";
+import { ENDINGS } from "../../content/story/endings.ts";
 import { FNV_OFFSET, mixF64, mixU32 } from "../hash.ts";
 import type { RngState } from "../rng.ts";
 import { FACTIONS, type FactionId } from "../../content/kingdom/factions.ts";
@@ -61,7 +65,7 @@ import { roadBetween } from "./graph.ts";
 import { KINGDOM_STREAMS, KingdomWorld } from "./world.ts";
 
 export const KINGDOM_SAVE_FORMAT = "war.kingdom";
-export const KINGDOM_SAVE_VERSION = 9;
+export const KINGDOM_SAVE_VERSION = 10;
 
 export type SavedPlot = {
   id: number; crop: string | null; stage: PlotStage; progress: number; days: number; health: number;
@@ -244,8 +248,19 @@ export type KingdomSaveV9 = Omit<KingdomSaveV8, "version"> & {
   autoFarm: boolean;
 };
 
+/**
+ * Version 10 (K9): the story -- whether the realm runs one (KingdomConfig.story,
+ * which a replay needs, as `hosts`) and, if so, its whole state: the act, the
+ * flags, the letters waiting, sent and answered, the follow-ups, every
+ * encounter, the seasons held, the capital, the chronicle and the ending.
+ */
+export type KingdomSaveV10 = Omit<KingdomSaveV9, "version"> & {
+  version: 10;
+  story: StoryState | null;
+};
+
 /** The current save shape. */
-export type KingdomSave = KingdomSaveV9;
+export type KingdomSave = KingdomSaveV10;
 
 export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
 
@@ -432,7 +447,19 @@ export const MIGRATIONS: Readonly<Record<number, (save: Record<string, unknown>)
   6: migrate6to7,
   7: migrate7to8,
   8: migrate8to9,
+  9: migrate9to10,
 };
+
+/**
+ * Version 9 (ECON) -> 10 (K9): every realm saved before the story runs none
+ * (`story: null`). A story cannot be bolted onto a game already under way: its
+ * letters are triggered by the day and by what has been taken, and a log
+ * replayed with a story would answer letters it never sent. A new game starts
+ * one (docs/PROVISIONAL.md K9.12).
+ */
+function migrate9to10(save: Record<string, unknown>): Record<string, unknown> {
+  return { ...save, version: 10, story: null };
+}
 
 /**
  * Version 8 (K8) -> 9 (ECON): the old four-month calendar to the twelve-month
@@ -675,7 +702,8 @@ export function serialize(world: KingdomWorld): KingdomSave {
   const page = (d: LedgerDay | null): LedgerDay | null => (d === null ? null : { day: d.day, start: [...d.start], flow: [...d.flow] });
   return {
     format: KINGDOM_SAVE_FORMAT,
-    version: 9,
+    version: 10,
+    story: world.story === null ? null : JSON.parse(JSON.stringify(world.story)) as StoryState,
     epoch: world.epoch,
     autoFarm: world.autoFarm,
     map: world.map.id,
@@ -907,6 +935,9 @@ function readOrder(v: unknown, what: string): KingdomOrder {
         kind, holding: int(o.holding, what + ".holding"), plot: int(o.plot, what + ".plot"),
         crop: o.crop === null ? null : oneOf(o.crop, CROP_IDS, what + ".crop"), tick, player, seq,
       };
+    // K9. The letter and choice may name nothing (the sim refuses it).
+    case "answerLetter":
+      return { kind, letter: int(o.letter, what + ".letter"), choice: int(o.choice, what + ".choice"), tick, player, seq };
     default:
       return { kind: "harvest", plot: int(o.plot, what + ".plot"), tick, player, seq };
   }
@@ -1285,6 +1316,8 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
     autoFarm: bool(save.autoFarm, "autoFarm"),
     epoch: int(save.epoch, "epoch"),
   });
+  // K9: read the story before touching the world (it is checked against the map and the content tables).
+  const story = save.story === null || save.story === undefined ? null : readStory(save.story, world);
   if (str(save.mapFingerprint, "mapFingerprint") !== mapFingerprint(world)) {
     throw new Bad("save was made on a different version of the map " + mapId);
   }
@@ -1497,6 +1530,7 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
     live.finds.splice(0, live.finds.length, ...e.finds);
     live.upgrades.splice(0, live.upgrades.length, ...e.upgrades);
   });
+  world.story = story;
   world.orders.restore(pending, seqs);
   world.log.push(...log);
   if (resight) {
@@ -1530,7 +1564,7 @@ export function loadFromJson(text: string): Result<KingdomWorld> {
  */
 export function replayLog(
   seed: number, log: readonly KingdomOrder[], until: number,
-  config: { map?: KingdomWorld["map"]; kingName?: string; hosts?: boolean; captains?: boolean; autoFarm?: boolean; epoch?: number } = {},
+  config: { map?: KingdomWorld["map"]; kingName?: string; hosts?: boolean; captains?: boolean; autoFarm?: boolean; epoch?: number; story?: boolean } = {},
 ): KingdomWorld {
   const w = new KingdomWorld({ seed, ...config });
   for (const o of log) w.submit(o);
@@ -1540,4 +1574,92 @@ export function replayLog(
   // are still waiting and the realm is still held.
   while (w.contact && w.log.length < log.length && w.orders.queued().some((o) => o.tick <= w.now)) w.tick();
   return w;
+}
+
+// -- K9: the story ------------------------------------------------------------------------
+
+/** Read and check a saved story (story.ts StoryState) against the content tables and the map. */
+function readStory(v: unknown, world: KingdomWorld): StoryState {
+  const o = obj(v, "story");
+  const act = int(o.act, "story.act", 1);
+  if (act > 4) throw new Bad("story.act is not an act");
+  const letter = (n: unknown, what: string): number => {
+    const i = int(n, what);
+    if (i >= STORY_LETTERS.length) throw new Bad(what + " is not a letter");
+    return i;
+  };
+  const flags = arr(o.flags, "story.flags").map((f, i) => str(f, "story.flags[" + i + "]"));
+  const pending = arr(o.pending, "story.pending").map((n, i) => letter(n, "story.pending[" + i + "]"));
+  const sent = arr(o.sent, "story.sent").map((b, i) => bool(b, "story.sent[" + i + "]"));
+  if (sent.length !== STORY_LETTERS.length) throw new Bad("story.sent does not match the letters");
+  const answers = arr(o.answers, "story.answers").map((a, i) => {
+    const what = "story.answers[" + i + "]";
+    const ao = obj(a, what);
+    const l = letter(ao.letter, what + ".letter");
+    const choice = int(ao.choice, what + ".choice");
+    if (choice >= STORY_LETTERS[l].choices.length) throw new Bad(what + ".choice is not a choice");
+    return { letter: l, choice, day: int(ao.day, what + ".day"), failed: bool(ao.failed, what + ".failed") };
+  });
+  const followUps = arr(o.followUps, "story.followUps").map((f, i) => {
+    const fo = obj(f, "story.followUps[" + i + "]");
+    return { letter: letter(fo.letter, "story.followUps[" + i + "].letter"), day: int(fo.day, "story.followUps[" + i + "].day") };
+  });
+  const encounters = arr(o.encounters, "story.encounters").map((e, i) => {
+    const what = "story.encounters[" + i + "]";
+    const eo = obj(e, what);
+    const state = str(eo.state, what + ".state");
+    if (!(ENCOUNTER_STATES as readonly string[]).includes(state)) throw new Bad(what + ".state is not a state");
+    return { state: state as EncounterState["state"], host: int(eo.host, what + ".host"), fought: int(eo.fought, what + ".fought") };
+  });
+  if (encounters.length !== ENCOUNTERS.length) throw new Bad("story.encounters does not match the encounters");
+  const faction = (n: unknown, what: string): number => {
+    const f = int(n, what);
+    if (f >= FACTION_IDS.length) throw new Bad(what + " is not a faction");
+    return f;
+  };
+  const abilities = arr(o.abilities, "story.abilities").map((a, i) => {
+    const id = str(a, "story.abilities[" + i + "]");
+    if (!(ABILITY_IDS as readonly string[]).includes(id)) throw new Bad("story.abilities[" + i + "] is not an ability");
+    return id as AbilityId;
+  });
+  const np = world.map.provinces.length;
+  const clean = arr(o.clean, "story.clean").map((b, i) => bool(b, "story.clean[" + i + "]"));
+  const streak = arr(o.streak, "story.streak").map((n, i) => int(n, "story.streak[" + i + "]"));
+  if (clean.length !== np || streak.length !== np) throw new Bad("story's provinces do not match the map");
+  const holdingOr0 = (n: unknown, what: string): number => {
+    const id = int(n, what);
+    if (id !== 0 && !world.holding(id)) throw new Bad(what + " is not a holding");
+    return id;
+  };
+  const held = arr(o.held, "story.held").map((n, i) => holdingOr0(n, "story.held[" + i + "]"));
+  const fall = strOrNull(o.fall, "story.fall");
+  if (fall !== null && fall !== "captured" && fall !== "slain" && fall !== "capital") throw new Bad("story.fall is not a fall");
+  const ending = strOrNull(o.ending, "story.ending");
+  if (ending !== null && !ENDINGS.some((e) => e.id === ending)) throw new Bad("story.ending is not an ending");
+  const chronicle = arr(o.chronicle, "story.chronicle").map((c, i) => {
+    const what = "story.chronicle[" + i + "]";
+    const co = obj(c, what);
+    const params = arr(co.params, what + ".params").map((p, j) => {
+      const pa = arr(p, what + ".params[" + j + "]");
+      if (pa.length !== 2) throw new Bad(what + ".params[" + j + "] is not a pair");
+      return [str(pa[0], what + ".params[" + j + "][0]"), str(pa[1], what + ".params[" + j + "][1]")] as const;
+    });
+    return { day: int(co.day, what + ".day"), key: str(co.key, what + ".key"), params };
+  });
+  return {
+    act: act as StoryState["act"], flags, pending, sent, answers, followUps, encounters,
+    battlesWon: int(o.battlesWon, "story.battlesWon"),
+    beaten: arr(o.beaten, "story.beaten").map((n, i) => faction(n, "story.beaten[" + i + "]")),
+    sworn: arr(o.sworn, "story.sworn").map((n, i) => faction(n, "story.sworn[" + i + "]")),
+    abilities,
+    winters: int(o.winters, "story.winters"),
+    clean, streak, held,
+    capital: holdingOr0(o.capital, "story.capital"),
+    capitalLost: int(o.capitalLost, "story.capitalLost"),
+    kingLost: bool(o.kingLost, "story.kingLost"),
+    fall: fall as StoryState["fall"],
+    ending,
+    endedDay: int(o.endedDay, "story.endedDay"),
+    chronicle,
+  };
 }

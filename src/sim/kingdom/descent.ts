@@ -36,6 +36,8 @@
  * withdrawal would meet its enemy again on the next tick.
  */
 
+import { encounterFor, storyAbilities } from "./story.ts";
+import type { EncounterDef } from "../../content/story/encounters.ts";
 import { abs, floor, max, min, round } from "../math.ts";
 import { FACTIONS, FACTION_IDS, KING_PLAYER } from "../../content/kingdom/factions.ts";
 import { UNIT_TYPES } from "../../content/unit-types.ts";
@@ -300,11 +302,12 @@ export function militiaSquads(h: Holding, fort: Fortification): SpecSquad[] {
   return out;
 }
 
-function sideOf(world: KingdomWorld, s: ContactSide, h: Holding, fort: Fortification): BattleSide {
+function sideOf(world: KingdomWorld, s: ContactSide, h: Holding, fort: Fortification, enc: EncounterDef | null): BattleSide {
   const fid = FACTION_IDS[s.faction];
   const f = FACTIONS[fid];
-  const commander = s.faction === KING_PLAYER ? null : FACTION_BATTLE_COMMANDER[fid];
-  const difficulty = FACTION_BATTLE_DIFFICULTY[fid];
+  // K9: a story encounter is fought against ITS captain at ITS difficulty (encounters.ts).
+  const commander = s.faction === KING_PLAYER ? null : enc ? enc.commander : FACTION_BATTLE_COMMANDER[fid];
+  const difficulty = s.faction !== KING_PLAYER && enc ? enc.difficulty : FACTION_BATTLE_DIFFICULTY[fid];
   const a = armyById(world, s.army);
   if (!a) {
     return {
@@ -319,7 +322,8 @@ function sideOf(world: KingdomWorld, s: ContactSide, h: Holding, fort: Fortifica
     doctrine: a.doctrine,
     commander,
     difficulty,
-    abilities: [...a.abilities],
+    // K9: what the story taught the king's armies comes with every one of them (B.4: kingdom-earned).
+    abilities: s.faction === KING_PLAYER ? [...a.abilities, ...storyAbilities(world).filter((x) => !a.abilities.includes(x))] : [...a.abilities],
     morale: a.morale,
     squads: a.squads.map((q) => ({ squad: q.id, unit: q.unit, men: q.men, wounded: q.wounded })),
   };
@@ -332,7 +336,10 @@ function sideOf(world: KingdomWorld, s: ContactSide, h: Holding, fort: Fortifica
 export function buildBattleSpec(world: KingdomWorld, c: Contact): BattleSpec {
   const h = world.holding(c.holding) as Holding;
   const biome = BIOMES[h.biome];
-  const level = levelById(biome.level);
+  // K9: a story encounter is fought on its own battlefield (validated to fight like the holding's country).
+  const enc = encounterFor(world, c);
+  const levelId = enc ? enc.levelId : biome.level;
+  const level = levelById(levelId);
   const defender = 1 - c.attacker;
   const dArmy = armyById(world, c.sides[defender].army);
   // K8: walls are a battle effect for an army too, when it defends a walled
@@ -345,8 +352,8 @@ export function buildBattleSpec(world: KingdomWorld, c: Contact): BattleSpec {
     contact: c.id,
     // The holding's own seed: the same place always yields the same ground (docs/kingdom.md, K1).
     seed: h.seed,
-    terrain: { level: biome.level, biome: h.biome, holding: h.id, road: c.road, fortification: fort },
-    sides: [sideOf(world, c.sides[0], h, fort), sideOf(world, c.sides[1], h, fort)],
+    terrain: { level: levelId, biome: h.biome, holding: h.id, road: c.road, fortification: fort },
+    sides: [sideOf(world, c.sides[0], h, fort, enc), sideOf(world, c.sides[1], h, fort, enc)],
     deployment: {
       attacker: c.attacker,
       // Dug in (K5), or lying in wait (K8's ambush): either way it chose the ground and is ready.

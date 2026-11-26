@@ -66,6 +66,10 @@ import { DEFAULT_JUSTICE } from "../../content/kingdom/morale.ts";
 import {
   applyMercenaryOrder, checkMercenaryOrder, isMercenaryOrder, newCompanies, runMercenaryDay, type MercenaryOrderBody,
 } from "./mercenaries.ts";
+import {
+  afterContactOrder, applyAnswer, beforeContactOrder, checkAnswer, newStory, runStoryDay, storyTickEnd,
+  type AnswerLetterBody, type StoryState,
+} from "./story.ts";
 
 /** Default name of the exiled king (docs/PROVISIONAL.md A.7.3). */
 export const DEFAULT_KING_NAME = "Aldric of Rimaros";
@@ -115,6 +119,13 @@ export type KingdomConfig = {
    * calendar converts to whatever keeps its date (save.ts migrate8to9).
    */
   readonly epoch?: number;
+  /**
+   * K9: the story runs -- acts, letters, scripted encounters, the chronicle
+   * and the endings (story.ts). Off by default, so every older suite and the
+   * kingdom golden keep their realm; a new campaign turns it on and the save
+   * remembers it (docs/PROVISIONAL.md K9.1).
+   */
+  readonly story?: boolean;
 };
 
 export type KingdomRng = {
@@ -190,6 +201,8 @@ export class KingdomWorld {
   readonly burned: Burned[] = [];
   /** K8: holdings called out by a levy call, and when (for its cooldown), in the order called. */
   readonly levied: Levied[] = [];
+  /** K9: the story's state (story.ts), or null in a realm without one (KingdomConfig.story). */
+  story: StoryState | null = null;
   /** K8: the orders the AI gave on the last tick. Transient (not saved, not hashed); the tests read it. */
   aiOrders: KingdomOrder[] = [];
   /**
@@ -323,6 +336,8 @@ export class KingdomWorld {
     this.minds = FACTION_IDS.map(() => ({ goal: "consolidate", target: 0, since: 0, wave: -1, rides: 0 }));
     this.intel = FACTION_IDS.map((_, f) => newIntel(this, f));
     if (this.captains) for (const f of aiFactions()) remember(this, f);
+    // K9: the story takes no ids and no rolls at birth, so a story realm's day one is its realm's.
+    if (config.story === true) this.story = newStory(this);
     // Day one's sightings and musters are the start, not news.
     this.events = [];
   }
@@ -356,6 +371,9 @@ export class KingdomWorld {
   tick(orders: readonly KingdomOrder[] = []): KingdomEvent[] {
     for (const o of orders) this.submit(o);
     this.events = [];
+    // K9: once the chronicle has closed, the realm holds for good (an end screen is all that is left).
+    if (this.story && this.story.ending !== null) return this.events;
+    const kingArmy = this.king.army;
 
     // K5: while a contact of the king's side waits, the realm holds. The
     // orders due apply, in canonical order, until one settles the contact;
@@ -371,6 +389,7 @@ export class KingdomWorld {
         this.applyOrder(due[i]);
       }
       for (; i < due.length; i++) this.orders.push(due[i], this.now);
+      if (this.story) storyTickEnd(this, kingArmy);
       return this.events;
     }
 
@@ -392,6 +411,9 @@ export class KingdomWorld {
       // the taverns (mercenaries.ts). A company that turns does so before the
       // march, so the contact below finds it in the king's camp.
       runMercenaryDay(this);
+      // K9: the story's day -- letters, encounters, the act's goals, the endings
+      // (story.ts) -- once the day's economy, armies and companies have moved.
+      if (this.story) runStoryDay(this);
       // K3a: the realm's sight as the day begins (towers built, holdings
       // claimed); the king's is also kept up as he marches, below.
       for (let f = 0; f < FACTION_IDS.length; f++) updateSight(this, f);
@@ -417,6 +439,8 @@ export class KingdomWorld {
     detectContacts(this, marching);
     // K8: an army standing in a holding no one holds takes it, without a battle.
     if (this.captains) seizeUndefended(this);
+    // K9: the tick's happenings go into the chronicle.
+    if (this.story) storyTickEnd(this, kingArmy);
     this.now++;
     return this.events;
   }
@@ -453,7 +477,14 @@ export class KingdomWorld {
     // While the king rides with an army, marching or halting the king is
     // marching or halting that army (docs/PROVISIONAL.md K4.1).
     if (order.kind === "resolveContact") {
+      const was = beforeContactOrder(this);
       const why = applyContactOrder(this, order);
+      if (why) this.reject(order, why);
+      else afterContactOrder(this, was);
+      return;
+    }
+    if (order.kind === "answerLetter") {
+      const why = applyAnswer(this, order as KingdomOrder & AnswerLetterBody);
       if (why) this.reject(order, why);
       return;
     }
@@ -532,6 +563,7 @@ export class KingdomWorld {
   check(body: KingdomOrderBody, player: number = KING_PLAYER): string | null {
     if (body.kind === "resolveEvent") return checkResolve(this, player, body.site, body.choice);
     if (body.kind === "resolveContact") return checkContactOrder(this, body, player);
+    if (body.kind === "answerLetter") return checkAnswer(this, body, player);
     if (body.kind === "moveKing") {
       if (this.king.army !== 0) return checkArmyOrder(this, { kind: "marchArmy", army: this.king.army, to: body.to }, player);
       return targetRefusal(this, KING_PLAYER, body.to);

@@ -118,7 +118,10 @@ export type KingdomOrderBody =
    * hand only). `plot` 0 sets every field of `holding`; `holding` 0 as well
    * sets every field the king holds and the crop his later claims start with.
    */
-  | { kind: "setAutoSow"; holding: number; plot: number; crop: CropId | null };
+  | { kind: "setAutoSow"; holding: number; plot: number; crop: CropId | null }
+  // K9: the story (sim/kingdom/story.ts).
+  /** Answer a waiting story letter: pick choice `choice` (0-based) of STORY_LETTERS[letter]. */
+  | { kind: "answerLetter"; letter: number; choice: number };
   // Append new kinds; never renumber the existing ones.
 
 export type KingdomOrderKind = KingdomOrderBody["kind"];
@@ -138,6 +141,8 @@ export const KINGDOM_ORDER_KINDS: readonly KingdomOrderKind[] = [
   "callLevy", "burnFields", "ambush",
   // ECON
   "setAutoSow",
+  // K9
+  "answerLetter",
 ];
 
 /** The K6 order kinds (src/sim/kingdom/morale.ts applies them). */

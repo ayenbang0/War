@@ -17,6 +17,7 @@
  * (derived from state).
  */
 
+import { ENCOUNTER_STATES, type StoryState } from "./story.ts";
 import { FNV_OFFSET, mixF64, mixU32 } from "../hash.ts";
 import { FACTION_IDS, type FactionId } from "../../content/kingdom/factions.ts";
 import { ROAD_TERRAIN_IDS, WEATHER_IDS } from "../../content/kingdom/terrain.ts";
@@ -112,6 +113,7 @@ export function mixOrder(h: number, o: KingdomOrder): number {
     case "burnFields": return mixU32(h, o.holding);
     case "ambush": return mixU32(h, o.army);
     case "setAutoSow": return mixU32(mixU32(mixU32(h, o.holding), o.plot), o.crop === null ? 0 : CROP_IDS.indexOf(o.crop) + 1);
+    case "answerLetter": return mixU32(mixU32(h, o.letter), o.choice);
   }
 }
 
@@ -334,6 +336,9 @@ export function kingdomHash(world: KingdomWorld): string {
     for (const u of ex.upgrades) h = mixU32(h, UPGRADE_IDS.indexOf(u));
   }
 
+  // K9: the story, only in a realm that has one -- so every older realm's hash is unchanged.
+  if (world.story) h = mixStory(h, world.story);
+
   const queued = world.orders.queued();
   h = mixU32(h, queued.length);
   for (const o of queued) h = mixOrder(h, o);
@@ -350,4 +355,50 @@ export function kingdomHash(world: KingdomWorld): string {
   }
 
   return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+/** K9: every field of the story's state, in its declared order (story.ts StoryState). */
+function mixStory(h: number, s: StoryState): number {
+  h = mixU32(h, 0x57047);
+  h = mixU32(h, s.act);
+  h = mixU32(h, s.flags.length);
+  for (const f of s.flags) h = mixStr(h, f);
+  h = mixU32(h, s.pending.length);
+  for (const p of s.pending) h = mixU32(h, p);
+  h = mixU32(h, s.sent.length);
+  for (const x of s.sent) h = mixU32(h, x ? 1 : 0);
+  h = mixU32(h, s.answers.length);
+  for (const a of s.answers) { h = mixU32(h, a.letter); h = mixU32(h, a.choice); h = mixU32(h, a.day); h = mixU32(h, a.failed ? 1 : 0); }
+  h = mixU32(h, s.followUps.length);
+  for (const f of s.followUps) { h = mixU32(h, f.letter); h = mixU32(h, f.day); }
+  h = mixU32(h, s.encounters.length);
+  for (const e of s.encounters) { h = mixU32(h, ENCOUNTER_STATES.indexOf(e.state)); h = mixU32(h, e.host); h = mixU32(h, e.fought); }
+  h = mixU32(h, s.battlesWon);
+  h = mixU32(h, s.beaten.length);
+  for (const f of s.beaten) h = mixU32(h, f);
+  h = mixU32(h, s.sworn.length);
+  for (const f of s.sworn) h = mixU32(h, f);
+  h = mixU32(h, s.abilities.length);
+  for (const a of s.abilities) h = mixU32(h, ABILITY_IDS.indexOf(a));
+  h = mixU32(h, s.winters);
+  h = mixU32(h, s.clean.length);
+  for (const c of s.clean) h = mixU32(h, c ? 1 : 0);
+  h = mixU32(h, s.streak.length);
+  for (const c of s.streak) h = mixU32(h, c);
+  h = mixU32(h, s.held.length);
+  for (const x of s.held) h = mixU32(h, x);
+  h = mixU32(h, s.capital);
+  h = mixU32(h, s.capitalLost);
+  h = mixU32(h, s.kingLost ? 1 : 0);
+  h = mixStr(h, s.fall);
+  h = mixStr(h, s.ending);
+  h = mixU32(h, s.endedDay);
+  h = mixU32(h, s.chronicle.length);
+  for (const c of s.chronicle) {
+    h = mixU32(h, c.day);
+    h = mixStr(h, c.key);
+    h = mixU32(h, c.params.length);
+    for (const [k, v] of c.params) { h = mixStr(h, k); h = mixStr(h, v); }
+  }
+  return h;
 }

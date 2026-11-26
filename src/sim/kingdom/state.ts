@@ -522,7 +522,22 @@ export type KingdomEvent =
   | { kind: "levyCalled"; holding: number; army: number; men: number }
   | { kind: "fieldsBurned"; holding: number }
   /** Commons standing in a holding the king came to claim go home to it. */
-  | { kind: "commonsDispersed"; army: number; holding: number };
+  | { kind: "commonsDispersed"; army: number; holding: number }
+  // -- K9: the story (sim/kingdom/story.ts) ----------------------------------------------
+  /** A story letter is waiting for the king (index in STORY_LETTERS). */
+  | { kind: "letterArrived"; letter: number }
+  | { kind: "letterAnswered"; letter: number; choice: number; failed: boolean }
+  /** A new act of the story has begun. */
+  | { kind: "actBegan"; act: number }
+  /** A scripted encounter's host stands waiting at its holding (index in ENCOUNTERS). */
+  | { kind: "encounterArmed"; encounter: number }
+  | { kind: "encounterFought"; encounter: number; won: boolean }
+  /** The story taught the king's armies a battle ability. */
+  | { kind: "storyAbility"; ability: AbilityId }
+  /** A line was written into the chronicle (index in world.story.chronicle). */
+  | { kind: "chronicled"; index: number }
+  /** The story is over: an ending (ENDINGS id) has been reached. */
+  | { kind: "storyEnded"; ending: string };
 
 /** Why a plot changed stage, for the feed. */
 export type PlotCause = "sown" | "sprouted" | "ripened" | "harvested" | "overripe" | "weather" | "winter" | "regrew" | "foraged" | "burned"

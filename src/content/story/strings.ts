@@ -60,3 +60,13 @@ export const X = {
   unexplored: "Unexplored",
   unexploredTap: "Unexplored. A road you know leads there; march to find out what it is.",
 } as const;
+
+/** Why an `answerLetter` order is refused (sim/kingdom/story.ts checkAnswer); the letter card shows the same words. */
+export const STORY_REFUSAL = {
+  noStory: "There is no story running in this realm.",
+  notYours: "Only the king answers the king's letters.",
+  noSuchLetter: "That letter is not waiting for an answer.",
+  noSuchChoice: "That letter has no such answer.",
+  notOffered: "That answer is not open to you now.",
+  cannotPay: "The stores cannot pay for that answer.",
+} as const;

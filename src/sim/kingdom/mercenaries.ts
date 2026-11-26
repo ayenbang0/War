@@ -376,3 +376,62 @@ function companyLost(c: Company): void {
   c.bid = 0;
   c.bidDays = 0;
 }
+
+// -- K9: the story's own hiring and leaving (story.ts) ------------------------------------
+
+/**
+ * A story letter's `hire`: the company signs on where the king stands (or at
+ * his first holding if he is on a road), as a hire at a tavern would, but its
+ * fee is the letter's own `pay` effect, so nothing is debited here. Does
+ * nothing if the company is not free to sign (hired, away, broken, turned) or
+ * the king's side is at its cap of armies: a letter cannot conjure a company
+ * that is elsewhere. Returns whether it signed.
+ */
+export function storyHire(world: KingdomWorld, index: number): boolean {
+  const c = world.companies[index];
+  if (!c || (c.state !== "waiting" && c.state !== "offered")) return false;
+  const k = KING_PLAYER;
+  if (armiesOf(world, k).length >= MAX_ARMIES_PER_SIDE) return false;
+  const m = world.king.mover;
+  const at = m.road === 0 ? m.node : (ownedBy(world, k)[0]?.id ?? 0);
+  if (at === 0) return false;
+  const def = MERCENARIES[c.index];
+  const a = raiseArmy(world, k, at, def.mix);
+  a.company = c.index + 1;
+  a.name = def.name;
+  a.captain = def.captain;
+  c.state = "hired";
+  c.at = 0;
+  c.days = def.contractDays;
+  c.loyalty = def.loyalty;
+  c.army = a.id;
+  c.bid = 0;
+  c.bidDays = 0;
+  world.events.push({ kind: "companyHired", company: c.index, army: a.id, fee: 0 });
+  return true;
+}
+
+/**
+ * A story letter's `companyLeaves`: a hired company goes, by the letter's way
+ * -- its contract ends (it rides away, men and all), it deserts (the men
+ * scatter), or it defects to the crown (K7's turncoat, standing where it
+ * stood). Nothing happens to a company not in the king's pay.
+ */
+export function storyCompanyLeaves(world: KingdomWorld, index: number, how: "expired" | "deserted" | "defected"): void {
+  const c = world.companies[index];
+  if (!c || c.state !== "hired") return;
+  const a = armyById(world, c.army);
+  if (!a) return;
+  if (how === "defected") return turnCoat(world, c, a, "defected");
+  goAway(c);
+  leaveService(world, c, a, how);
+  removeArmy(world, a, how === "deserted" ? "deserted" : "expired");
+  updateSight(world, KING_PLAYER);
+}
+
+/** A story letter's `loyalty`: a hired company's loyalty moves, kept in 0..LOYALTY.max. */
+export function storyLoyalty(world: KingdomWorld, index: number, delta: number): void {
+  const c = world.companies[index];
+  if (!c || c.state !== "hired") return;
+  c.loyalty = max(0, min(LOYALTY.max, c.loyalty + delta));
+}
