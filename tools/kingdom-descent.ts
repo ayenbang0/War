@@ -454,6 +454,25 @@ section("save v5: a waiting contact survives, and the log replays");
   check("and the log replays to it", kingdomHash(replayLog(SEED, y.log, y.now, { hosts: true })) === kingdomHash(y));
 }
 
+section("a host the king had heard of, broken: the rumour goes with it");
+{
+  // Found by tools/kingdom-lockstep.ts once K10's sieges changed its course: a host riding at one of his towns is
+  // heard of (a rumour), his army breaks it outright, and until the next morning's rumours the realm named an army
+  // no longer on the map -- a state the save refuses, so the realm could not be resumed on the tick after the battle.
+  const { w, a } = hostWorld();
+  const host = w.armies[0];
+  // Setup: the king has heard of the host (as updateRumours would have, had it been riding at Rookstead).
+  w.rumours.push({ army: host.id, target: id(w, "rookstead"), from: id(w, "harrowfield"), days: 2, day: w.date.day });
+  marchToContact(w, a, id(w, "harrowfield"));
+  const c = w.contact!;
+  const won = wipedOut(buildBattleSpec(w, c), 1);
+  issue(w, { kind: "resolveContact", contact: c.id, choice: "fight", result: won });
+  check("the host is broken and off the map", !armyById(w, host.id) && w.contact === null);
+  check("and the rumour of it is forgotten that tick", !w.rumours.some((r) => r.army === host.id), JSON.stringify(w.rumours));
+  const back = loadFromJson(saveToJson(w));
+  check("the realm saves and loads the tick after", back.ok && kingdomHash(back.value) === kingdomHash(w), back.ok ? "" : back.error);
+}
+
 section("migration v4 -> v5");
 {
   const w = new KingdomWorld({ seed: SEED });

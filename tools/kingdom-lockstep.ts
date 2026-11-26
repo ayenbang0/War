@@ -23,7 +23,8 @@
  *      cannot see is a desync nobody would ever be told about), and every
  *      field of the world is either swept or set aside with a reason;
  *   4. a save -> load at any point (mid-march, with a contact waiting, with
- *      orders queued for later ticks) continues tick-identical to the world
+ *      orders queued for later ticks, with K10's walls battered or being
+ *      mended, with the keep besieged) continues tick-identical to the world
  *      that was never saved, the save carries every field, and the realm can
  *      be saved at all at the turn of every day and the tick after every
  *      contact (K12 found three states the save refused: see the checks);
@@ -37,7 +38,7 @@
 
 import {
   KingdomWorld, TICKS_PER_DAY, armiesOf, armyById, planArmyRoute, buildBattleSpec, kingdomHash, peerHash, resultFromBattle, standsIn,
-  checkContactOrder,
+  checkContactOrder, fortificationOf,
   KINGDOM_ORDER_KINDS, type Army, type Holding, type KingdomOrder, type KingdomOrderBody, type KingdomOrderKind,
 } from "../src/sim/kingdom/index.ts";
 import { offeredChoices } from "../src/sim/kingdom/story.ts";
@@ -47,7 +48,8 @@ import { hashWorld } from "../src/sim/hash.ts";
 import type { World } from "../src/sim/world.ts";
 import { battleFromSpec, battleWorld } from "../src/app/battle-config.ts";
 import { KING_PLAYER, FACTION_IDS } from "../src/content/kingdom/factions.ts";
-import { WIN_LEGITIMACY } from "../src/content/kingdom/descent.ts";
+import { WIN_LEGITIMACY, WALLS_DOWN } from "../src/content/kingdom/descent.ts";
+import { KEEP_RETREAT } from "../src/content/kingdom/invasions.ts";
 import { STORY_LETTERS, type StoryChoice } from "../src/content/story/letters.ts";
 import { DOCTRINE_IDS } from "../src/content/doctrines.ts";
 import { ABILITY_IDS } from "../src/content/abilities.ts";
@@ -124,10 +126,12 @@ type Bot = {
   splitSquad: number;
   /** The levy army on its way to stand garrison in the capital (0: none). */
   toCapital: number;
+  /** Won fields (wonResult) the leader refused: the scripted result no longer fits the battle (K10 found one). */
+  refusedWins: number;
 };
 
 function newBot(): Bot {
-  return { target: 0, stuck: 0, rallied: new Set(), contacts: 0, accepted: new Map(), issued: new Map(), battles: 0, last: new Map(), spare: 0, fight: false, walls: 0, splitSquad: 0, toCapital: 0 };
+  return { target: 0, stuck: 0, rallied: new Set(), contacts: 0, accepted: new Map(), issued: new Map(), battles: 0, last: new Map(), spare: 0, fight: false, walls: 0, splitSquad: 0, toCapital: 0, refusedWins: 0 };
 }
 
 /** Issue an order to the leader if it would be accepted now. Every issued order goes into `out`, the wire. */
@@ -242,11 +246,19 @@ function nearestFor(w: KingdomWorld, a: Army): number {
   return best;
 }
 
-/** A battle's report for a field the king's side won outright, as resultFromBattle would build it. */
+/**
+ * A battle's report for a field the king's side won outright, as resultFromBattle would build it. K10: a battle
+ * behind works (an assault, the keep, a host met at its own walls) knocks some of them down -- K10.5 refuses a result
+ * without `damage.walls` -- so a won siege reports a share of the walls battered (more when he stormed them than when
+ * he held them), never past rubble: the holdings' `walls`, their mending and the sack then turn up in the run.
+ */
 function wonResult(w: KingdomWorld): BattleResult {
   const c = w.contact!;
   const spec = buildBattleSpec(w, c);
   const king = spec.sides[0].faction === KING_PLAYER;
+  const stormed = spec.deployment.attacker === 0;
+  const walls = spec.terrain.fortification === "none" ? 0
+    : Math.min(WALLS_DOWN - spec.terrain.worn, (stormed ? 200 : 60) + 70 * (c.id % 4));
   return {
     contact: c.id, winner: 0,
     squads: [
@@ -254,7 +266,7 @@ function wonResult(w: KingdomWorld): BattleResult {
       spec.sides[1].squads.map((q) => ({ squad: q.squad, men: 0, wounded: 0 })),
     ],
     morale: [70, 0], fled: [false, true], left: [false, false],
-    damage: { crops: 10, buildings: 0 },
+    damage: { crops: 10, buildings: 0, walls },
     legitimacy: king ? WIN_LEGITIMACY : 0,
   };
 }
@@ -280,6 +292,12 @@ function settle(w: KingdomWorld, out: KingdomOrder[], bot: Bot): void {
   const kings = c.sides[0].faction === KING_PLAYER;
   if (!kings) return;
   const spec = buildBattleSpec(w, c);
+  // K10: the Crown Seat is walled in stone (K10.9), and a host met at its gates fights behind them (K10.7): a won
+  // field there is Rimaros stormed, the story's coronation, and this run is to last years. Met at its walls, his army
+  // falls back from them, as the story playthrough's kind king does before the crown-siege letter (K10.14).
+  if (c.holding === w.holdingByKey(w.map.crownSeat)!.id && c.sides[0].army !== 0 && spec.terrain.fortification !== "none") {
+    if (make(w, out, bot, { kind: "resolveContact", contact: c.id, choice: "withdraw", result: null })) return;
+  }
   if (bot.fight && c.kind === "field") {
     // A real battle on a battle World, the machine on both sides (the battle suites fight; this proves the handoff).
     const { world, fielded } = fieldOf(spec);
@@ -299,7 +317,11 @@ function settle(w: KingdomWorld, out: KingdomOrder[], bot: Bot): void {
       if (k % 4 === 1 && make(w, out, bot, { kind: "resolveContact", contact: c.id, choice: "auto", result: null })) return;
       if (k % 4 === 3 && make(w, out, bot, { kind: "resolveContact", contact: c.id, choice: "withdraw", result: null })) return;
     }
-    make(w, out, bot, { kind: "resolveContact", contact: c.id, choice: "fight", result: wonResult(w) });
+    if (make(w, out, bot, { kind: "resolveContact", contact: c.id, choice: "fight", result: wonResult(w) })) return;
+    // A result the sim refuses is the tool's bug, not the realm's: say so (run() fails on a contact nothing settles)
+    // rather than hold the realm on it, and let it be resolved for him.
+    bot.refusedWins++;
+    make(w, out, bot, { kind: "resolveContact", contact: c.id, choice: "auto", result: null });
     return;
   }
   if (c.kind === "assault" && c.sides[0].army === 0 && c.holding !== w.story!.capital) {
@@ -492,6 +514,9 @@ function steward(w: KingdomWorld, out: KingdomOrder[], bot: Bot): void {
     }
     if (built) break;
   }
+  // K10: walls a siege knocked down are mended (the city view's wall lot) the day there is coin for it -- the first
+  // battered town of his in holding order, one a day, so the masons' work and the walls' damage are both in the run.
+  for (const h of mine) if (h.walls > 0 && issue({ kind: "repairWalls", holding: h.id })) break;
   for (const h of mine) {
     if (h.unrest >= 450 && issue({ kind: "pardon", holding: h.id })) continue;
     if (h.unrest >= 350) issue({ kind: "holdFestival", holding: h.id });
@@ -680,6 +705,9 @@ type Session = {
   /** Ticks spent with a contact waiting (the held realm). */
   held: number;
   contactsSeen: number;
+  /** The contact the realm is held on and for how many held ticks (run() stops a realm held for ever). */
+  stuckOn: number;
+  stuckTicks: number;
 };
 
 function follower(name: string, w: KingdomWorld, deliver: Follower["deliver"]): Follower {
@@ -716,6 +744,12 @@ function run(s: Session, days: number, delay = 0): void {
     if (w.contact) {
       s.held++;
       settle(w, batch, s.bot);
+      // A held realm does not move its clock: a contact the bot cannot settle would hold it forever (K10's sieges did
+      // exactly that to this run, refusing its won fields while it retried them), so `npm test` would never end.
+      // The held ticks of one contact are counted and the run stops at two hundred, loudly.
+      if (w.contact.id === s.stuckOn) s.stuckTicks++;
+      else { s.stuckOn = w.contact.id; s.stuckTicks = 1; }
+      if (s.stuckTicks > 200) throw new Error("contact " + w.contact.id + " (" + w.contact.kind + ") held for " + s.stuckTicks + " ticks: nothing the bot sends settles it");
     } else if (w.now % TICKS_PER_DAY === 1) {
       const raw: KingdomOrder[] = [];
       decide(w, raw, s.bot);
@@ -766,7 +800,7 @@ function run(s: Session, days: number, delay = 0): void {
 }
 
 function newSession(): Session {
-  return { leader: new KingdomWorld({ seed: SEED, ...CONFIG }), bot: newBot(), followers: [], retired: [], wire: [], ticks: 0, held: 0, contactsSeen: 0 };
+  return { leader: new KingdomWorld({ seed: SEED, ...CONFIG }), bot: newBot(), followers: [], retired: [], wire: [], ticks: 0, held: 0, contactsSeen: 0, stuckOn: 0, stuckTicks: 0 };
 }
 
 // -- the state sweep ------------------------------------------------------------------------------
@@ -848,7 +882,7 @@ function leaves(w: KingdomWorld): Leaf[] {
   return out;
 }
 
-type SweepReport = { leaves: number; blind: Set<string>; asInts: Set<string>; fractional: Set<string> };
+type SweepReport = { leaves: number; blind: Set<string>; asInts: Set<string>; fractional: Set<string>; patterns: Set<string> };
 
 function sweep(w: KingdomWorld, into: SweepReport): void {
   const base = kingdomHash(w);
@@ -871,6 +905,7 @@ function sweep(w: KingdomWorld, into: SweepReport): void {
     const [, pattern = leaf.path] = leaf.path.split("\u0000");
     const v = leaf.get();
     into.leaves++;
+    into.patterns.add(pattern);
     let seen = false;
     if (typeof v === "number") {
       leaf.set(v + 0.0001);
@@ -912,7 +947,7 @@ const net = wire(0x5eed);
 main.followers.push(follower("in order", new KingdomWorld({ seed: SEED, ...CONFIG }), inOrder));
 main.followers.push(follower("shuffled within the tick", new KingdomWorld({ seed: SEED, ...CONFIG }),
   (batch, now) => shuffled(batch, net).map((order) => ({ at: now, order }))));
-const sweepReport: SweepReport = { leaves: 0, blind: new Set(), asInts: new Set(), fractional: new Set() };
+const sweepReport: SweepReport = { leaves: 0, blind: new Set(), asInts: new Set(), fractional: new Set(), patterns: new Set() };
 const saves: string[] = [];
 let savedInContact = false;
 let nudge: { caught: number; clean: boolean; fields: string[] } | null = null;
@@ -922,9 +957,8 @@ main.before = (s, batch) => {
   const first = w.now % TICKS_PER_DAY === 0;
   // 4: a save -> load joins the run as one more follower: mid-season every season, and the first time a contact waits.
   const atContact = w.contact !== null && !savedInContact;
-  if ((first && day % 90 === 47) || atContact) {
-    if (atContact) savedInContact = true;
-    const f = loadedFollower("loaded day " + day + (atContact ? " (contact waiting)" : ""), w);
+  const load = (why: string): void => {
+    const f = loadedFollower("loaded day " + day + why, w);
     // Two months on is long enough to prove a loaded world carries on: a season's turn, a muster, the AI's goals.
     f.until = w.now + 60 * TICKS_PER_DAY;
     s.followers.push(f);
@@ -933,7 +967,34 @@ main.before = (s, batch) => {
     if (JSON.stringify(stateRoots(f.w)) !== JSON.stringify(stateRoots(w))) {
       saveMismatch.push(day + ": " + firstDifference(stateRoots(f.w), stateRoots(w)));
     }
+  };
+  if ((first && day % 90 === 47) || atContact) {
+    if (atContact) savedInContact = true;
+    load(atContact ? " (contact waiting)" : "");
   }
+  // K10: every siege the run meets is counted (a battle behind works: an assault, the keep, a host at its own walls),
+  // and the first walls battered and the first masons at work are saved and loaded mid-run, and swept there.
+  if (w.contact && w.contact.id !== siege.last) {
+    siege.last = w.contact.id;
+    const fort = buildBattleSpec(w, w.contact).terrain.fortification;
+    if (fort !== "none") { siege.contacts++; siege.kinds.add(w.contact.kind + " behind " + fort); }
+  }
+  const battered = w.holdings.find((h) => h.walls > 0 && h.mend < h.walls);
+  if (battered && !siege.battered) {
+    siege.battered = battered.name + " " + battered.walls + "‰ down, day " + day;
+    load(" (walls battered at " + battered.name + ")");
+    sweep(w, sweepReport);
+    siege.nudged.push(...k10Nudges(w, battered, "walls"));
+  }
+  const mending = w.holdings.find((h) => h.mend > 0);
+  if (mending && !siege.mending) {
+    siege.mending = mending.name + " " + mending.mend + "‰ being mended, day " + day;
+    load(" (masons at work at " + mending.name + ")");
+    sweep(w, sweepReport);
+    siege.nudged.push(...k10Nudges(w, mending, "mend"));
+  }
+  // K10: a retreat to the keep -- on a fork, so the main run is untouched (see keepFork).
+  if (w.contact && keepFork === null) keepFork = keepRetreat(w);
   // 4: the realm saves and loads the tick after every contact is settled (K12 found an outright win leaving the
   // fallen host named in the disengaged pairs, which the save refuses).
   if (!w.contact && hadContact) {
@@ -957,6 +1018,85 @@ main.before = (s, batch) => {
 };
 const saveMismatch: string[] = [];
 let patrolFork: string | null = null;
+let keepFork: string | null = null;
+/** K10's sieges in the main run: siege contacts and their kinds, the first walls battered and mended, nudges seen. */
+const siege = { last: 0, contacts: 0, kinds: new Set<string>(), battered: "", mending: "", nudged: [] as { name: string; seen: boolean }[] };
+
+/**
+ * K10's two wall numbers on a holding where they are not zero, nudged by
+ * 0.0001 one at a time (the sweep may pick other holdings of the list): each
+ * must be seen by the hash, which mixes them only when there is damage.
+ */
+function k10Nudges(w: KingdomWorld, h: Holding, which: "walls" | "mend"): { name: string; seen: boolean }[] {
+  const base = kingdomHash(w);
+  const out: { name: string; seen: boolean }[] = [];
+  for (const k of which === "walls" ? (["walls"] as const) : (["walls", "mend"] as const)) {
+    const v = h[k];
+    h[k] = v + 0.0001;
+    out.push({ name: h.name + "'s " + k + " (" + v + ")", seen: kingdomHash(w) !== base });
+    h[k] = v;
+  }
+  return out;
+}
+
+/**
+ * K10's retreat to the keep, on a fork of the leader at the first assault on
+ * the king's townsmen alone (the main run's bot opens the gates or fights
+ * there; its towns have palisades, and a keep needs stone). The fork's town is
+ * given a stone wall over its palisade if it has none (as the build order
+ * would), its townsmen
+ * fall back to the keep, and with the siege of the keep waiting -- a contact
+ * marked `keep`, the town outside sacked -- the fork is swept (contact.keep
+ * among the leaves) and saved; the save must load as the same realm, and both
+ * settle the keep's siege the same way (resolved for him, which batters the
+ * keep's walls, K10.10) and carry on identical. Null until such a contact comes.
+ */
+function keepRetreat(w: KingdomWorld): string | null {
+  const c = w.contact!;
+  if (c.kind !== "assault" || c.sides[0].faction !== KING_PLAYER || c.sides[0].army !== 0) return null;
+  const fork = loadFromJson(saveToJson(w));
+  if (!fork.ok) return "the fork did not load: " + fork.error;
+  const f = fork.value;
+  // The leader has already queued its own settling of this contact (settle runs before the hook): not on the fork.
+  f.orders.restore(f.orders.queued().filter((o) => o.kind !== "resolveContact"), f.orders.sequences());
+  const h = f.holding(c.holding)!;
+  if (!KEEP_RETREAT.needs.includes(fortificationOf(h))) {
+    // A stone wall is built over the palisade, in its slot (content: `upgrades`), else in an empty one.
+    const slot = h.buildings.includes("palisade") ? h.buildings.indexOf("palisade") : h.buildings.indexOf(null);
+    if (slot < 0) return "no room for a stone wall at " + h.name;
+    h.buildings[slot] = "wall";
+    h.works[slot] = 0;
+    h.walls = 0;
+    h.mend = 0;
+  }
+  const keep = { kind: "resolveContact", contact: c.id, choice: "keep", result: null } as const;
+  const why = checkContactOrder(f, keep, KING_PLAYER);
+  if (why !== null) return "the keep was refused: " + why;
+  f.issue(keep);
+  f.tick();
+  const k = f.contact;
+  if (!k || !k.keep) return "no siege of the keep waits after the retreat";
+  const spec = buildBattleSpec(f, k);
+  if (spec.terrain.fortification !== "keep" || spec.victory.mode !== "breakthrough") return "the keep's battle is not a siege of the keep: " + spec.terrain.fortification;
+  sweep(f, sweepReport);
+  const back = loadFromJson(saveToJson(f));
+  if (!back.ok) return "a realm with the keep besieged does not save: " + back.error;
+  const b = back.value;
+  if (!b.contact?.keep || kingdomHash(b) !== kingdomHash(f)) return "the save lost the siege of the keep";
+  if (JSON.stringify(stateRoots(b)) !== JSON.stringify(stateRoots(f))) return "the save differs: " + firstDifference(stateRoots(b), stateRoots(f));
+  const o = f.issue({ kind: "resolveContact", contact: k.id, choice: "auto", result: null });
+  b.submit(o);
+  f.tick();
+  b.tick();
+  if (f.contact) return "the keep's siege was not settled";
+  for (let i = 0; i < 10 * TICKS_PER_DAY; i++) {
+    f.tick();
+    b.tick();
+    if (kingdomHash(f) !== kingdomHash(b)) return "the loaded fork diverged after the keep's siege";
+  }
+  const after = f.holding(c.holding)!;
+  return "ok: the keep of " + h.name + " besieged on day " + w.date.day + ", " + (after.owner === "king" ? "held" : "fell") + ", its walls " + after.walls + "‰ down after";
+}
 let hadContact = false;
 const afterContact = { n: 0, bad: [] as string[] };
 const daily = { n: 0, bad: [] as string[] };
@@ -1075,6 +1215,11 @@ check("every order kind but the hand harvest was applied at least once", mustApp
 const contactChoices = new Set(main.wire.filter((o) => o.kind === "resolveContact").map((o) => (o as { choice: string }).choice));
 check("descent results of several kinds went over the wire", contactChoices.has("fight") && contactChoices.has("auto") && contactChoices.size >= 3,
   [...contactChoices].join(", "));
+check("the scripted king's won fields all fit their battles (K10: a siege's result says what it did to the walls)", main.bot.refusedWins === 0,
+  main.bot.refusedWins + " refused");
+check("the run met K10's sieges: battles behind works, walls battered, masons at work",
+  siege.contacts > 0 && siege.battered !== "" && siege.mending !== "",
+  siege.contacts + " sieges (" + [...siege.kinds].join(", ") + "); " + (siege.battered || "no walls battered") + "; " + (siege.mending || "nothing mended"));
 check("the king's log is the wire (every order the leader applied was sent)",
   L.log.every((o) => main.wire.some((x) => x.player === o.player && x.seq === o.seq)), L.log.length + " logged");
 
@@ -1151,6 +1296,13 @@ section("3. the detector detects");
   check("a 0.0001 nudge is seen in every numeric field, the integer ones included", sweepReport.asInts.size === 0,
     "seen only at +1: " + [...sweepReport.asInts].slice(0, 8).join(", "));
   check("every field hashed as an integer held an integer", sweepReport.fractional.size === 0, [...sweepReport.fractional].slice(0, 8).join(", "));
+  // K10's kingdom state: a holding's walls and their mending, and the keep's siege waiting (swept on the keep fork).
+  // A gate is battle state (terrain, mixed by the battle's hashWorld): section 5 swings one mid-battle.
+  const k10 = ["holdings[].walls", "holdings[].mend", "contact.keep"];
+  check("the sweep reached K10's state (walls, mending, the keep)", k10.every((p) => sweepReport.patterns.has(p)),
+    "never nudged: " + k10.filter((p) => !sweepReport.patterns.has(p)).join(", "));
+  check("a 0.0001 nudge to battered walls and to their mending is seen", siege.nudged.length >= 3 && siege.nudged.every((x) => x.seen),
+    siege.nudged.map((x) => x.name + (x.seen ? "" : " UNSEEN")).join(", ") || "never battered");
 }
 
 section("4. save -> load, then on");
@@ -1167,6 +1319,10 @@ section("4. save -> load, then on");
     daily.bad.length ? daily.bad.length + " of " + daily.n + " refused, " + daily.bad.slice(0, 2).join("; ") : daily.n + " days");
   check("an army that falls back drops its patrol, and the realm saves and loads after", patrolFork !== null && patrolFork.startsWith("ok"),
     patrolFork ?? "no field contact of his army came");
+  check("saved and loaded with walls battered and with masons at work", saves.some((x) => x.includes("battered")) && saves.some((x) => x.includes("masons")),
+    saves.filter((x) => /battered|masons/.test(x)).join("; ") || "neither came");
+  check("a retreat to the keep: swept, saved and loaded with its siege waiting, settled alike after", keepFork !== null && keepFork.startsWith("ok"),
+    keepFork ?? "no assault on his townsmen came");
 }
 
 // -- 5: the layer hash with a battle in progress -------------------------------------------------
@@ -1203,7 +1359,21 @@ section("5. the layer hash, a battle in progress");
     let t = 0;
     const kA = kingdomHash(w);
     const kB = kingdomHash(b);
+    // K10: behind works (this field is fought at the Boar's palisade, K10.7) the side holding the walls swings its
+    // gates open and shut again -- the one order the battle AI never gives (K10.15) -- on all three peers alike.
+    const walled = specA.terrain.fortification !== "none";
+    const holder = 1 - specA.deployment.attacker;
+    let swung = "";
+    const swing = (open: boolean): void => {
+      const o = fa.world.orders.issue({ kind: "gates", open }, holder, fa.world.tick);
+      fb.world.orders.push(o);
+      fc.world.orders.push(o);
+    };
     for (; t < cap && !fa.world.outcome; t++) {
+      if (walled && t === 100) swing(true);
+      if (walled && t === 101) swung += fa.world.gatesOpen(holder) ? "opened" : "stayed shut";
+      if (walled && t === 600) swing(false);
+      if (walled && t === 601) swung += fa.world.gatesOpen(holder) ? ", held open" : ", shut again";
       fa.world.step();
       fb.world.step();
       fc.world.step();
@@ -1223,6 +1393,8 @@ section("5. the layer hash, a battle in progress");
     while (!fb.world.outcome && fb.world.tick < fa.world.tick) fb.world.step();
     check("the layer hash agrees through the battle", diverged < 0 && compared > 10,
       diverged >= 0 ? "diverged at battle tick " + diverged : compared + " comparisons over " + t + " battle ticks, outcome " + JSON.stringify(fa.world.outcome?.winner ?? null));
+    check("behind works, the walls' holder swings its gates on both peers (K10)", !walled || swung.startsWith("opened"),
+      walled ? specA.terrain.fortification + ", side " + holder + ": " + swung : "no works on this field");
     check("a 0.0001 nudge to a soldier is caught and blamed on the battle layer", caught >= 0 && attributed === "battle",
       caught >= 0 ? "caught at battle tick " + caught + ", drift: " + attributed : "never caught");
     const rA = resultFromBattle(specA, fa.world, fa.fielded);

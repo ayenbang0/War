@@ -374,6 +374,11 @@ export function removeArmy(world: KingdomWorld, a: Army, reason: ArmyGoneReason 
   }
   const mind = world.minds[a.owner];
   if (mind && mind.rides === a.id) world.minds[a.owner] = { ...mind, rides: 0 };
+  // K10 found one more (the lockstep run, once K10's sieges changed its course):
+  // a rumour of a host the king's army broke lingered until the next morning's
+  // updateRumours, which forgets a rumour whose host is gone -- the same state
+  // the save refuses ("a rumour of an army that is not on the map").
+  for (let j = world.rumours.length - 1; j >= 0; j--) if (world.rumours[j].army === a.id) world.rumours.splice(j, 1);
   if (reason) world.events.push({ kind: "armyGone", army: a.id, owner: a.owner, name: a.name, reason });
   // K7: a free company destroyed in the king's service is broken for good.
   if (a.company > 0) companyArmyGone(world, a);

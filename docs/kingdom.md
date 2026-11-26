@@ -1677,10 +1677,34 @@ result, auto, withdraw).
   desync on 279 of 5 787 ticks of the delayed run) though nothing has
   diverged.
 
+### After K10: the run that never ended
+K12 was written against the realm before K10's sieges. Merged with K10, its
+first section ran for over 18 minutes without finishing, so `npm test` (and
+the Pages deploy behind it) never completed. Not a battle running to its cap:
+the scripted king's won-field result had no `damage.walls`, which K10.5
+refuses; on day 243 his army met the Boar's host at Boarsden's palisade -- a
+field fought behind works since K10.7 -- the leader refused the result, the
+bot sent it again on the next held tick, and the held realm (whose clock does
+not move) waited on it for ever. Fixed in the tool (K12.10): a won siege says
+what it battered, a refused win falls back to "resolve for me" and fails the
+run, and a contact held 200 ticks unsettled stops it with an error. The bot
+also withdraws from the Crown Seat's walls, so the run still lasts four years
+rather than ending in a coronation on day 1 419.
+
+With K10's course the run met one more state the save refused: a rumour of a
+host the king's army had just broken (`removeArmy` now forgets it, K12.12;
+regression in `tools/kingdom-descent.ts`). And it now covers K10's state
+(K12.11): 15 sieges in the run (fields and assaults behind palisades, a field
+at Rimaros's stone walls), saves and sweeps with walls battered and with
+masons at work, every `repairWalls` among the 36 order kinds, the keep's
+siege on a fork (swept, saved and loaded waiting, settled alike), and a gate
+swung open and shut mid-battle on all three battle peers. 45 checks, about a
+minute; the whole `npm test` about four minutes.
+
 ### Files
 - `tools/kingdom-lockstep.ts` -- the proof (new; in `npm test`, about a minute).
 - `src/sim/kingdom/hash.ts` -- `peerHash`, `KingdomHashOptions`, the integer guard.
-- `src/sim/kingdom/armies.ts` -- `removeArmy` clears the disengaged pairs and the captain's ride.
+- `src/sim/kingdom/armies.ts` -- `removeArmy` clears the disengaged pairs, the captain's ride and (after K10) the army's rumours.
 - `src/sim/kingdom/descent.ts` -- `fallBack` through `setPosture`; `settled` checks both armies.
 
 ### Determinism and the golden
