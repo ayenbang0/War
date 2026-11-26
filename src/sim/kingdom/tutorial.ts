@@ -41,7 +41,7 @@ export const LESSON_PLACES = { camp: "cold-hearth", hamlet: "greyshaw", keep: "r
 export const LESSON_LETTER = "first-follower";
 
 /** The stores the practice king starts with besides the usual: enough to build, sow and raise in every lesson. */
-export const LESSON_STORES = { coin: 300, grain: 400, timber: 120, iron: 40, levy: 0 } as const;
+export const LESSON_STORES = { coin: 300, grain: 60, timber: 120, iron: 40, levy: 0 } as const;
 
 /** The enemy whose host stands in the armies lesson (at Greyshaw), to be intercepted and fought. */
 export const LESSON_ENEMY = "boar";
