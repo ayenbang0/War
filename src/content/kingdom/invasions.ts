@@ -38,6 +38,13 @@ export const CAPTAIN_START_LEGITIMACY = 40;
 /** Works standing in every seat on day one, in the order they take its free slots. */
 export const SEAT_WORKS: readonly BuildingId[] = ["barracks", "palisade", "granary"];
 
+/**
+ * K10: works raised over the seat works at the Crown Seat, each over the work
+ * it upgrades (buildings.ts): Rimaros is walled in stone, so taking it back
+ * is a siege (docs/PROVISIONAL.md K10.8).
+ */
+export const CROWN_SEAT_WORKS: readonly BuildingId[] = ["wall"];
+
 /** The garrison every seat starts with: an army in the hold posture that stands as its garrison. */
 export const SEAT_GARRISON: readonly UnitTypeId[] = ["line", "archer"];
 
@@ -191,8 +198,8 @@ export const AMBUSHED_NERVE = 0.8;
 
 /**
  * Retreat to the keep: the townsmen give up the town and hold the keep, which
- * forces a siege. Real sieges are K10's; until then it is auto-resolved as a
- * fight behind the strongest walls, and the town outside is sacked (its
+ * forces a siege -- from K10 a real one, fought behind the keep's two courses
+ * of stone (descent.ts keepSiege) -- and the town outside is sacked (its
  * crops lost, its people's unrest raised).
  */
 export const KEEP_RETREAT = {

@@ -21,6 +21,8 @@ export const INVASION_REFUSAL = {
   // The defender's choices (KD-05).
   yieldOnlyWalls: "only townsmen behind their walls can open the gates",
   noKeep: (name: string) => name + " has no keep or stone wall to retreat behind",
+  // K10.
+  inKeep: (name: string) => "the townsmen of " + name + " are already in the keep",
 } as const;
 
 /** The rumour card. */
@@ -59,7 +61,7 @@ export const DEFEND = {
   yield: "Open the gates",
   yieldHint: (legitimacy: number) => "Yield the town without a fight. No one dies; legitimacy -" + legitimacy + ".",
   keep: "Retreat to the keep",
-  keepHint: "Give up the town and hold the keep. A siege follows (it is resolved for you for now); the town outside is sacked.",
+  keepHint: "Give up the town and hold the keep. The town outside is sacked; the siege of the keep is fought next.",
 } as const;
 
 /** The feed. */
@@ -71,6 +73,11 @@ export const INVASION_FEED = {
   ambush: (army: string) => "The " + army + " lies in wait.",
   seized: (p: { place: string; by: string }) => p.place + " is taken by " + p.by + ": there was no one to hold it.",
   yielded: (p: { place: string; by: string }) => p.place + " opens its gates to " + p.by + ".",
+  // K10
+  keepRetreat: (place: string) => "The townsmen of " + place + " fall back to the keep; the town outside is sacked.",
+  wallsDamaged: (p: { place: string; pct: number }) => "The walls of " + p.place + " are " + p.pct + "% down after the siege.",
+  wallsMending: (place: string) => "Masons are at work on the walls of " + place + ".",
+  wallsMended: (place: string) => "The walls of " + place + " are whole again.",
   siege: (p: { place: string; held: boolean }) => p.held ? "The keep of " + p.place + " holds." : "The keep of " + p.place + " falls.",
   wave: (theirs: string) => "It is said " + theirs + " has called its men to arms.",
 } as const;

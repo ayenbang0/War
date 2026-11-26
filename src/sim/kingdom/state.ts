@@ -115,6 +115,16 @@ export type Holding = {
   festival: number;
   /** K6: 1 + the absolute season (morale.ts seasonIndex) of the last pardon here; 0 = never. One a season. */
   pardoned: number;
+  /**
+   * K10: damage to the holding's walls, per mille of their strength
+   * (0..WALLS_DOWN). Written by a siege battle's result (BattleResult
+   * `damage.walls`); a siege here raises its works already that battered.
+   * At WALLS_DOWN the walls are down: the holding counts as unwalled until
+   * they are mended. Mended in the city view (`repairWalls`).
+   */
+  walls: number;
+  /** K10: per mille of `walls` already paid for and being mended, at WALL_REPAIR.perDay a day. */
+  mend: number;
 };
 
 /**
@@ -356,6 +366,13 @@ export type Contact = {
   readonly road: number;
   /** Kingdom tick it happened on. */
   readonly tick: number;
+  /**
+   * K10: the townsmen have given up the town and hold the keep (the
+   * `keep` choice). The contact still waits: the siege of the keep is then a
+   * real battle, fought or resolved like any other. Absent for every other
+   * contact (and for every contact of a save before v11).
+   */
+  readonly keep?: true;
 };
 
 /** One army's day, for the feed and the tests. */
@@ -517,8 +534,17 @@ export type KingdomEvent =
   | { kind: "seized"; holding: number; faction: number; from: number }
   /** The townsmen opened the gates (the defender's "yield"). */
   | { kind: "yielded"; holding: number; faction: number }
-  /** A retreat to the keep was besieged (auto-resolved until K10): did the keep hold? */
+  /** A retreat to the keep was besieged (a real siege from K10): did the keep hold? */
   | { kind: "siege"; holding: number; held: boolean }
+  // -- K10: sieges ------------------------------------------------------------------------
+  /** The townsmen gave up the town and went into the keep; the siege is still to be fought. */
+  | { kind: "keepRetreat"; holding: number }
+  /** A battle battered a holding's walls: per mille added, and where they stand now. */
+  | { kind: "wallsDamaged"; holding: number; by: number; walls: number }
+  /** A lord paid to mend a holding's walls. */
+  | { kind: "wallsRepairing"; holding: number; faction: number }
+  /** A holding's walls are whole again. */
+  | { kind: "wallsMended"; holding: number }
   | { kind: "levyCalled"; holding: number; army: number; men: number }
   | { kind: "fieldsBurned"; holding: number }
   /** Commons standing in a holding the king came to claim go home to it. */

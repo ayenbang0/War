@@ -24,6 +24,7 @@ export const terrainFill: Record<number, string> = {
   12: "#9a7c55", // palisade: raw timber
   13: "#c4b69a", // rubble: broken stone spilt over the plain, passable
   14: "#cfc29f", // clearing: stumps and ash where a wood was
+  15: "#b8a07a", // open gate (K10): the paved arch with its leaves swung back
 };
 
 // -- palette roles (audit RF-01, RF-02) -----------------------------------------

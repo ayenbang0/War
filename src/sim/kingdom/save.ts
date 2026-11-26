@@ -44,7 +44,7 @@ import {
   PLOT_CAUSES, type PlotCause, type PlotStage, type Rumour,
 } from "./state.ts";
 import { INVASION_WAVES } from "../../content/kingdom/invasions.ts";
-import { FORTIFICATIONS } from "../../content/kingdom/descent.ts";
+import { FORTIFICATIONS, WALLS_DOWN } from "../../content/kingdom/descent.ts";
 import { COMPANY_STATES, LOYALTY, MERCENARIES, type CompanyState } from "../../content/kingdom/mercenaries.ts";
 import { UNIT_TYPES, UNIT_TYPE_IDS, type UnitTypeId } from "../../content/unit-types.ts";
 import { DOCTRINE_IDS, type DoctrineId } from "../../content/doctrines.ts";
@@ -65,7 +65,7 @@ import { roadBetween } from "./graph.ts";
 import { KINGDOM_STREAMS, KingdomWorld } from "./world.ts";
 
 export const KINGDOM_SAVE_FORMAT = "war.kingdom";
-export const KINGDOM_SAVE_VERSION = 10;
+export const KINGDOM_SAVE_VERSION = 11;
 
 export type SavedPlot = {
   id: number; crop: string | null; stage: PlotStage; progress: number; days: number; health: number;
@@ -91,6 +91,9 @@ export type SavedHolding = {
   justice: JusticeId;
   festival: number;
   pardoned: number;
+  /** K10 (v11): wall damage and the share of it paid to mend, per mille. */
+  walls: number;
+  mend: number;
 };
 export type SavedSquad = { id: number; unit: UnitTypeId; men: number; wounded: number; levy: boolean };
 export type SavedArmy = {
@@ -259,8 +262,18 @@ export type KingdomSaveV10 = Omit<KingdomSaveV9, "version"> & {
   story: StoryState | null;
 };
 
+/**
+ * Version 11 (K10): sieges. Every holding's wall damage and what of it is
+ * paid to mend (`walls`, `mend`); a waiting contact may be marked `keep`
+ * (the townsmen hold the keep, its siege still to fight); a battle result's
+ * damage carries `walls`.
+ */
+export type KingdomSaveV11 = Omit<KingdomSaveV10, "version"> & {
+  version: 11;
+};
+
 /** The current save shape. */
-export type KingdomSave = KingdomSaveV10;
+export type KingdomSave = KingdomSaveV11;
 
 export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
 
@@ -448,7 +461,31 @@ export const MIGRATIONS: Readonly<Record<number, (save: Record<string, unknown>)
   7: migrate7to8,
   8: migrate8to9,
   9: migrate9to10,
+  10: migrate10to11,
 };
+
+/**
+ * Version 10 (K9) -> 11 (K10). Before K10 no battle battered a holding's
+ * walls (sieges were auto-resolved or fought on open ground) and no townsmen
+ * waited in a keep (the keep's siege was settled the moment they went in):
+ * every holding's walls are whole, nothing is being mended, and every battle
+ * result in the log and the queue knocked down no wall. Adds no order and
+ * moves no state, so a v10 realm replays and hashes as it did.
+ */
+function migrate10to11(save: Record<string, unknown>): Record<string, unknown> {
+  const snap = { ...(save.snapshot as Record<string, unknown>) };
+  snap.holdings = (snap.holdings as Record<string, unknown>[]).map((h) => ({ ...h, walls: 0, mend: 0 }));
+  const withWalls = (orders: unknown): unknown => Array.isArray(orders)
+    ? orders.map((o) => {
+      const r = (o as { result?: unknown }).result;
+      if (!r || typeof r !== "object") return o;
+      const rr = r as Record<string, unknown>;
+      return { ...(o as Record<string, unknown>), result: { ...rr, damage: { ...(rr.damage as Record<string, unknown>), walls: 0 } } };
+    })
+    : orders;
+  if ("pending" in snap) snap.pending = withWalls(snap.pending);
+  return { ...save, version: 11, snapshot: snap, log: withWalls(save.log) };
+}
 
 /**
  * Version 9 (ECON) -> 10 (K9): every realm saved before the story runs none
@@ -702,7 +739,7 @@ export function serialize(world: KingdomWorld): KingdomSave {
   const page = (d: LedgerDay | null): LedgerDay | null => (d === null ? null : { day: d.day, start: [...d.start], flow: [...d.flow] });
   return {
     format: KINGDOM_SAVE_FORMAT,
-    version: 10,
+    version: 11,
     story: world.story === null ? null : JSON.parse(JSON.stringify(world.story)) as StoryState,
     epoch: world.epoch,
     autoFarm: world.autoFarm,
@@ -740,6 +777,8 @@ export function serialize(world: KingdomWorld): KingdomSave {
         justice: h.justice,
         festival: h.festival,
         pardoned: h.pardoned,
+        walls: h.walls,
+        mend: h.mend,
       })),
       king: {
         id: world.king.id, companions: [...world.king.companions], mover: cloneMover(world.king.mover),
@@ -816,6 +855,18 @@ function int(v: unknown, what: string, lo = 0): number {
   return n;
 }
 /** K6: unrest in permille, 0..UNREST_MAX. */
+/** K10: wall damage, 0..WALLS_DOWN per mille. */
+function wallsOf(v: unknown, what: string): number {
+  const n = int(v, what);
+  if (n > WALLS_DOWN) throw new Bad(what + " is over " + WALLS_DOWN);
+  return n;
+}
+/** K10: mending paid for, never more than the damage standing. */
+function mendOf(v: unknown, walls: unknown, what: string): number {
+  const n = wallsOf(v, what);
+  if (n > wallsOf(walls, what)) throw new Bad(what + " is more than the walls' damage");
+  return n;
+}
 function unrestOf(v: unknown, what: string): number {
   const n = int(v, what);
   if (n > UNREST_MAX) throw new Bad(what + " is over " + UNREST_MAX);
@@ -938,6 +989,9 @@ function readOrder(v: unknown, what: string): KingdomOrder {
     // K9. The letter and choice may name nothing (the sim refuses it).
     case "answerLetter":
       return { kind, letter: int(o.letter, what + ".letter"), choice: int(o.choice, what + ".choice"), tick, player, seq };
+    // K10. The holding may name nothing (the sim refuses it).
+    case "repairWalls":
+      return { kind, holding: int(o.holding, what + ".holding"), tick, player, seq };
     default:
       return { kind: "harvest", plot: int(o.plot, what + ".plot"), tick, player, seq };
   }
@@ -964,7 +1018,10 @@ function readResult(v: unknown, what: string): BattleResult {
     morale: pair(o.morale, what + ".morale", (x, w) => int(x, w)),
     fled: pair(o.fled, what + ".fled", bool),
     left: pair(o.left, what + ".left", bool),
-    damage: { crops: int(d.crops, what + ".damage.crops"), buildings: int(d.buildings, what + ".damage.buildings") },
+    damage: {
+      crops: int(d.crops, what + ".damage.crops"), buildings: int(d.buildings, what + ".damage.buildings"),
+      walls: int(d.walls, what + ".damage.walls"),
+    },
     legitimacy: int(o.legitimacy, what + ".legitimacy", -1000000),
   };
 }
@@ -1004,7 +1061,14 @@ function readContact(v: unknown, world: KingdomWorld, armies: readonly Army[], n
   if (road !== 0 && !world.graph.roads.get(road)) throw new Bad(what + " is on an unknown road");
   if (kind === "assault" && sides[1 - attacker].army !== 0) throw new Bad(what + " is an assault with an army defending");
   if (kind === "field" && (sides[0].army === 0 || sides[1].army === 0)) throw new Bad(what + " is a field fight without two armies");
-  return { id, kind, sides, attacker, holding, road, tick: int(o.tick, what + ".tick") };
+  const tick = int(o.tick, what + ".tick");
+  // K10: only townsmen at their walls can be in the keep.
+  if (o.keep !== undefined) {
+    if (o.keep !== true) throw new Bad(what + ".keep is not true");
+    if (kind !== "assault" || sides[0].army !== 0) throw new Bad(what + " is in a keep but is not the king's townsmen at their walls");
+    return { id, kind, sides, attacker, holding, road, tick, keep: true };
+  }
+  return { id, kind, sides, attacker, holding, road, tick };
 }
 
 function readDisengaged(v: unknown, world: KingdomWorld, armies: readonly Army[]): [number, number][] {
@@ -1396,6 +1460,8 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
       justice: oneOf(h.justice, JUSTICE_IDS, what + ".justice"),
       festival: int(h.festival, what + ".festival"),
       pardoned: int(h.pardoned, what + ".pardoned"),
+      walls: wallsOf(h.walls, what + ".walls"),
+      mend: mendOf(h.mend, h.walls, what + ".mend"),
     };
   });
 
@@ -1494,6 +1560,8 @@ function build(save: Record<string, unknown>, resight = false): KingdomWorld {
     live.justice = h.justice;
     live.festival = h.festival;
     live.pardoned = h.pardoned;
+    live.walls = h.walls;
+    live.mend = h.mend;
   });
   world.king.companions = companions;
   world.king.mover = mover;

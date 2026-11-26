@@ -298,6 +298,17 @@ export class BattleLayer implements LayerKeys {
       return "handled";
     }
 
+    // K10: the defender of a siege opens and shuts its gates (a sally, or a
+    // door shut in the stormers' faces). The order is the sim's to refuse:
+    // a gate with men standing in it does not shut.
+    if (k.code === "KeyG" && pen && world.hasGates(PLAYER)) {
+      if (k.repeat || world.deploying || world.outcome) return "handled";
+      const open = !world.gatesOpen(PLAYER);
+      world.orders.issue({ kind: "gates", open }, PLAYER, world.tick + 1);
+      this.pen.lastAction = open ? "gates open" : "gates shut";
+      return "handled";
+    }
+
     if (k.code === "F2") {
       k.preventDefault();
       if (!k.repeat) this.showDebug = !this.showDebug;
@@ -587,6 +598,12 @@ export class BattleLayer implements LayerKeys {
       const mine = PLAYER === 0 ? a : b;
       const theirs = PLAYER === 0 ? b : a;
       lines.push("colours: yours " + (mine ? "flying" : "taken") + ", theirs " + (theirs ? "flying" : "taken"));
+    }
+    // K10: a siege's walls, and the defender's gates.
+    if (world.siege) {
+      const down = Math.round(world.wallDamage() / 10);
+      const gates = world.hasGates(PLAYER) ? (world.gatesOpen(PLAYER) ? "gates open - G to shut" : "gates shut - G to open") : "";
+      lines.push(["walls " + (down > 0 ? down + "% down" : "whole"), gates].filter(Boolean).join("   "));
     }
     if (world.deploying) {
       lines.push("", "loop to group - glyph to form up - drag to place", "ENTER to begin");

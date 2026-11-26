@@ -22,8 +22,10 @@ import { UNIT_TYPES, type UnitTypeId } from "../content/unit-types.ts";
 import { nerveFromMorale } from "../content/kingdom/descent.ts";
 import { AMBUSHED_NERVE, WALL_NERVE } from "../content/kingdom/invasions.ts";
 import { World } from "../sim/world.ts";
-import { PI, min } from "../sim/math.ts";
-import { TILE_SIZE } from "../sim/terrain.ts";
+import { PI, abs, floor, max, min } from "../sim/math.ts";
+import { TILE_SIZE, Terrain, generateTerrain } from "../sim/terrain.ts";
+import type { SiegeSide, SiegeWorks } from "../sim/siege.ts";
+import { SIEGE_LAYOUT } from "../content/kingdom/descent.ts";
 import type { BattleSpec, FieldedSquad } from "../sim/layers.ts";
 
 /**
@@ -95,15 +97,19 @@ export type BattleConfig = {
  */
 export function battleFromSpec(spec: BattleSpec): BattleConfig {
   const base = levelById(spec.terrain.level) ?? LEVELS[0];
+  // K10: a holding with walls is fought as a siege of those walls -- the
+  // works laid out round the defender's ground, its heart the ground the
+  // attacker has to take (the spec's breakthrough exit).
+  const works = siegeFromSpec(spec, base);
   const level: LevelDef = {
     ...base,
     seed: spec.seed,
     duration: spec.duration,
     victory: spec.victory,
-    controlPoints: [],
+    controlPoints: works ? [works.heart] : [],
     reinforcements: undefined,
     floodAtSeconds: undefined,
-    siege: undefined,
+    siege: works ? works.siege : undefined,
     night: spec.sightScale === 1 ? undefined : spec.sightScale,
   };
   const [a, b] = spec.sides;
@@ -125,6 +131,110 @@ export function battleFromSpec(spec: BattleSpec): BattleConfig {
       nerve: fieldNerve(spec),
     },
   };
+}
+
+/** Where battleWorld sets down squad `n` of a zone: the top-left tile of its block (n in fielded order). */
+function blockTile(zoneX: number, zoneY: number, n: number): { tx: number; ty: number } {
+  return { tx: zoneX + 3 + (n % 4) * 5, ty: zoneY + 4 + ((n / 4) | 0) * 9 };
+}
+
+/**
+ * K10: the holding's works as a battlefield lays them out, from the spec
+ * alone (pure: the same spec always builds the same walls).
+ *
+ * - The circuit stands round the DEFENDER's ground -- whichever seat that
+ *   is -- `SIEGE_LAYOUT.margin` tiles clear of every block its men are set
+ *   down in and of its whole deployment zone: town walls round the town. A
+ *   keep (the townsmen fell back to it) is a tight ring of two courses round
+ *   the townsmen's blocks alone: the town outside is given up.
+ * - Stone for a wall or a keep, timber for a palisade.
+ * - The gate faces the attacker, where the battlefield's road crosses that
+ *   wall line if it does (a gate belongs where the road comes in), else at
+ *   the middle; a stone town wall has a second gate in the far side, for a
+ *   sally or a retreat.
+ * - The works are raised as battered as the holding's walls are (spec
+ *   `terrain.worn`).
+ * - The heart is a control point filling the inside of the walls: the exit
+ *   of the breakthrough rule the spec's victory names.
+ *
+ * Returns null for a battle with no works.
+ */
+export function siegeFromSpec(
+  spec: BattleSpec, base: LevelDef,
+): { siege: SiegeWorks; heart: { id: number; name: string; x: number; y: number; radius: number } } | null {
+  const fort = spec.terrain.fortification;
+  if (fort === "none") return null;
+  const d = 1 - spec.deployment.attacker;
+  const zone = base.deployment.find((z) => z.player === d);
+  const foe = base.deployment.find((z) => z.player === spec.deployment.attacker);
+  if (!zone || !foe) return null;
+  const keep = fort === "keep";
+  // The defender's blocks, as battleWorld will set them down (fit squads only).
+  const fielded = spec.sides[d].squads.filter((q) => q.men - q.wounded > 0).length;
+  let x0 = zone.x + 3;
+  let y0 = zone.y + 4;
+  let x1 = x0;
+  let y1 = y0;
+  for (let n = 0; n < max(1, fielded); n++) {
+    const b = blockTile(zone.x, zone.y, n);
+    x1 = max(x1, b.tx + 5);
+    y1 = max(y1, b.ty + 6);
+  }
+  if (!keep) {
+    x0 = min(x0, zone.x);
+    y0 = min(y0, zone.y);
+    x1 = max(x1, zone.x + zone.w - 1);
+    y1 = max(y1, zone.y + zone.h - 1);
+  }
+  const thickness = keep ? SIEGE_LAYOUT.keepThickness : 1;
+  const m = (keep ? SIEGE_LAYOUT.keepMargin : SIEGE_LAYOUT.margin) + thickness;
+  // Kept a tile inside the map edge, so the wall line is always on the field.
+  const wx0 = max(1, x0 - m);
+  const wy0 = max(1, y0 - m);
+  const wx1 = min(base.tilesWide - 2, x1 + m);
+  const wy1 = min(base.tilesHigh - 2, y1 + m);
+  const cx = floor((wx0 + wx1) / 2);
+  const cy = floor((wy0 + wy1) / 2);
+  const rx = max(4, min(cx - wx0, wx1 - cx));
+  const ry = max(4, min(cy - wy0, wy1 - cy));
+  // Which side faces the attacker: the axis the two zones lie apart on.
+  const fx = foe.x + foe.w / 2 - (cx + 0.5);
+  const fy = foe.y + foe.h / 2 - (cy + 0.5);
+  const front: SiegeSide = abs(fx) >= abs(fy) ? (fx >= 0 ? "east" : "west") : (fy >= 0 ? "south" : "north");
+  const back: SiegeSide = front === "east" ? "west" : front === "west" ? "east" : front === "north" ? "south" : "north";
+  const grid = generateTerrain(base.tilesWide, base.tilesHigh, spec.seed);
+  const gateAt = (side: SiegeSide): number => {
+    const along = side === "north" || side === "south";
+    const line = side === "east" ? cx + rx : side === "west" ? cx - rx : side === "north" ? cy - ry : cy + ry;
+    const mid = along ? cx : cy;
+    const lim = (along ? rx : ry) - thickness - 2;
+    // The road crossing nearest the middle of that wall line (ties: the lower).
+    for (let k = 0; k <= lim; k++) {
+      for (const at of k === 0 ? [mid] : [mid - k, mid + k]) {
+        const t = along ? grid.typeAt(at, line) : grid.typeAt(line, at);
+        if (t === Terrain.Road) return at;
+      }
+    }
+    return mid;
+  };
+  const gates = [{ side: front, at: gateAt(front) }];
+  if (fort === "wall") gates.push({ side: back, at: gateAt(back) });
+  const siege: SiegeWorks = {
+    defender: d, cx, cy, rx, ry,
+    kind: fort === "palisade" ? "palisade" : "wall",
+    gates,
+    thickness,
+    worn: spec.terrain.worn,
+  };
+  const inner = min(rx, ry) - thickness;
+  const heart = {
+    id: 0,
+    name: keep ? "the keep yard" : "inside the walls",
+    x: (cx + 0.5) * TILE_SIZE,
+    y: (cy + 0.5) * TILE_SIZE,
+    radius: max(2, inner) * TILE_SIZE,
+  };
+  return { siege, heart };
 }
 
 /**
@@ -197,8 +307,9 @@ export function battleWorld(
         fielded[zone.player][j] = { first, count: 0 };
         return;
       }
-      const blockX = (zoneX + 3 + (n % 4) * 5) * TILE_SIZE;
-      const blockY = (zone.y + 4 + ((n / 4) | 0) * 9) * TILE_SIZE;
+      const block = blockTile(zoneX, zone.y, n);
+      const blockX = block.tx * TILE_SIZE;
+      const blockY = block.ty * TILE_SIZE;
       for (let i = 0; i < men; i++) {
         world.spawnSoldier(
           zone.player, type,

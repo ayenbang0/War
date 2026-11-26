@@ -40,6 +40,13 @@ export const Terrain = {
   Rubble: 13,
   /** A wood that has been burnt out or felled: stumps and ash, open to sight. */
   Clearing: 14,
+  /**
+   * K10: a gate standing open. The same timber and iron as a shut gate, with
+   * the same wear on it, but a way through for anyone -- which is why only
+   * the side holding the walls may swing it, and why it is shut again the
+   * moment the gateway is clear (World `gates` order, docs/PROVISIONAL.md K10.1).
+   */
+  GateOpen: 15,
 } as const;
 
 export type TerrainType = (typeof Terrain)[keyof typeof Terrain];
@@ -90,6 +97,10 @@ export const TERRAIN_INFO: Record<TerrainType, TerrainInfo> = {
   // cover left in the heaps -- but far less than the wall it was.
   [Terrain.Rubble]: { name: "rubble", moveScale: 0.6, cover: 0.25, blocksSight: false },
   [Terrain.Clearing]: { name: "clearing", moveScale: 0.95, cover: 0.05, blocksSight: false },
+  // An open gateway: a paved arch with the leaves folded back. Passable and
+  // open to sight (a gateway is a hole in the wall), with a little cover in
+  // the arch itself.
+  [Terrain.GateOpen]: { name: "open gate", moveScale: 0.9, cover: 0.15, blocksSight: false },
 };
 
 /**
@@ -121,11 +132,18 @@ export const STRUCTURE: Partial<Record<TerrainType, Structure>> = {
   [Terrain.Wall]: { hp: 2400, ruin: Terrain.Rubble },
   [Terrain.Gate]: { hp: 900, ruin: Terrain.Rubble, fuel: 24 * 20 },
   [Terrain.Palisade]: { hp: 700, ruin: Terrain.Rubble, fuel: 18 * 20 },
+  // The same leaves, swung back: as strong, and as quick to burn.
+  [Terrain.GateOpen]: { hp: 900, ruin: Terrain.Rubble, fuel: 24 * 20 },
 };
 
 /** Walls, gates and palisades: the works a siege is fought over. */
 export function isCurtain(t: TerrainType): boolean {
-  return t === Terrain.Wall || t === Terrain.Gate || t === Terrain.Palisade;
+  return t === Terrain.Wall || t === Terrain.Gate || t === Terrain.Palisade || t === Terrain.GateOpen;
+}
+
+/** A gate, shut or open (K10). Engines go for these first. */
+export function isGate(t: TerrainType): boolean {
+  return t === Terrain.Gate || t === Terrain.GateOpen;
 }
 
 /** Anything that counts as a work to be battered: curtains and fieldworks. */
@@ -291,12 +309,16 @@ export class TerrainGrid {
    * closed, sight -- so the world re-plans only the routes that could be
    * affected and re-sweeps sight only when something that blocks it moved.
    */
-  private mutate(i: number, t: TerrainType): void {
+  private mutate(i: number, t: TerrainType, keep = false): void {
     const was = TERRAIN_INFO[this.type[i] as TerrainType];
     const now = TERRAIN_INFO[t];
     this.type[i] = t;
-    this.wear[i] = 0;
-    this.burn[i] = 0;
+    // A gate that swings keeps its wear and its fire: opening and shutting it
+    // must never mend it, or swinging a battered gate would be a free repair.
+    if (!keep) {
+      this.wear[i] = 0;
+      this.burn[i] = 0;
+    }
     if (!isWork(t)) this.owner[i] = -1;
     this.revision++;
     this.tileRevision[i] = this.revision;
@@ -390,6 +412,25 @@ export class TerrainGrid {
     if (cur === Terrain.Water || cur === Terrain.Mountain) return false;
     this.mutate(i, t);
     this.owner[i] = player;
+    return true;
+  }
+
+  /**
+   * K10: swing a gate open or shut. Only a gate tile swings, and only to the
+   * other gate state; wear and fire stay as they were. Goes through `mutate`
+   * like every other change, so opening one is an opening (routes re-plan
+   * into it) and shutting one is a closure (anyone in it is settled out, and
+   * the routes it cuts re-plan). Returns false if the tile is not a gate.
+   */
+  swingGate(tx: number, ty: number, open: boolean): boolean {
+    if (!this.inBounds(tx, ty)) return false;
+    const i = ty * this.width + tx;
+    const cur = this.type[i] as TerrainType;
+    const want = open ? Terrain.GateOpen : Terrain.Gate;
+    if (!isGate(cur) || cur === want) return false;
+    const owner = this.owner[i];
+    this.mutate(i, want, true);
+    this.owner[i] = owner;
     return true;
   }
 

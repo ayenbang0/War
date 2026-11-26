@@ -36,7 +36,7 @@
  * withdrawal would meet its enemy again on the next tick.
  */
 
-import { encounterFor, storyAbilities } from "./story.ts";
+import { encounterFor, isStoryHost, storyAbilities } from "./story.ts";
 import type { EncounterDef } from "../../content/story/encounters.ts";
 import { abs, floor, max, min, round } from "../math.ts";
 import { FACTIONS, FACTION_IDS, KING_PLAYER } from "../../content/kingdom/factions.ts";
@@ -47,7 +47,7 @@ import { levelById } from "../../content/levels/index.ts";
 import {
   ENGAGE_RADIUS, FACTION_BATTLE_COMMANDER, FACTION_BATTLE_DIFFICULTY, LOSS_LEGITIMACY, MILITIA_MORALE,
   MILITIA_PEOPLE_PER_MAN, MILITIA_SQUADS, MILITIA_UNIT, NERVE_FLOOR, WIN_LEGITIMACY, WITHDRAW_MORALE,
-  WITHDRAW_REARGUARD_PERMILLE, WOUNDED_HP_FRACTION, type Fortification,
+  WITHDRAW_REARGUARD_PERMILLE, WOUNDED_HP_FRACTION, WALLS_DOWN, SIEGE_STORM, type Fortification,
 } from "../../content/kingdom/descent.ts";
 import { DESCENT_REFUSAL } from "../../content/kingdom/descent-strings.ts";
 import { INVASION_REFUSAL } from "../../content/kingdom/invasion-strings.ts";
@@ -62,7 +62,8 @@ import { armyById, armyMen, inContact, removeArmy, standsIn, takeMen } from "./a
 import { adjustLegitimacy } from "./ledger.ts";
 import { battleLostUnrest } from "./morale.ts";
 import { ARMY_MORALE, CLAIM_UNREST, STORMED_UNREST } from "../../content/kingdom/morale.ts";
-import { hasStanding } from "./economy.ts";
+import { builtFortification } from "./economy.ts";
+export { builtFortification };
 import { routeOptions, updateSight } from "./explore.ts";
 import { autoResolve } from "./autoresolve.ts";
 import type { KingdomWorld } from "./world.ts";
@@ -84,12 +85,14 @@ export function inWaitingContact(world: KingdomWorld, army: number): boolean {
   return !!c && army !== 0 && (c.sides[0].army === army || c.sides[1].army === army);
 }
 
-/** The strongest wall standing in a holding (a keep is built over a wall, a wall over a palisade). */
+/**
+ * The strongest wall STANDING in a holding: what an assault meets and a
+ * siege is fought behind. K10: walls battered down to WALLS_DOWN are rubble
+ * until mended, and stand for nothing.
+ */
 export function fortificationOf(h: Holding): Fortification {
-  if (hasStanding(h, "keep")) return "keep";
-  if (hasStanding(h, "wall")) return "wall";
-  if (hasStanding(h, "palisade")) return "palisade";
-  return "none";
+  if (h.walls >= WALLS_DOWN) return "none";
+  return builtFortification(h);
 }
 
 function factionOf(h: Holding): number {
@@ -345,28 +348,48 @@ export function buildBattleSpec(world: KingdomWorld, c: Contact): BattleSpec {
   // K8: walls are a battle effect for an army too, when it defends a walled
   // holding of its own lord's from inside it (PLAN §B.8). A K5-K7 realm keeps
   // K5's rule (walls only for the townsmen), so its battles are unchanged.
-  const atHome = !!dArmy && world.captains && c.road === 0 && standsIn(dArmy.mover) === h.id && h.owner === FACTION_IDS[dArmy.owner];
-  const fort: Fortification = c.kind === "assault" || atHome ? fortificationOf(h) : "none";
+  // K10: so does a story host holding its own walled holding (the Chancery
+  // Guard in Rimaros): the capital siege is fought behind the capital's walls.
+  // And an army standing in its walled holding is behind those walls however
+  // the contact was drawn -- also when the attacker was met on the road in,
+  // a contact-radius short of the gate (docs/PROVISIONAL.md K10.7).
+  const atHome = !!dArmy && (world.captains || isStoryHost(world, dArmy.id)) &&
+    standsIn(dArmy.mover) === h.id && h.owner === FACTION_IDS[dArmy.owner];
+  // K10: the townsmen who fell back to the keep are besieged in it.
+  const fort: Fortification = c.keep ? "keep" : c.kind === "assault" || atHome ? fortificationOf(h) : "none";
   const night = level?.night;
+  const sides: [BattleSide, BattleSide] = [sideOf(world, c.sides[0], h, fort, enc), sideOf(world, c.sides[1], h, fort, enc)];
   return {
     contact: c.id,
     // The holding's own seed: the same place always yields the same ground (docs/kingdom.md, K1).
     seed: h.seed,
-    terrain: { level: levelId, biome: h.biome, holding: h.id, road: c.road, fortification: fort },
-    sides: [sideOf(world, c.sides[0], h, fort, enc), sideOf(world, c.sides[1], h, fort, enc)],
+    terrain: { level: levelId, biome: h.biome, holding: h.id, road: c.road, fortification: fort, worn: fort === "none" ? 0 : h.walls },
+    sides,
     deployment: {
       attacker: c.attacker,
       // Dug in (K5), or lying in wait (K8's ambush): either way it chose the ground and is ready.
       ambush: !!dArmy && ((dArmy.posture === "hold" && dArmy.postureDays >= HOLD_DIG_IN_DAYS) || dArmy.posture === "ambush"),
     },
-    // Behind walls the defender wins by holding out; in the field, by breaking the other.
-    victory: c.kind === "assault" ? { mode: "survive", defender } : { mode: "rout" },
+    // K10: behind walls it is a siege -- the defender wins by holding out,
+    // the attacker by breaking the garrison or getting enough men inside the
+    // walls (the battle's breakthrough rule, its exit the heart of the works).
+    // In the field, by breaking the other.
+    victory: fort !== "none"
+      ? { mode: "breakthrough", attacker: c.attacker, exit: 0, required: stormMen(sides[c.attacker]) }
+      : { mode: "rout" },
     duration: level ? level.duration : 900,
     weather: world.weather,
     season: world.date.season,
     sightScale: night === undefined ? 1 : night,
     reinforcements: [],
   };
+}
+
+/** K10: men of the attacking side that must stand inside the walls at once to take them (SIEGE_STORM). */
+export function stormMen(side: BattleSide): number {
+  let fit = 0;
+  for (const q of side.squads) fit += q.men - q.wounded;
+  return max(1, min(SIEGE_STORM.maxMen, floor((fit + SIEGE_STORM.share - 1) / SIEGE_STORM.share)));
 }
 
 // -- reading a battle back -------------------------------------------------------------------
@@ -417,7 +440,8 @@ export function resultFromBattle(
     morale,
     fled: [winner === 1, winner === 0],
     left: [leftBy === 0, leftBy === 1],
-    damage: { crops: 0, buildings: 0 },
+    // K10: what the battle did to the works, over what they carried in.
+    damage: { crops: 0, buildings: 0, walls: spec.terrain.fortification === "none" ? 0 : max(0, world.wallDamage() - spec.terrain.worn) },
     legitimacy: !king ? 0 : winner === 0 ? WIN_LEGITIMACY : winner === 1 ? -LOSS_LEGITIMACY : 0,
   };
 }
@@ -441,6 +465,11 @@ export function resultRefusal(spec: BattleSpec, r: BattleResult): string | null 
     if (!Number.isInteger(m) || m < 0 || m > 100) return DESCENT_REFUSAL.badResult;
   }
   if (!Number.isInteger(r.damage.crops) || r.damage.crops < 0 || !Number.isInteger(r.damage.buildings) || r.damage.buildings < 0) {
+    return DESCENT_REFUSAL.badResult;
+  }
+  // K10: walls are battered only where there are walls, and never past rubble.
+  const w = r.damage.walls;
+  if (!Number.isInteger(w) || w < 0 || w > WALLS_DOWN - spec.terrain.worn || (spec.terrain.fortification === "none" && w !== 0)) {
     return DESCENT_REFUSAL.badResult;
   }
   if (!Number.isInteger(r.legitimacy)) return DESCENT_REFUSAL.badResult;
@@ -518,6 +547,21 @@ function fallBack(world: KingdomWorld, a: Army, enemy: number): boolean {
   return true;
 }
 
+/**
+ * K10: a holding whose walls have fallen to `enemy` is given up by every
+ * other army of `faction` still standing in it, in id order: each falls back
+ * along a road away from the enemy, or is taken if cut off. A siege is
+ * fought against one army (the first a contact found); the rest of the
+ * garrison does not hold walls the king's men are already inside
+ * (docs/PROVISIONAL.md K10.8).
+ */
+export function abandonHolding(world: KingdomWorld, h: Holding, faction: number, enemy: number): void {
+  for (const a of [...world.armies]) {
+    if (a.owner !== faction || standsIn(a.mover) !== h.id || !world.armies.includes(a)) continue;
+    fallBack(world, a, enemy);
+  }
+}
+
 // -- settling ---------------------------------------------------------------------------------
 
 function otherArmy(c: Contact, side: number): number {
@@ -592,6 +636,14 @@ export function applyBattleResult(
       }
     }
   }
+  // K10: the walls carry the battle's battering until they are mended.
+  if (r.damage.walls > 0) {
+    h.walls = min(WALLS_DOWN, h.walls + r.damage.walls);
+    h.mend = min(h.mend, h.walls);
+    world.events.push({ kind: "wallsDamaged", holding: h.id, by: r.damage.walls, walls: h.walls });
+  }
+  // K10: the siege of a keep the townsmen fell back to: did it hold?
+  if (c.keep) world.events.push({ kind: "siege", holding: h.id, held: r.winner !== c.attacker });
   if (r.damage.buildings > 0) {
     let n = r.damage.buildings;
     for (let s = 0; s < h.buildings.length && n > 0; s++) {
@@ -647,6 +699,8 @@ export function checkContactOrder(world: KingdomWorld, body: ResolveOrder, playe
   if (body.choice === "yield" || body.choice === "keep") {
     if (c.kind !== "assault" || c.sides[0].army !== 0) return INVASION_REFUSAL.yieldOnlyWalls;
     const h = world.holding(c.holding) as Holding;
+    // K10: once in the keep, there is no further keep to fall back to (the gates may still be opened).
+    if (body.choice === "keep" && c.keep) return INVASION_REFUSAL.inKeep(h.name);
     if (body.choice === "keep" && !KEEP_RETREAT.needs.includes(fortificationOf(h))) return INVASION_REFUSAL.noKeep(h.name);
     return null;
   }
@@ -712,10 +766,12 @@ function yieldHolding(world: KingdomWorld, c: Contact): void {
 
 /**
  * Retreat to the keep: the town outside is given up and sacked (its crops
- * lost, its people restless) and the keep is besieged. Real sieges are
- * K10's (docs/PROVISIONAL.md K8.9): until then the siege is auto-resolved as
- * a fight behind a keep's walls, the defenders fighting for themselves (not
- * "resolve for me"). If the keep falls, the holding is the attacker's, as by storm.
+ * lost, its people restless) and the keep is besieged. K10 makes that a real
+ * siege (lifting K8.9's scope cut): the contact goes on waiting, marked
+ * `keep`, and its battle is now a siege of the keep -- two courses of stone
+ * round the townsmen (`buildBattleSpec` gives it the keep), fought or
+ * resolved like any other battle. If the keep falls, the holding is the
+ * attacker's, as by storm.
  */
 function keepSiege(world: KingdomWorld, c: Contact): void {
   const h = world.holding(c.holding) as Holding;
@@ -727,11 +783,8 @@ function keepSiege(world: KingdomWorld, c: Contact): void {
     world.events.push({ kind: "plotStage", holding: h.id, plot: p.id, stage: "spoiled", cause: "burned" });
   }
   moveUnrest(world, h, KEEP_RETREAT.unrest);
-  const base = buildBattleSpec(world, c);
-  const spec: BattleSpec = { ...base, terrain: { ...base.terrain, fortification: "keep" } };
-  const r = autoResolve(spec, world.rng.autoresolve, false);
-  world.events.push({ kind: "siege", holding: h.id, held: r.winner !== c.attacker });
-  applyBattleResult(world, c, spec, r, "keep");
+  world.contact = { ...c, keep: true };
+  world.events.push({ kind: "keepRetreat", holding: h.id });
 }
 
 /** For the interstitial: the men a withdrawal would cost now, or -1 if the army is cut off (or is townsmen). */

@@ -82,6 +82,11 @@ export type BattleSpec = {
     /** 0 at a holding. */
     readonly road: number;
     readonly fortification: Fortification;
+    /**
+     * K10: the damage the holding's works already carry, per mille, when
+     * there are works (0 otherwise): the battle raises them that battered.
+     */
+    readonly worn: number;
   };
   /** sides[0] is the king's whenever he has a side in it: the battle's player 0. */
   readonly sides: readonly [BattleSide, BattleSide];
@@ -128,8 +133,12 @@ export type BattleResult = {
   readonly fled: readonly [boolean, boolean];
   /** The side's commander took it off the field mid-battle (the withdrawal's rearguard is paid on top). */
   readonly left: readonly [boolean, boolean];
-  /** Damage to the holding fought at: health off every growing crop, buildings knocked idle. */
-  readonly damage: { readonly crops: number; readonly buildings: number };
+  /**
+   * Damage to the holding fought at: health off every growing crop, buildings
+   * knocked idle, and (K10) per mille of its walls' strength battered down in
+   * this battle, on top of what they carried in (spec `terrain.worn`).
+   */
+  readonly damage: { readonly crops: number; readonly buildings: number; readonly walls: number };
   /** Legitimacy the king gains (or loses, negative). */
   readonly legitimacy: number;
 };
@@ -150,6 +159,7 @@ export function hashBattleSpec(s: BattleSpec): string {
   h = mixU32(h, s.terrain.holding);
   h = mixU32(h, s.terrain.road);
   h = mixU32(h, FORTIFICATIONS.indexOf(s.terrain.fortification));
+  h = mixU32(h, s.terrain.worn);
   for (const side of s.sides) {
     h = mixU32(h, side.faction);
     h = mixU32(h, side.army);
@@ -197,6 +207,12 @@ export function mixBattleResult(h: number, r: BattleResult): number {
   }
   h = mixU32(h, r.damage.crops);
   h = mixU32(h, r.damage.buildings);
+  // K10: mixed only when the battle battered walls, so every result of a
+  // battle without works (all of them before K10) hashes as it did.
+  if (r.damage.walls !== 0) {
+    h = mixU32(h, 0x57414c4c); // "WALL"
+    h = mixU32(h, r.damage.walls);
+  }
   h = mixU32(h, r.legitimacy);
   return h;
 }

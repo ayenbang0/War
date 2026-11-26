@@ -52,13 +52,21 @@ export type OrderBody =
    * PC-05), rather than the frame loop writing soldier positions directly,
    * which no replay or lockstep peer could ever reproduce.
    */
-  | { kind: "place"; squad: number; x: number; y: number };
+  | { kind: "place"; squad: number; x: number; y: number }
+  /**
+   * K10: swing the gates of the walls this player holds, open or shut. No
+   * squad: a gate is the garrison's, not a company's. Refused for a player
+   * who does not hold the walls; a gate with anyone standing in it does not
+   * shut (World.applyGates, docs/PROVISIONAL.md K10.1). Not a gesture -- the
+   * pen vocabulary stays as it is -- but a HUD button and a key.
+   */
+  | { kind: "gates"; open: boolean };
 
 export type OrderKind = OrderBody["kind"];
 
 export const ORDER_KINDS: readonly OrderKind[] = [
   "move", "attack", "hold", "formation", "retreat", "patrol", "recover",
-  "ambush", "feint", "ability", "place",
+  "ambush", "feint", "ability", "place", "gates",
 ];
 
 /**

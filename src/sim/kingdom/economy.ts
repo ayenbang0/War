@@ -36,6 +36,7 @@ import {
 import { BUILDINGS, type BuildingDef, type BuildingId, type Cost } from "../../content/kingdom/buildings.ts";
 import { CROPS, daysToRipe, type CropDef, type CropId } from "../../content/kingdom/crops.ts";
 import { REFUSAL } from "../../content/kingdom/ui-strings.ts";
+import { WALL_REPAIR, type Fortification } from "../../content/kingdom/descent.ts";
 import { CAPTAIN_START, CAPTAIN_START_LEGITIMACY, CROWN_TITHE_PER_100 } from "../../content/kingdom/invasions.ts";
 import { moveUnrest } from "./unrest.ts";
 import { CLAIM_UNREST, MERCY_START, MUSTER_UNREST, RESTLESS_AT } from "../../content/kingdom/morale.ts";
@@ -57,10 +58,10 @@ export const ECONOMY_FACTIONS: readonly FactionId[] = ["king"];
 
 /** The economy orders (everything but the march). */
 export type EconomyOrderBody = Extract<KingdomOrderBody, {
-  kind: "forage" | "rally" | "claimHolding" | "setTax" | "build" | "sow" | "harvest" | "setAutoSow";
+  kind: "forage" | "rally" | "claimHolding" | "setTax" | "build" | "sow" | "harvest" | "setAutoSow" | "repairWalls";
 }>;
 
-const ECONOMY_KINDS: ReadonlySet<string> = new Set(["forage", "rally", "claimHolding", "setTax", "build", "sow", "harvest", "setAutoSow"]);
+const ECONOMY_KINDS: ReadonlySet<string> = new Set(["forage", "rally", "claimHolding", "setTax", "build", "sow", "harvest", "setAutoSow", "repairWalls"]);
 
 export function isEconomyOrder(b: KingdomOrderBody): b is EconomyOrderBody {
   return ECONOMY_KINDS.has(b.kind);
@@ -138,6 +139,35 @@ export function standing(h: Holding): { slot: number; def: BuildingDef }[] {
 
 export function hasStanding(h: Holding, id: BuildingId, activeOnly = false): boolean {
   return standing(h).some((s) => s.def.id === id && (!activeOnly || !h.idle[s.slot]));
+}
+
+/**
+ * The strongest wall BUILT in a holding (a keep over a wall, a wall over a
+ * palisade), whatever state its stones are in (descent.ts fortificationOf
+ * says what still STANDS). What mending walls costs is reckoned from this.
+ */
+export function builtFortification(h: Holding): Fortification {
+  if (hasStanding(h, "keep")) return "keep";
+  if (hasStanding(h, "wall")) return "wall";
+  if (hasStanding(h, "palisade")) return "palisade";
+  return "none";
+}
+
+/**
+ * K10: what mending a holding's walls costs now: every quarter of their
+ * strength battered and not yet paid for (rounded up), at the price of the
+ * strongest wall built there (content WALL_REPAIR). Empty when there is
+ * nothing to pay for.
+ */
+export function wallRepairCost(h: Holding): Cost {
+  const owed = h.walls - h.mend;
+  const fort = builtFortification(h);
+  if (owed <= 0 || fort === "none") return {};
+  const quarters = ceil(owed / 250);
+  const per = WALL_REPAIR.perQuarter[fort];
+  const out: Partial<Record<StockId, number>> = {};
+  for (const s of ["coin", "timber", "iron"] as const) if (per[s]) out[s] = per[s]! * quarters;
+  return out;
 }
 
 /** Grain storage of a faction: granaries, then cellars and the party's packs. */
@@ -321,6 +351,16 @@ export function checkEconomyOrder(world: KingdomWorld, body: EconomyOrderBody, p
       if (found.plot.stage !== "ripe") return REFUSAL.notRipe;
       return null;
     }
+    case "repairWalls": {
+      const h = world.holding(body.holding);
+      if (!h) return REFUSAL.noSuchHolding;
+      if (!owns(h)) return REFUSAL.notYours;
+      if (builtFortification(h) === "none") return REFUSAL.noWalls;
+      if (h.walls === 0) return REFUSAL.wallsWhole;
+      if (h.mend >= h.walls) return REFUSAL.wallsMending;
+      if (!canAfford(e, wallRepairCost(h))) return REFUSAL.cannotAfford;
+      return null;
+    }
     case "setAutoSow": {
       if (body.crop !== null && !CROPS[body.crop]) return REFUSAL.noSuchCrop;
       if (body.holding === 0) return body.plot === 0 ? null : REFUSAL.noSuchPlot;
@@ -463,6 +503,14 @@ export function applyEconomyOrder(world: KingdomWorld, order: KingdomOrder & Eco
       reap(world, f, h, p, "harvested");
       return null;
     }
+    case "repairWalls": {
+      // K10: paid now for every quarter battered; the masons work it off by the day.
+      const h = world.holding(order.holding) as Holding;
+      pay(e, book, wallRepairCost(h), "construction");
+      h.mend = h.walls;
+      world.events.push({ kind: "wallsRepairing", holding: h.id, faction: f });
+      return null;
+    }
     case "setAutoSow": {
       const crop = order.crop;
       const targets = order.holding === 0 ? ownedBy(world, f) : [world.holding(order.holding) as Holding];
@@ -600,6 +648,16 @@ function buildAndProduce(world: KingdomWorld, f: number): void {
   const e = world.economy[f];
   const book = world.books[f];
   for (const h of ownedBy(world, f)) {
+    // K10: masons paid to mend the walls work at them a day's share at a time.
+    if (h.mend > 0) {
+      const m = min(h.mend, h.walls, WALL_REPAIR.perDay);
+      h.walls -= m;
+      h.mend -= m;
+      if (h.walls === 0) {
+        h.mend = 0;
+        world.events.push({ kind: "wallsMended", holding: h.id });
+      }
+    }
     for (let i = 0; i < h.buildings.length; i++) {
       const id = h.buildings[i];
       if (id === null) continue;

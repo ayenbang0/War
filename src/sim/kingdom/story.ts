@@ -54,6 +54,7 @@ import { gainUpgrade, revealAround, updateSight } from "./explore.ts";
 import { armiesOf, armyById, armyMen, raiseArmy, setPosture, standsIn } from "./armies.ts";
 import { storyCompanyLeaves, storyHire, storyLoyalty } from "./mercenaries.ts";
 import { DAYS_PER_SEASON } from "./clock.ts";
+import { abandonHolding } from "./descent.ts";
 import type { KingdomWorld } from "./world.ts";
 
 export type AnswerLetterBody = Extract<KingdomOrderBody, { kind: "answerLetter" }>;
@@ -638,7 +639,11 @@ export function afterContactOrder(world: KingdomWorld, was: { c: Contact; men: n
     // Chancery Guard broken in Rimaros.
     const at = world.holdingByKey(def.holding);
     const f = FACTION_IDS.indexOf(def.faction);
-    if (at && at.owner !== "king" && (at.owner === null || FACTION_IDS.indexOf(at.owner) === f)) giveTo(world, at, KING_PLAYER);
+    if (at && at.owner !== "king" && (at.owner === null || FACTION_IDS.indexOf(at.owner) === f)) {
+      giveTo(world, at, KING_PLAYER);
+      // K10: and the rest of its garrison gives up the walls.
+      abandonHolding(world, at, f, was.c.sides[0].army);
+    }
     for (const fx of def.wonEffects) applyEffect(world, fx);
   } else {
     for (const fx of def.lostEffects) applyEffect(world, fx);

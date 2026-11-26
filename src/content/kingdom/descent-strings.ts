@@ -35,6 +35,15 @@ export const CONTACT = {
   men: (men: number, fit: number) => men + " men (" + fit + " fit to fight)",
   morale: (m: number) => "morale " + m,
   dugIn: "dug in: they hold the ground they chose",
+  // K10: the keep's siege, and what a siege is won by.
+  titleKeep: (place: string) => "The keep of " + place,
+  bodyKeep: (p: { ours: string; theirs: string; place: string }) =>
+    "The townsmen of " + p.place + " have given up the town and hold the keep. " + p.theirs + " is at its gate.",
+  battered: (pct: number) => "its walls " + pct + "% down",
+  siegeAttack: (p: { men: number; minutes: number }) =>
+    "A siege: get " + p.men + " men inside the walls at once, or break the garrison, within " + p.minutes + " minutes. Batter a breach or force the gate.",
+  siegeDefend: (p: { men: number; minutes: number }) =>
+    "A siege: hold for " + p.minutes + " minutes. If " + p.men + " of theirs stand inside the walls at once, the walls are lost. Your gates open and shut with G.",
   walls: { none: "", palisade: "behind a palisade", wall: "behind a stone wall", keep: "behind a keep's walls" },
   fight: "Fight",
   fightHint: "Lead the battle yourself. Your army is drawn up; place it and begin.",
@@ -57,6 +66,8 @@ export const DESCENT = {
   cutOff: (army: string) => "The " + army + " is cut off and taken.",
   townsmen: (p: { name: string; lost: number }) => p.name + " lost " + p.lost + " of its people on the walls.",
   stormed: (p: { name: string; by: string }) => p.name + " is taken by " + p.by + ".",
+  wallsDamaged: (p: { name: string; pct: number; down: number }) =>
+    "The siege knocked down " + p.pct + "% of the walls of " + p.name + " (" + p.down + "% down now): they stay down until they are mended in the town.",
   legitimacyUp: (n: number) => "Word of it spreads: legitimacy +" + n + ".",
   legitimacyDown: (n: number) => "Word of it spreads: legitimacy -" + n + ".",
   morale: (p: { army: string; morale: number }) => "The " + p.army + "'s morale is now " + p.morale + ".",

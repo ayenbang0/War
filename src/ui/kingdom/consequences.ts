@@ -45,6 +45,10 @@ export function consequenceLines(
   }
   for (const e of events) {
     if (e.kind === "stormed") lines.push(DESCENT.stormed({ name: name(e.holding), by: FACTIONS[FACTION_IDS[e.faction]]?.name ?? "?" }));
+    // K10: the walls the battle knocked down stay down until they are mended.
+    if (e.kind === "wallsDamaged") {
+      lines.push(DESCENT.wallsDamaged({ name: name(e.holding), pct: Math.round(e.by / 10), down: Math.round(e.walls / 10) }));
+    }
   }
   if (result.legitimacy > 0) lines.push(DESCENT.legitimacyUp(result.legitimacy));
   else if (result.legitimacy < 0) lines.push(DESCENT.legitimacyDown(-result.legitimacy));

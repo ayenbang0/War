@@ -20,6 +20,11 @@
  * king's side is the townsmen alone: open the gates, or retreat to the keep
  * (refused, with the reason, where there is no keep or stone wall).
  *
+ * K10: behind walls it is a siege, and the dialog says how it is won and
+ * how battered the walls already are. Townsmen who fell back to the keep
+ * face the siege of the keep: Fight, Withdraw (refused: townsmen do not
+ * leave their walls) and Resolve -- the keep is not offered twice.
+ *
  * Text comes from content/kingdom/descent-strings.ts and invasion-strings.ts.
  */
 
@@ -92,16 +97,25 @@ export function contactDialog(root: HTMLElement, doc: Document, world: KingdomWo
       panel.setAttribute("role", "dialog");
       panel.setAttribute("aria-modal", "true");
       panel.setAttribute("data-contact", String(c.id));
-      const title = make(doc, "h2", "k-menu-title", c.kind === "assault" ? CONTACT.titleAssault(place) : CONTACT.titleField(place));
+      const title = make(doc, "h2", "k-menu-title",
+        c.keep ? CONTACT.titleKeep(place) : c.kind === "assault" ? CONTACT.titleAssault(place) : CONTACT.titleField(place));
       title.id = "k-contact-title";
       title.tabIndex = -1;
       panel.setAttribute("aria-labelledby", title.id);
       const words = { ours: ours.name, theirs: theirName(world, c), place };
       const body = make(doc, "p", "k-event-text",
-        c.kind === "field" ? CONTACT.bodyField(words) : ours.army === 0 ? CONTACT.bodyDefend(words) : CONTACT.bodyAssault(words));
+        c.keep ? CONTACT.bodyKeep(words) : c.kind === "field" ? CONTACT.bodyField(words) : ours.army === 0 ? CONTACT.bodyDefend(words) : CONTACT.bodyAssault(words));
       body.id = "k-contact-text";
       panel.setAttribute("aria-describedby", body.id);
       panel.append(title, body);
+      // K10: a siege, and how it is won.
+      if (spec.victory.mode === "breakthrough") {
+        const p = { men: spec.victory.required, minutes: Math.round(spec.duration / 60) };
+        const how = make(doc, "p", "k-event-text k-contact-siege",
+          spec.deployment.attacker === 0 ? CONTACT.siegeAttack(p) : CONTACT.siegeDefend(p));
+        how.setAttribute("data-key", "contact-siege");
+        panel.appendChild(how);
+      }
 
       // The two sides, in words: men, fit men, morale, and what the defender has on its side.
       const sides = make(doc, "dl", "k-contact-sides");
@@ -117,6 +131,7 @@ export function contactDialog(root: HTMLElement, doc: Document, world: KingdomWo
           if (spec.deployment.ambush) bits.push(CONTACT.dugIn);
           const wall = CONTACT.walls[spec.terrain.fortification];
           if (wall) bits.push(wall);
+          if (wall && spec.terrain.worn > 0) bits.push(CONTACT.battered(Math.round(spec.terrain.worn / 10)));
         }
         sides.append(make(doc, "dt", undefined, label + ": " + s.name), make(doc, "dd", undefined, bits.join(", ")));
       };
@@ -156,7 +171,7 @@ export function contactDialog(root: HTMLElement, doc: Document, world: KingdomWo
         noWithdraw ? CONTACT.withdrawNo(noWithdraw) : null);
       add("auto", CONTACT.auto, CONTACT.autoHint, null);
       // K8 (KD-05): townsmen alone behind their own walls may also open the gates, or fall back to the keep.
-      if (c.kind === "assault" && c.sides[0].army === 0) {
+      if (c.kind === "assault" && c.sides[0].army === 0 && !c.keep) {
         const noYield = world.check({ kind: "resolveContact", contact: c.id, choice: "yield", result: null });
         add("yield", DEFEND.yield, DEFEND.yieldHint(YIELD_LEGITIMACY), noYield ? RUMOUR.no(noYield) : null);
         const noKeep = world.check({ kind: "resolveContact", contact: c.id, choice: "keep", result: null });

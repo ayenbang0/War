@@ -65,6 +65,59 @@ export const MILITIA_UNIT: UnitTypeId = "line";
 export const MILITIA_PEOPLE_PER_MAN = 10;
 export const MILITIA_MORALE = 60;
 
+// -- K10: sieges ------------------------------------------------------------------------------
+
+/**
+ * Wall damage at which a holding's walls are down (per mille of their
+ * strength): rubble a host walks over. Until they are mended the holding
+ * counts as unwalled -- no assault, no keep to fall back to, no nerve from
+ * walls (docs/PROVISIONAL.md K10.4).
+ */
+export const WALLS_DOWN = 1000;
+
+/**
+ * Mending walls (the city view's `repairWalls`): paid up front for all the
+ * damage standing, per quarter of the walls' strength (250 per mille,
+ * rounded up), then mended `perDay` per mille a day. A full repair costs
+ * about half of what the work cost to build (buildings.ts).
+ */
+export const WALL_REPAIR = {
+  perQuarter: {
+    none: {},
+    palisade: { coin: 1, timber: 3 },
+    wall: { coin: 5, timber: 3, iron: 1 },
+    keep: { coin: 10, timber: 4, iron: 3 },
+  } as Readonly<Record<Fortification, Readonly<Partial<Record<"coin" | "timber" | "iron", number>>>>>,
+  perDay: 100,
+} as const;
+
+/**
+ * How a siege battle is won (PLAN §B.9's "siege" victory, built on the
+ * battle's breakthrough rule): the defender wins by holding out to full
+ * time; the attacker by breaking the garrison or by having this many of its
+ * men inside the walls at once -- a quarter of the fit men it brings, never
+ * more than `maxMen` and never fewer than one (docs/PROVISIONAL.md K10.3).
+ */
+export const SIEGE_STORM = { share: 4, maxMen: 20 } as const;
+
+/**
+ * Laying a holding's works out on a battlefield (app/battle-config.ts
+ * `siegeFromSpec`): a circuit round the defender's ground, `margin` tiles
+ * clear of where its men are set down; a keep is a tight ring of two courses
+ * round the townsmen alone (docs/PROVISIONAL.md K10.2).
+ */
+export const SIEGE_LAYOUT = { margin: 2, keepMargin: 3, keepThickness: 2 } as const;
+
+/**
+ * Wall damage an auto-resolved siege leaves (per mille), by who won, spread
+ * across the range by the resolve's own cost draw (no new draw): a stormed
+ * town is badly broken, a town that held is knocked about.
+ */
+export const AUTORESOLVE_WALLS = {
+  stormed: [400, 700] as readonly [number, number],
+  held: [100, 300] as readonly [number, number],
+} as const;
+
 // -- the auto-resolve (sim/kingdom/autoresolve.ts) -------------------------------------------
 
 export const AUTORESOLVE = {

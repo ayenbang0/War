@@ -33,6 +33,7 @@ import type { DoctrineId } from "../content/doctrines.ts";
 import { LEVELS, levelById } from "../content/levels/index.ts";
 import type { UnitTypeId } from "../content/unit-types.ts";
 import { layerHash } from "../sim/layers.ts";
+import { gateTiles, onSiegeWall } from "../sim/siege.ts";
 import { kingdomHash } from "../sim/kingdom/hash.ts";
 import { hashWorld } from "../sim/hash.ts";
 
@@ -87,8 +88,14 @@ export type TestHook = {
    * battle's folded in while one is being fought. Null with no realm.
    */
   layerHash(): string | null;
-  /** End the live battle now with this winner (0 is the player). */
-  forceOutcome(winner: number): void;
+  /**
+   * End the live battle now with this winner (0 is the player). K10: with
+   * `breach`, that many tiles of a siege's wall line (the first, in tile
+   * order, gates left alone) are knocked down first -- the engines' work in
+   * the fighting this stands in for, so a siege's wall damage can be followed
+   * back to the holding.
+   */
+  forceOutcome(winner: number, opts?: { breach?: number }): void;
   /**
    * TEST ONLY: launch a normal battle over whatever is on top (Home, in
    * practice), with the "test" origin, whose report and leave both go back
@@ -116,9 +123,23 @@ export function testHook(app: App): TestHook {
       const b = battle();
       return layerHash(kingdomHash(r.world), b ? hashWorld(b.world) : undefined);
     },
-    forceOutcome: (winner) => {
+    forceOutcome: (winner, opts) => {
       const b = battle();
       if (!b) throw new Error("no battle is live");
+      const works = b.world.siege;
+      let left = opts?.breach ?? 0;
+      if (works && left > 0) {
+        const g = b.world.terrain;
+        const gates = new Set<number>();
+        for (let i = 0; i < works.gates.length; i++) for (const t of gateTiles(g, works, i)) gates.add(t);
+        for (let ty = 0; ty < g.height && left > 0; ty++) {
+          for (let tx = 0; tx < g.width && left > 0; tx++) {
+            if (!onSiegeWall(works, tx, ty) || gates.has(ty * g.width + tx) || !g.destructibleAt(tx, ty)) continue;
+            g.damage(tx, ty, 1e9);
+            left--;
+          }
+        }
+      }
       b.world.outcome = { winner, reason: "rout", detail: "ended by the e2e harness" };
     },
     launchBattle: (spec) => app.launch(testBattleConfig(spec), { kind: "test" }),

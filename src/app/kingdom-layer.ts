@@ -972,6 +972,23 @@ export class KingdomLayer implements LayerKeys {
       case "waveRode":
         this.hud.alert(day, INVASION_FEED.wave(faction(e.faction)));
         return false;
+      // K10: the keep, and walls knocked down and mended.
+      case "keepRetreat":
+        this.storesDirty = true;
+        this.hud.alert(day, INVASION_FEED.keepRetreat(name(e.holding)));
+        return false;
+      case "wallsDamaged":
+        if (w.holding(e.holding)?.owner === "king" || holdingKnowledge(w, KING_PLAYER, e.holding) === KNOW_SEEN) {
+          this.hud.alert(day, INVASION_FEED.wallsDamaged({ place: name(e.holding), pct: Math.round(e.walls / 10) }));
+        }
+        return false;
+      case "wallsRepairing":
+        this.storesDirty = true;
+        if (e.faction === KING_PLAYER) this.hud.alert(day, INVASION_FEED.wallsMending(name(e.holding)));
+        return false;
+      case "wallsMended":
+        if (w.holding(e.holding)?.owner === "king") this.hud.alert(day, INVASION_FEED.wallsMended(name(e.holding)));
+        return false;
       default:
         return this.onStoryEvent(e);
     }

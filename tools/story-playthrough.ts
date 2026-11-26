@@ -102,7 +102,7 @@ function result(w: KingdomWorld, kingWins: boolean): BattleResult {
     morale: [kingWins ? 70 : 0, kingWins ? 0 : 70],
     fled: [!kingWins, kingWins],
     left: [false, false],
-    damage: { crops: 0, buildings: 0 },
+    damage: { crops: 0, buildings: 0, walls: 0 },
     legitimacy: !king ? 0 : kingWins ? WIN_LEGITIMACY : -LOSS_LEGITIMACY,
   };
 }

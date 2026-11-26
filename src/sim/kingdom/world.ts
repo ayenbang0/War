@@ -277,6 +277,8 @@ export class KingdomWorld {
         justice: DEFAULT_JUSTICE,
         festival: 0,
         pardoned: 0,
+        walls: 0,
+        mend: 0,
       };
       this.holdings.push(h);
       this.byKey.set(h.key, h);

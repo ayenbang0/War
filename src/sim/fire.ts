@@ -43,6 +43,7 @@ const SPREAD: Partial<Record<TerrainType, number>> = {
   [Terrain.Forest]: 0.12,
   [Terrain.Palisade]: 0.07,
   [Terrain.Gate]: 0.05,
+  [Terrain.GateOpen]: 0.05,
   [Terrain.Bridge]: 0.05,
 };
 

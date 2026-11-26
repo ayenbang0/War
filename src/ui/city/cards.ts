@@ -23,7 +23,8 @@ import { cardFrame, make, row, setText, type FrameHooks } from "../kingdom/cards
 import {
   buildMenu, economyPanel, nextSowing, resowMenu, ripeEstimate, sowMenu, type EconomyHooks, type EconomyPanel,
 } from "../kingdom/economy-panel.ts";
-import { autoSowWaits, grainStores, seedCost } from "../../sim/kingdom/economy.ts";
+import { autoSowWaits, grainStores, seedCost, wallRepairCost } from "../../sim/kingdom/economy.ts";
+import { WALLS_DOWN, WALL_REPAIR } from "../../content/kingdom/descent.ts";
 import { KING_PLAYER } from "../../content/kingdom/factions.ts";
 import { BUILDINGS, BUILDING_IDS, type BuildingId } from "../../content/kingdom/buildings.ts";
 import { CROPS, type CropId } from "../../content/kingdom/crops.ts";
@@ -83,6 +84,11 @@ export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, h
   let recruit: HTMLElement | null = null;
   let market: HTMLElement | null = null;
   let heading: HTMLElement | null = null;
+  // K10: the walls' state and their mending, on the lot of the ring.
+  let wallsRow: HTMLElement | null = null;
+  let wallsDt: HTMLElement | null = null;
+  let repair: HTMLElement | null = null;
+  let repairWhy: string | null = null;
   let buildLabel = "";
   let buildNote = "";
 
@@ -143,6 +149,23 @@ export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, h
       if (isTavern && !kingsTavern(h)) market.setAttribute("aria-disabled", "true");
       else market.removeAttribute("aria-disabled");
     }
+    // K10: the ring's lot says how much of it stands, and mends it.
+    if (wallsRow && wallsDt && repair) {
+      const ringHere = id === "palisade" || id === "wall" || id === "keep";
+      const standing = ringHere && h.works[index] === 0;
+      show(wallsRow, standing, "block");
+      show(wallsDt, standing, "block");
+      const pct = Math.round(h.walls / 10);
+      setText(wallsRow, h.walls === 0 ? C.wallsWhole : h.walls >= WALLS_DOWN ? C.wallsFallen
+        : h.mend > 0 ? C.wallsMending({ pct, days: Math.ceil(Math.min(h.walls, h.mend) / WALL_REPAIR.perDay) }) : C.wallsDown(pct));
+      const offerRepair = standing && h.owner === "king" && h.walls > 0;
+      if (!offerRepair && doc.activeElement === repair) heading?.focus();
+      show(repair, offerRepair);
+      repairWhy = offerRepair ? world.check({ kind: "repairWalls", holding: h.id }) : null;
+      if (repairWhy) repair.setAttribute("aria-disabled", "true");
+      else repair.removeAttribute("aria-disabled");
+      repair.title = offerRepair ? C.repairCost(amountsLine(wallRepairCost(h))) : "";
+    }
     setText(build, buildLabel || C.buildHere);
     build.setAttribute("aria-label", (buildLabel || C.buildHere) + " " + h.name);
     if (heading) setText(heading, C.lotTitle(index + 1) + " · " + h.name);
@@ -153,6 +176,9 @@ export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, h
     const dl = make(doc, "dl", "k-rows");
     state = row(doc, dl, C.state);
     upkeep = row(doc, dl, C.upkeep);
+    wallsDt = make(doc, "dt", undefined, C.walls);
+    wallsRow = make(doc, "dd", "k-walls");
+    dl.append(wallsDt, wallsRow);
     body.appendChild(dl);
     about = make(doc, "p", "k-sub");
     note = make(doc, "p", "c-note");
@@ -186,6 +212,22 @@ export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, h
     };
     market = mb;
     actions.appendChild(mb);
+    const wb = button(doc, C.repairWalls, "repair-walls");
+    wb.onclick = (e) => {
+      pressed(wb, e);
+      if (repairWhy) {
+        if (note) setText(note, E.notNow(repairWhy));
+        return;
+      }
+      const why = world.check({ kind: "repairWalls", holding: h.id });
+      if (why) {
+        if (note) setText(note, E.notNow(why));
+        return;
+      }
+      hooks.issue({ kind: "repairWalls", holding: h.id }, C.repairCost(amountsLine(wallRepairCost(h))));
+    };
+    repair = wb;
+    actions.appendChild(wb);
   }, refresh, () => build);
   return { screen, kind: "lot", index, refresh };
 }

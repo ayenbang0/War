@@ -62,6 +62,14 @@ export const C = {
   upkeepLine: (s: string) => s + " a day",
   upgrade: (name: string) => "A " + name.toLowerCase() + " can be built over it.",
   enclosure: "It rings the town: you can see it on the plan.",
+  // K10: walls a battle knocked down stay down until they are mended.
+  walls: "Walls",
+  wallsWhole: "whole",
+  wallsDown: (pct: number) => pct + "% knocked down",
+  wallsFallen: "knocked down: the town is open until they are rebuilt",
+  wallsMending: (p: { pct: number; days: number }) => p.pct + "% down, the masons at work (" + days(p.days) + " left)",
+  repairWalls: "Repair walls",
+  repairCost: (cost: string) => "Mending costs " + cost + ", paid now; the masons put back a tenth of the works a day.",
   buildMenuFor: (n: number) => "It goes on lot " + n + ".",
 
   // -- fields ---------------------------------------------------------------

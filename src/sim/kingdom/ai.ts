@@ -53,7 +53,7 @@ import { armyMen, armyVisible, hasBarracks, recruitCost, standsIn } from "./armi
 import { fortificationOf, hostile, inWaitingContact } from "./descent.ts";
 import { choiceCost, eventOf, holdingKnowledge, isUnfoundSite, pendingFinds } from "./explore.ts";
 import { canAfford } from "./ledger.ts";
-import { seedCost } from "./economy.ts";
+import { builtFortification, seedCost, wallRepairCost } from "./economy.ts";
 import { aiFactions, seatOf } from "./invasions.ts";
 import type { KingdomWorld } from "./world.ts";
 
@@ -98,6 +98,8 @@ export type OwnHolding = {
   readonly garrisonSlots: number;
   /** Its plots: what stage each is at, and for one that can be sown now, the crop and its seed grain. */
   readonly plots: readonly { readonly id: number; readonly stage: PlotStage; readonly crop: CropId | null; readonly seed: number }[];
+  /** K10: what mending its battered walls would cost now, or null with nothing to pay for. */
+  readonly repair: Readonly<Partial<Record<StockId, number>>> | null;
 };
 
 /** A letter waiting for a choice: what each choice costs, and whether it is a gamble. */
@@ -214,6 +216,7 @@ export function perceive(world: KingdomWorld, f: number): Perception {
       const crop = CROP_IDS.find((c) => CROPS[c].sow.includes(d.season) && !CROPS[c].regrowDays && daysToRipe(CROPS[c], d.dayOfYear) !== null) ?? null;
       return { id: p.id, stage: p.stage, crop, seed: crop ? seedCost(CROPS[crop], h).grain ?? 0 : 0 };
     }),
+    repair: h.walls > h.mend && builtFortification(h) !== "none" ? wallRepairCost(h) : null,
   }));
   const e = world.economy[f];
   const finds: PendingFind[] = pendingFinds(world, f).map((fd) => {
@@ -299,6 +302,15 @@ export function decide(p: Perception, mind: AiMind, places: readonly Place[], rn
         spare -= pl.seed;
       }
     }
+  }
+  // K10: battered walls are mended out of what the stores can spare above the reserve.
+  let coin = p.stocks.coin - AI.reserveCoin;
+  for (const h of p.holdings) {
+    const c = h.repair;
+    if (!c) continue;
+    if ((c.coin ?? 0) > coin || (c.timber ?? 0) > p.stocks.timber || (c.iron ?? 0) > p.stocks.iron) continue;
+    out.push({ kind: "repairWalls", holding: h.id });
+    coin -= c.coin ?? 0;
   }
   const field = p.own.filter((a) => !a.garrison && !a.busy);
   let fieldMen = 0;

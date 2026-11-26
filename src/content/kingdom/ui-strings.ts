@@ -124,6 +124,9 @@ export const K = {
   // Card fields.
   province: "Province",
   held: "Held by",
+  // K10
+  wallsNone: "none",
+  wallsLine: (p: { kind: string; state: string }) => p.kind + ", " + p.state,
   unclaimed: "unclaimed",
   country: "Country",
   people: "People",
@@ -213,6 +216,10 @@ export const REFUSAL = {
   wrongSeason: (crop: string) => crop + " cannot be sown in this season",
   tooLate: (crop: string) => "too late in the year for " + crop.toLowerCase() + ": the winter would kill it before it ripens",
   notRipe: "it is not ripe",
+  // K10: mending walls.
+  noWalls: "there are no walls here to mend",
+  wallsWhole: "the walls are whole",
+  wallsMending: "the masons are already paid for all the damage",
 } as const;
 
 /** Stocks, as the resources bar and the panels name them. */

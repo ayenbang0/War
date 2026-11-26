@@ -237,7 +237,7 @@ export class TerrainLayer {
       ctx.moveTo(px, py + TILE_SIZE / 2);
       ctx.lineTo(px + TILE_SIZE, py + TILE_SIZE / 2);
       ctx.stroke();
-    } else if (type === 10 || type === 11 || type === 12) {
+    } else if (type === 10 || type === 11 || type === 12 || type === 15) {
       this.decorateCurtain(ctx, type, tx, ty, px, py);
     } else if (type === 13) {
       // Rubble: tumbled blocks, drawn as small ink-edged squares at odd angles
@@ -308,7 +308,7 @@ export class TerrainLayer {
     const s = TILE_SIZE;
     const curtain = (x: number, y: number): boolean => {
       const k = t.typeAt(x, y);
-      return k === 10 || k === 11 || k === 12;
+      return k === 10 || k === 11 || k === 12 || k === 15;
     };
     if (type === 12) {
       // Stakes: a row of ink circles along the run of the stockade.
@@ -325,6 +325,27 @@ export class TerrainLayer {
           ctx.stroke();
         }
       }
+    } else if (type === 15) {
+      // K10: an open gate. The arch is paved (two faint courses) and the
+      // leaves are folded back against the jambs: a short heavy bar at each
+      // end of the gateway, so an open gate never reads as a breach.
+      ctx.strokeStyle = "rgba(60, 54, 46, 0.3)";
+      ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(px, py + s / 3);
+      ctx.lineTo(px + s, py + s / 3);
+      ctx.moveTo(px, py + (2 * s) / 3);
+      ctx.lineTo(px + s, py + (2 * s) / 3);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(72, 52, 30, 0.9)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(px + 3, py + 3);
+      ctx.lineTo(px + 3, py + s * 0.45);
+      ctx.moveTo(px + s - 3, py + 3);
+      ctx.lineTo(px + s - 3, py + s * 0.45);
+      ctx.stroke();
+      return;
     } else if (type === 11) {
       // A gate: planks one way, two iron bands the other.
       ctx.strokeStyle = "rgba(48, 34, 20, 0.7)";

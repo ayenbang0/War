@@ -100,7 +100,7 @@ function untouched(spec: BattleSpec): BattleResult {
     squads: [spec.sides[0].squads.map((q) => ({ squad: q.squad, men: q.men, wounded: q.wounded })),
       spec.sides[1].squads.map((q) => ({ squad: q.squad, men: q.men, wounded: q.wounded }))],
     morale: [spec.sides[0].morale, spec.sides[1].morale], fled: [false, false], left: [false, false],
-    damage: { crops: 0, buildings: 0 }, legitimacy: 0,
+    damage: { crops: 0, buildings: 0, walls: 0 }, legitimacy: 0,
   };
 }
 /** A result in which `side` was wiped out and the other won untouched. */
@@ -216,7 +216,8 @@ section("walls: an assault on the townsmen");
   for (const q of spec.sides[1].squads) townsmen += q.men;
   check("so many squads as its walls allow, from its people", spec.sides[1].squads.length === MILITIA_SQUADS.palisade &&
     townsmen > 0 && townsmen <= harrow.population / 10, townsmen + " men of " + harrow.population);
-  check("and the defender wins by holding out", spec.victory.mode === "survive" && spec.terrain.fortification === "palisade");
+  check("and it is a siege: the defender wins by holding out, the attacker by getting men inside (K10)",
+    spec.victory.mode === "breakthrough" && spec.victory.attacker === 0 && spec.terrain.fortification === "palisade" && spec.terrain.worn === 0);
   check("the townsmen cannot withdraw from their own walls; the attacker can",
     w.check({ kind: "resolveContact", contact: c!.id, choice: "withdraw", result: null }) === null);
   const pop0 = harrow.population;

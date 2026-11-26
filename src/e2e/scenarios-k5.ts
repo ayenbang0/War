@@ -51,7 +51,7 @@ function descentSave(): string {
 }
 
 /** From Home into the saved realm, whatever is on top once it opens. */
-async function openRealm(t: Driver): Promise<KingdomLayer> {
+export async function openRealm(t: Driver): Promise<KingdomLayer> {
   t.clickButton(K.homeButton);
   await t.waitFor(() => t.hook.kingdom() !== null, () => "the kingdom map (screens: " + t.hook.screens().join(" > ") + ")");
   const k = t.hook.kingdom()!;
@@ -59,14 +59,14 @@ async function openRealm(t: Driver): Promise<KingdomLayer> {
   return k;
 }
 
-function armyOnScreen(t: Driver, k: KingdomLayer, army: number): Pt {
+export function armyOnScreen(t: Driver, k: KingdomLayer, army: number): Pt {
   const c = armyCounters(k.world, k.armiesDrawn(), k.cam.pxToWorld).find((x) => x.army.id === army);
   t.expect(c !== undefined, "army " + army + " is drawn on the map");
   return onScreen(t, k, c!.counter.x, c!.counter.y);
 }
 
 /** A wheel notch on the stage at a screen point (positive deltaY zooms out). */
-function wheel(t: Driver, p: Pt, deltaY: number): void {
+export function wheel(t: Driver, p: Pt, deltaY: number): void {
   const W = (globalThis as unknown as { WheelEvent: typeof WheelEvent }).WheelEvent;
   t.byId("stage").dispatchEvent(new W("wheel", {
     bubbles: true, cancelable: true, composed: true, clientX: p.x, clientY: p.y, deltaY, deltaMode: 0,
@@ -74,7 +74,7 @@ function wheel(t: Driver, p: Pt, deltaY: number): void {
 }
 
 /** Inside the view the map is drawn in (the window; the stage fills it). */
-function onStage(t: Driver, p: Pt): boolean {
+export function onStage(t: Driver, p: Pt): boolean {
   const r = t.byId("stage").getBoundingClientRect();
   return p.x >= r.left && p.x <= r.left + window.innerWidth && p.y >= r.top && p.y <= r.top + window.innerHeight;
 }

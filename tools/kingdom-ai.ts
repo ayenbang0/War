@@ -629,12 +629,9 @@ section("defence: ambush, walls, and the defender's choices at its walls");
     untilDay(x, 2);
     const town = xs[1];
     const s = town.buildings.indexOf(null);
-    town.buildings[s] = choice === "keep" ? "palisade" : "palisade";
+    // K10: the keep needs stone (a wall stands over the palisade, in its slot).
+    town.buildings[s] = choice === "keep" ? "wall" : "palisade";
     town.works[s] = 0;
-    if (choice === "keep") {
-      const s2 = town.buildings.indexOf(null);
-      if (s2 >= 0) { town.buildings[s] = "wall"; }
-    }
     town.population = 200;
     const host = raiseArmy(x, HARE, (x.holdingByKey("moot-hill") as Holding).id, ["line", "line", "line"], "defensive");
     x.issue({ kind: "marchArmy", army: host.id, to: town.id }, HARE);
@@ -656,9 +653,19 @@ section("defence: ambush, walls, and the defender's choices at its walls");
       check("yield: the gates open, the town is the Hare's, nobody dies, legitimacy falls",
         town.owner === "hare" && ev.some((e) => e.kind === "yielded") && x.economy[KING].legitimacy < leg && armyMen(host) === 3 * UNIT_TYPES.line.soldiers);
     } else {
-      const siege = ev.find((e) => e.kind === "siege");
-      check("keep: a siege is fought for the keep (resolved for now) and the town outside is sacked",
-        !!siege && !x.contact && town.plots.every((p) => p.stage !== "growing"), JSON.stringify(siege));
+      // K10: going into the keep settles nothing -- the siege of the keep is a battle still to be fought.
+      check("keep: the town outside is sacked and the townsmen hold the keep, the siege still to fight",
+        ev.some((e) => e.kind === "keepRetreat") && !!x.contact && x.contact.keep === true && !ev.some((e) => e.kind === "siege") &&
+          town.plots.every((p) => p.stage !== "growing"));
+      const kspec = buildBattleSpec(x, x.contact!);
+      check("keep: its battle is a siege of the keep", kspec.terrain.fortification === "keep" && kspec.victory.mode === "breakthrough");
+      check("keep: there is no second keep to fall back to",
+        x.check({ kind: "resolveContact", contact: cc.id, choice: "keep", result: null }, KING) === INVASION_REFUSAL.inKeep(town.name));
+      x.issue({ kind: "resolveContact", contact: cc.id, choice: "auto", result: null });
+      const ev2 = x.tick();
+      const siege = ev2.find((e) => e.kind === "siege");
+      check("keep: resolved, the siege of the keep is told and the walls carry its damage",
+        !!siege && !x.contact && ev2.some((e) => e.kind === "wallsDamaged") && town.walls > 0, JSON.stringify(siege) + " walls " + town.walls);
     }
   }
 }

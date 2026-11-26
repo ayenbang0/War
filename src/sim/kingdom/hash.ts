@@ -114,6 +114,7 @@ export function mixOrder(h: number, o: KingdomOrder): number {
     case "ambush": return mixU32(h, o.army);
     case "setAutoSow": return mixU32(mixU32(mixU32(h, o.holding), o.plot), o.crop === null ? 0 : CROP_IDS.indexOf(o.crop) + 1);
     case "answerLetter": return mixU32(mixU32(h, o.letter), o.choice);
+    case "repairWalls": return mixU32(h, o.holding);
   }
 }
 
@@ -212,6 +213,13 @@ export function kingdomHash(world: KingdomWorld): string {
     h = mixU32(h, JUSTICE_IDS.indexOf(x.justice));
     h = mixU32(h, x.festival);
     h = mixU32(h, x.pardoned);
+    // K10: battered walls and their mending, mixed only when there are any,
+    // so every realm whose walls were never battered hashes as it did.
+    if (x.walls !== 0 || x.mend !== 0) {
+      h = mixU32(h, 0x4b3130);
+      h = mixU32(h, x.walls);
+      h = mixU32(h, x.mend);
+    }
   }
 
   h = mixU32(h, world.roads.length);
@@ -264,6 +272,8 @@ export function kingdomHash(world: KingdomWorld): string {
       h = mixU32(h, c.holding);
       h = mixU32(h, c.road);
       h = mixU32(h, c.tick);
+      // K10: the townsmen in their keep (mixed only then).
+      if (c.keep) h = mixU32(h, 0x4b454550);
     }
     h = mixU32(h, world.disengaged.length);
     for (const [a, b] of world.disengaged) { h = mixU32(h, a); h = mixU32(h, b); }

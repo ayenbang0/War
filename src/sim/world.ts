@@ -22,9 +22,9 @@
 import { atan2, clamp, cos, dist, floor, max, min, PI, rotateToward, round, sin, sqrt, TAU } from "./math.ts";
 import { Rng, Stream } from "./rng.ts";
 import { OrderQueue, SETUP_ORDER_KINDS, type Order } from "./orders.ts";
-import { generateTerrain, isWork, Terrain, TerrainGrid, TERRAIN_INFO, TILE_SIZE, type TerrainType } from "./terrain.ts";
+import { generateTerrain, isGate, isWork, Terrain, TerrainGrid, TERRAIN_INFO, TILE_SIZE, type TerrainType } from "./terrain.ts";
 import { FIRE_TILE_DPS, igniteDisc, stepFire } from "./fire.ts";
-import { raiseSiegeWorks, type SiegeWorks } from "./siege.ts";
+import { gateTiles, raiseSiegeWorks, siegeDamage, type SiegeWorks } from "./siege.ts";
 import { formationSlots, formationRadius, type FormationShape } from "./formations.ts";
 import { advanceToward } from "./movement.ts";
 import { SpatialHash } from "./spatial.ts";
@@ -1046,6 +1046,10 @@ export class World {
       this.applyAbility(order.player, order.ability, order.x, order.y, order.squad);
       return;
     }
+    if (order.kind === "gates") {
+      this.applyGates(order.player, order.open);
+      return;
+    }
     const g = this.groupById(order.squad);
     if (!g) return;
     // A recovering group has stood down and is not taking orders. Enforced in
@@ -1114,6 +1118,68 @@ export class World {
         g.recoverUntil = this.tick + RECOVER_LOCK_SECONDS * TICK_RATE;
         return;
     }
+  }
+
+  /**
+   * K10: the garrison swings its gates (docs/PROVISIONAL.md K10.1). Only the
+   * side holding the walls; a gate already broken is rubble and does not
+   * swing. Opening is always allowed -- a sally port is a decision, not a
+   * risk the sim refuses. Shutting is refused, gate by gate, while ANYONE
+   * stands in the gateway, friend or foe: a gate is never closed on men,
+   * so nobody is ever settled out of a closing gate and the "nobody inside a
+   * wall" invariant holds without an eviction. Gates are taken in the
+   * record's order, tiles ascending, so two peers swing the same tiles.
+   */
+  private applyGates(player: number, open: boolean): void {
+    const w = this.siege;
+    if (!w || w.defender !== player) return;
+    const t = this.terrain;
+    let occupied: Set<number> | null = null;
+    if (!open) {
+      occupied = new Set<number>();
+      const s = this.soldiers;
+      for (let i = 0; i < s.count; i++) {
+        if (s.alive[i] !== 1) continue;
+        occupied.add(floor(s.y[i] / TILE_SIZE) * t.width + floor(s.x[i] / TILE_SIZE));
+      }
+      for (const g of this.groups) occupied.add(floor(g.anchorY / TILE_SIZE) * t.width + floor(g.anchorX / TILE_SIZE));
+    }
+    for (let k = 0; k < w.gates.length; k++) {
+      const tiles = gateTiles(t, w, k);
+      if (occupied && tiles.some((i) => occupied!.has(i))) continue;
+      for (const i of tiles) t.swingGate(i % t.width, (i / t.width) | 0, open);
+    }
+  }
+
+  /** K10: does this player hold walls with a gate standing open? (The HUD's button reads it.) */
+  gatesOpen(player: number): boolean {
+    const w = this.siege;
+    if (!w || w.defender !== player) return false;
+    for (let k = 0; k < w.gates.length; k++) {
+      for (const i of gateTiles(this.terrain, w, k)) if (this.terrain.type[i] === Terrain.GateOpen) return true;
+    }
+    return false;
+  }
+
+  /** K10: does this player hold walls with a gate still standing (shut or open)? */
+  hasGates(player: number): boolean {
+    const w = this.siege;
+    if (!w || w.defender !== player) return false;
+    for (let k = 0; k < w.gates.length; k++) {
+      for (const i of gateTiles(this.terrain, w, k)) {
+        const ty = this.terrain.type[i];
+        if (ty === Terrain.Gate || ty === Terrain.GateOpen) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * K10: how badly this field's siege works are battered, per mille (0 with
+   * none). The kingdom takes it back as the holding's wall damage.
+   */
+  wallDamage(): number {
+    return this.siege ? siegeDamage(this.terrain, this.siege) : 0;
   }
 
   /**
@@ -3055,7 +3121,7 @@ export class World {
         const type = this.terrain.typeAt(tx, ty);
         if (!isWork(type) || !this.terrain.inBounds(tx, ty)) continue;
         if (this.terrain.ownerAt(tx, ty) === player) continue;
-        const rank = type === Terrain.Gate ? 0 : 1;
+        const rank = isGate(type) ? 0 : 1;
         const wx = (tx + 0.5) * TILE_SIZE;
         const wy = (ty + 0.5) * TILE_SIZE;
         const dd = d2(x, y, wx, wy);

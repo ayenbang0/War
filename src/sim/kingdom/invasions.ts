@@ -28,7 +28,7 @@ import { UNIT_TYPES } from "../../content/unit-types.ts";
 import { BUILDINGS } from "../../content/kingdom/buildings.ts";
 import { OPENING_HOSTS } from "../../content/kingdom/descent.ts";
 import {
-  BURN_FIELDS, FIELD_HOSTS, LEVY_CALL, SEAT_GARRISON, SEAT_WORKS, SEIZED_UNREST, WARNING,
+  BURN_FIELDS, CROWN_SEAT_WORKS, FIELD_HOSTS, LEVY_CALL, SEAT_GARRISON, SEAT_WORKS, SEIZED_UNREST, WARNING,
 } from "../../content/kingdom/invasions.ts";
 import { MAX_ARMIES_PER_SIDE } from "../../content/kingdom/armies.ts";
 import { INVASION_REFUSAL } from "../../content/kingdom/invasion-strings.ts";
@@ -89,6 +89,16 @@ export function setupCaptains(world: KingdomWorld): void {
       if (BUILDINGS[id].upgrades && !seat.buildings.includes(BUILDINGS[id].upgrades as string)) continue;
       seat.buildings[slot] = id;
       seat.works[slot] = 0;
+    }
+    // K10: the Crown Seat is walled in stone (the capital siege is fought behind it, PLAN Part A Act IV).
+    if (seat.key === world.map.crownSeat) {
+      for (const id of CROWN_SEAT_WORKS) {
+        const up = BUILDINGS[id].upgrades;
+        const slot = up ? seat.buildings.indexOf(up) : seat.buildings.indexOf(null);
+        if (slot < 0) continue;
+        seat.buildings[slot] = id;
+        seat.works[slot] = 0;
+      }
     }
     const g = raiseArmy(world, f, seat.id, SEAT_GARRISON, "defensive");
     setPosture(world, g, "hold");

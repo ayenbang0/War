@@ -122,7 +122,7 @@ export function fieldLine(p: FieldPlot): string {
 
 export class CityRenderer {
   /** Frames drawn and what the last drew: read by the tests and the e2e harness. */
-  readonly stats = { frames: 0, lots: 0, fields: 0, labels: 0, enclosure: "none" as "none" | "palisade" | "wall" | "keep" | "works" };
+  readonly stats = { frames: 0, lots: 0, fields: 0, labels: 0, enclosure: "none" as "none" | "palisade" | "wall" | "keep" | "works", breaches: 0 };
 
   private readonly ctx: CanvasRenderingContext2D;
   private grain: CanvasPattern | null;
@@ -303,6 +303,7 @@ export class CityRenderer {
     // -- the enclosure (a palisade, wall or keep standing or being built) ---------------
     const enclosure = this.enclosureOf(h);
     this.stats.enclosure = enclosure;
+    this.stats.breaches = 0;
     if (enclosure !== "none") {
       path(plan.ring, true);
       ctx.setLineDash(enclosure === "works" ? [px(6, 4), px(5, 3)] : []);
@@ -345,6 +346,28 @@ export class CityRenderer {
         }
       }
       ctx.setLineDash([]);
+      // K10: breaches -- one for each quarter of the works a battle knocked
+      // down (rounded up), spaced round the ring, rubble in the gap.
+      const breaches = enclosure === "works" ? 0 : Math.min(4, Math.ceil(h.walls / 250));
+      this.stats.breaches = breaches;
+      for (let b = 0; b < breaches; b++) {
+        const i = Math.floor(((b + 0.5) / 4) * plan.ring.length) % plan.ring.length;
+        const p0 = plan.ring[i];
+        const p1 = plan.ring[(i + 1) % plan.ring.length];
+        ctx.strokeStyle = GROUND[plan.biome];
+        ctx.lineWidth = px(10, 5);
+        ctx.beginPath();
+        ctx.moveTo(sx(p0.x + (p1.x - p0.x) * 0.2), sy(p0.y + (p1.y - p0.y) * 0.2));
+        ctx.lineTo(sx(p0.x + (p1.x - p0.x) * 0.8), sy(p0.y + (p1.y - p0.y) * 0.8));
+        ctx.stroke();
+        ctx.fillStyle = enclosure === "palisade" ? PALISADE : STONE;
+        for (let k = 0; k < 5; k++) {
+          const t = 0.25 + k * 0.12;
+          ctx.beginPath();
+          ctx.arc(sx(p0.x + (p1.x - p0.x) * t + (k % 2 ? 3 : -3)), sy(p0.y + (p1.y - p0.y) * t + (k % 2 ? -2 : 2)), px(2, 1.2), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
       // Gates: a break and two posts where each street goes through.
       for (const g of plan.gates) {
         ctx.fillStyle = STREET;

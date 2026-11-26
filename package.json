@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "check:sim": "node tools/check-sim-purity.mjs",
-    "test": "node tools/check-sim-purity.mjs && node tools/headless.ts && node tools/lockstep.ts && node tools/siege-check.ts && node tools/render-check.ts && node tools/content-check.ts && node tools/ui-check.ts && node tools/kingdom-headless.ts && node tools/kingdom-economy.ts && node tools/kingdom-explore.ts && node tools/kingdom-armies.ts && node tools/kingdom-descent.ts && node tools/kingdom-morale.ts && node tools/kingdom-mercenaries.ts && node tools/kingdom-ai.ts && node tools/story-check.ts && node tools/story-playthrough.ts",
+    "test": "node tools/check-sim-purity.mjs && node tools/headless.ts && node tools/lockstep.ts && node tools/siege-check.ts && node tools/render-check.ts && node tools/content-check.ts && node tools/ui-check.ts && node tools/kingdom-headless.ts && node tools/kingdom-economy.ts && node tools/kingdom-explore.ts && node tools/kingdom-armies.ts && node tools/kingdom-descent.ts && node tools/kingdom-morale.ts && node tools/kingdom-mercenaries.ts && node tools/kingdom-ai.ts && node tools/story-check.ts && node tools/story-playthrough.ts && node tools/kingdom-sieges.ts",
     "lockstep": "node tools/lockstep.ts",
     "ui-check": "node tools/ui-check.ts",
     "e2e:fake": "node tools/e2e-fake.ts"

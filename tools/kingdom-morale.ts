@@ -481,7 +481,7 @@ section("into battle: the army's morale is the battle's starting nerve");
       squads: [sp.sides[0].squads.map((q) => ({ squad: q.squad, men: q.men, wounded: q.wounded })),
         sp.sides[1].squads.map((q) => ({ squad: q.squad, men: q.men, wounded: q.wounded }))] as [any, any],
       morale: [sp.sides[0].morale, sp.sides[1].morale] as [number, number], fled: [winner === 1, winner === 0] as [boolean, boolean],
-      left: [false, false] as [boolean, boolean], damage: { crops: 0, buildings: 0 }, legitimacy: winner === 0 ? 2 : winner === 1 ? -1 : 0,
+      left: [false, false] as [boolean, boolean], damage: { crops: 0, buildings: 0, walls: 0 }, legitimacy: winner === 0 ? 2 : winner === 1 ? -1 : 0,
     };
     w.issue({ kind: "resolveContact", contact: c.id, choice: "fight", result });
     const ev = w.tick();

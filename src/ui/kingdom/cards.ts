@@ -28,7 +28,8 @@ import { FACTIONS } from "../../content/kingdom/factions.ts";
 import { E, K, KIND_NAME, STAGE_NAME, TASK_NAME, TAX_NAME, WEATHER_LINE, etaWords } from "../../content/kingdom/ui-strings.ts";
 import type { KingdomOrderBody } from "../../sim/kingdom/orders.ts";
 import type { EconomyHooks } from "./economy-panel.ts";
-import { taxPerDay } from "../../sim/kingdom/economy.ts";
+import { builtFortification, taxPerDay } from "../../sim/kingdom/economy.ts";
+import { WALLS_DOWN } from "../../content/kingdom/descent.ts";
 import { BUILDINGS, type BuildingId } from "../../content/kingdom/buildings.ts";
 import { CROPS, type CropId } from "../../content/kingdom/crops.ts";
 import { C } from "../../content/kingdom/city-strings.ts";
@@ -178,6 +179,7 @@ export function regionCard(root: HTMLElement, doc: Document, world: KingdomWorld
   let owner: HTMLElement | null = null;
   let people: HTMLElement | null = null;
   let fromKing: HTMLElement | null = null;
+  let walls: HTMLElement | null = null;
   let summary: HTMLElement | null = null;
   let enter: HTMLElement | null = null;
   let heading: HTMLElement | null = null;
@@ -210,6 +212,13 @@ export function regionCard(root: HTMLElement, doc: Document, world: KingdomWorld
     }
     setText(owner, h.owner === null ? capital(K.unclaimed) : capital(FACTIONS[h.owner].name));
     setText(people, String(h.population));
+    // K10: the ring, and how much of it a siege left standing.
+    if (walls) {
+      const f = builtFortification(h);
+      const pct = Math.round(h.walls / 10);
+      setText(walls, f === "none" ? K.wallsNone
+        : K.wallsLine({ kind: BUILDINGS[f].name, state: h.walls === 0 ? C.wallsWhole : h.walls >= WALLS_DOWN ? C.wallsFallen : C.wallsDown(pct) }));
+    }
     const m = world.king.mover;
     if (m.road === 0 && m.node === h.id) setText(fromKing, K.kingHere);
     else {
@@ -252,6 +261,8 @@ export function regionCard(root: HTMLElement, doc: Document, world: KingdomWorld
     row(doc, dl, "Kind").textContent = KIND_NAME[h.kind];
     row(doc, dl, K.country).textContent = capital(BIOMES[h.biome].name);
     people = row(doc, dl, K.people);
+    walls = row(doc, dl, C.walls);
+    walls.className = "k-walls";
     row(doc, dl, K.slots).textContent = K.slotsLine({
       garrison: h.garrisonSlots, buildings: h.buildings.length, fields: h.plots.length,
     });

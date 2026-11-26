@@ -627,6 +627,125 @@ section("the siege level");
   }
 }
 
+// -- K10. gates that open, keeps, and walls that remember -------------------------
+
+section("K10 gates");
+{
+  // The garrison opens its gate: the gateway is passable and open to sight,
+  // the wear on it is kept, and a route from outside now goes in through it.
+  const w = siegeWorld();
+  const t = w.terrain;
+  t.damage(EAST, 40, 300);
+  const fromX = 40 * T;
+  const fromY = 40.5 * T;
+  const shut = findPathPartial(t, fromX, fromY, RING.cx * T, RING.cy * T);
+  w.orders.issue({ kind: "gates", open: true }, 1, 0);
+  w.step();
+  check("the besieger cannot open the garrison's gates",
+    GATE_ROWS.every((y) => t.typeAt(EAST, y) === Terrain.Gate) && !w.gatesOpen(1));
+  w.orders.issue({ kind: "gates", open: true }, 0, w.tick);
+  w.step();
+  const open = GATE_ROWS.every((y) => t.typeAt(EAST, y) === Terrain.GateOpen);
+  check("the garrison opens its gate", open && w.gatesOpen(0) && GATE_ROWS.every((y) => t.passableAt(EAST, y)));
+  check("an open gate keeps its wear and its owner",
+    Math.abs(t.integrityAt(EAST, 40) - (1 - 300 / STRUCTURE[Terrain.Gate]!.hp)) < 1e-9 && t.ownerAt(EAST, 40) === 0);
+  const through = findPathPartial(t, fromX, fromY, RING.cx * T, RING.cy * T);
+  check("a shut gate is no way in, an open one is",
+    !shut.reached && through.reached && routeTiles(t, fromX, fromY, through.route).has(tileOf(t, EAST, 40)));
+  check("an open gateway does not block sight",
+    hasLineOfSight(t, (EAST - 5 + 0.5) * T, 40.5 * T, (EAST + 5 + 0.5) * T, 40.5 * T));
+
+  // A sally: a company of the garrison marches out through the open gate.
+  const g = company(w, 0, "line", RING.cx, RING.cy);
+  w.orders.issue({ kind: "move", squad: g.id, path: [34 * T, 40.5 * T] }, 0, w.tick);
+  let out = 0;
+  let worst = 0;
+  let inGate = false;
+  for (let k = 0; k < TICK_RATE * 60; k++) {
+    w.step();
+    worst = Math.max(worst, stranded(w).length);
+    if (!inGate && liveIn(w, g, (x, y) => x === EAST && GATE_ROWS.includes(y)) > 0) {
+      inGate = true;
+      // Try to shut it on them: refused while anyone stands in the gateway.
+      w.orders.issue({ kind: "gates", open: false }, 0, w.tick + 1);
+      w.step();
+      check("a gate is not shut on men standing in it", GATE_ROWS.every((y) => t.typeAt(EAST, y) === Terrain.GateOpen));
+    }
+    out = liveIn(w, g, (x) => x > EAST);
+    if (out >= g.members.length * 0.8) break;
+  }
+  check("the garrison sallies out through its open gate", out >= g.members.length * 0.8,
+    out + " of " + g.members.length + " outside");
+  check("nobody stood in the wall on the way out", worst === 0);
+  // Clear of the gateway, it shuts behind them.
+  for (let k = 0; k < TICK_RATE * 5; k++) w.step();
+  w.orders.issue({ kind: "gates", open: false }, 0, w.tick);
+  w.step();
+  check("with the gateway clear the gate shuts again",
+    GATE_ROWS.every((y) => t.typeAt(EAST, y) === Terrain.Gate) && !w.gatesOpen(0) && stranded(w).length === 0);
+  check("and the wear on it is still there",
+    Math.abs(t.integrityAt(EAST, 40) - (1 - 300 / STRUCTURE[Terrain.Gate]!.hp)) < 1e-9);
+
+  // Engines go for an open gate as for a shut one.
+  const e = siegeWorld();
+  e.orders.issue({ kind: "gates", open: true }, 0, 0);
+  e.step();
+  const eg = company(e, 1, "siege", 34, 45);
+  e.orders.issue({ kind: "hold", squad: eg.id, x: eg.anchorX, y: eg.anchorY, radius: 30 }, 1, e.tick);
+  e.orders.issue({ kind: "move", squad: eg.id, path: [30 * T, 45 * T] }, 1, e.tick + 1);
+  for (let k = 0; k < TICK_RATE * 5; k++) e.step();
+  check("an open gate is battered like a shut one", GATE_ROWS.some((y) => e.terrain.integrityAt(EAST, y) < 1));
+  check("an open gate burns", e.terrain.ignite(EAST, 40) || e.terrain.burningAt(EAST, 40));
+
+  // Two peers, one log, the same gates.
+  const a = siegeWorld();
+  const b = siegeWorld();
+  for (const x of [a, b]) {
+    x.orders.issue({ kind: "gates", open: true }, 0, 3);
+    x.orders.issue({ kind: "gates", open: false }, 0, 40);
+  }
+  for (let k = 0; k < 60; k++) { a.step(); b.step(); }
+  check("gates swing the same on two peers", hashWorld(a) === hashWorld(b));
+}
+
+section("K10 keeps and old damage");
+{
+  // A keep: two courses of stone, its gate through both.
+  const KEEP: SiegeWorks = { ...RING, thickness: 2 };
+  const w = siegeWorld({ siege: KEEP });
+  const t = w.terrain;
+  check("a keep's wall is two courses thick",
+    t.typeAt(EAST, 46) === Terrain.Wall && t.typeAt(EAST - 1, 46) === Terrain.Wall && t.passableAt(EAST - 2, 46) &&
+      !insideSiege(KEEP, EAST - 1, 46) && insideSiege(KEEP, EAST - 2, 46));
+  check("its gate runs through both courses",
+    GATE_ROWS.every((y) => t.typeAt(EAST, y) === Terrain.Gate && t.typeAt(EAST - 1, y) === Terrain.Gate));
+  const k2 = siegeWorld({ siege: { ...KEEP, gates: [] } });
+  k2.terrain.damage(EAST, 46, 1e9);
+  const one = findPathPartial(k2.terrain, 40 * T, 46.5 * T, RING.cx * T, RING.cy * T).reached;
+  k2.terrain.damage(EAST - 1, 46, 1e9);
+  const two = findPathPartial(k2.terrain, 40 * T, 46.5 * T, RING.cx * T, RING.cy * T).reached;
+  check("a keep is breached only through both courses", !one && two);
+
+  // Works raised already battered: the holding's unmended wall damage.
+  const half = siegeWorld({ siege: { ...RING, worn: 500 } });
+  const ht = half.terrain;
+  check("walls raised at 500 per mille are half worn, the gate too",
+    Math.abs(ht.integrityAt(EAST, 46) - 0.5) < 1e-9 && Math.abs(ht.integrityAt(EAST, 40) - 0.5) < 1e-9 &&
+      ht.typeAt(EAST, 46) === Terrain.Wall);
+  check("the battle reads its own old damage back", half.wallDamage() === 500, half.wallDamage() + " per mille");
+  const gone = siegeWorld({ siege: { ...RING, worn: 1000 } });
+  check("walls raised at 1000 per mille are rubble", gone.terrain.typeAt(EAST, 46) === Terrain.Rubble &&
+    gone.terrain.typeAt(RING.cx, RING.cy - RING.ry) === Terrain.Rubble && gone.wallDamage() === 1000);
+  const whole = siegeWorld();
+  check("whole walls read 0", whole.wallDamage() === 0);
+  whole.terrain.damage(EAST, 46, 1e9);
+  const one2 = whole.wallDamage();
+  check("one fallen tile reads as a little damage", one2 > 0 && one2 < 30, one2 + " per mille");
+  check("a field with no works has no wall damage", new World({ seed: SEED, tilesWide: 120, tilesHigh: 80 }).wallDamage() === 0);
+  check("raising old damage is the same on two peers",
+    hashWorld(siegeWorld({ siege: { ...RING, worn: 333 } })) === hashWorld(siegeWorld({ siege: { ...RING, worn: 333 } })));
+}
+
 // -- 9. the hash sees the ground ------------------------------------------------
 
 section("hash");

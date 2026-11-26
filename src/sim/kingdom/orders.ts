@@ -121,7 +121,10 @@ export type KingdomOrderBody =
   | { kind: "setAutoSow"; holding: number; plot: number; crop: CropId | null }
   // K9: the story (sim/kingdom/story.ts).
   /** Answer a waiting story letter: pick choice `choice` (0-based) of STORY_LETTERS[letter]. */
-  | { kind: "answerLetter"; letter: number; choice: number };
+  | { kind: "answerLetter"; letter: number; choice: number }
+  // K10: sieges (sim/kingdom/economy.ts applies it).
+  /** Pay masons to mend the battle damage to an owned holding's walls; they work it off by the day. */
+  | { kind: "repairWalls"; holding: number };
   // Append new kinds; never renumber the existing ones.
 
 export type KingdomOrderKind = KingdomOrderBody["kind"];
@@ -143,6 +146,8 @@ export const KINGDOM_ORDER_KINDS: readonly KingdomOrderKind[] = [
   "setAutoSow",
   // K9
   "answerLetter",
+  // K10
+  "repairWalls",
 ];
 
 /** The K6 order kinds (src/sim/kingdom/morale.ts applies them). */
