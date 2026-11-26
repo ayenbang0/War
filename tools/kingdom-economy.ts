@@ -700,7 +700,7 @@ section("strings");
   const sample: Record<string, unknown> = { name: "Greyshaw", days: 3, n: 2, building: "Granary", crop: "Rye", stage: "growing", pct: 40,
     health: 70, coin: "4 coin", growth: "grow 2%", rate: "Low", gains: "200 grain", field: "Field 1", cause: "the weather", upkeep: "1 coin",
     grain: 120, capacity: 1500, heap: 30, spoils: 1, inGranary: 100, granary: 1500, need: 6, value: 120, net: -6, parts: ["seed -6"],
-    label: "seed", when: "9 Reapmoon", stored: "stored 1 of 2", month: 6, dayOfMonth: 0, season: "autumn", year: 1, day: 3 };
+    label: "seed", when: "9 Reapmoon", stored: "stored 1 of 2", month: 6, dayOfMonth: 0, season: "autumn", year: 1, day: 3, since: 4 };
   const take = (v: unknown): void => {
     if (typeof v === "string") all.push(v);
     else if (typeof v === "function") {
