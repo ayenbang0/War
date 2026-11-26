@@ -58,7 +58,7 @@ import type { World } from "../world.ts";
 import { findRoute, setRoute, type Route } from "./graph.ts";
 import type { KingdomOrder, KingdomOrderBody } from "./orders.ts";
 import type { Army, Contact, ContactHow, ContactSide, Holding, Mover } from "./state.ts";
-import { armyById, armyMen, inContact, removeArmy, standsIn, takeMen } from "./armies.ts";
+import { armyById, armyMen, inContact, removeArmy, setPosture, standsIn, takeMen } from "./armies.ts";
 import { adjustLegitimacy } from "./ledger.ts";
 import { battleLostUnrest } from "./morale.ts";
 import { ARMY_MORALE, CLAIM_UNREST, STORMED_UNREST } from "../../content/kingdom/morale.ts";
@@ -544,7 +544,12 @@ function fallBack(world: KingdomWorld, a: Army, enemy: number): boolean {
     return false;
   }
   setRoute(world.graph, a.mover, back.route);
-  a.posture = "none";
+  // K12: through setPosture, so a patrol is forgotten and a garrison left. Writing
+  // the posture by hand left a patrolling army falling back with its patrol list
+  // (or a garrison listing an army that had marched off) -- a state no order can
+  // make, which the save refuses to load: a game saved after such a retreat could
+  // not be resumed, and a peer resynchronised from it could not either.
+  setPosture(world, a, "none");
   a.postureDays = 0;
   world.events.push({ kind: "fellBack", army: a.id, to: back.to });
   return true;
@@ -678,7 +683,10 @@ export function applyBattleResult(
 
 function settled(world: KingdomWorld, c: Contact, how: ContactHow, winner: number): void {
   const [x, y] = pairOf(c);
-  if (armyById(world, x)) disengage(world, x, y);
+  // K12: both still on the map (y < 0 is the walls). A host that broke in the
+  // settling (it fell with no men left) was still written into the pair, and a
+  // save taken that tick named an army not on the map, which the save refuses.
+  if (armyById(world, x) && (y < 0 || armyById(world, y))) disengage(world, x, y);
   if (world.contact && world.contact.id === c.id) world.contact = null;
   // The king rides where his army rides: a fall back moved it (armies.ts keeps him there on the march).
   const k = armyById(world, world.king.army);

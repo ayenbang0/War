@@ -18,7 +18,7 @@
  */
 
 import { ENCOUNTER_STATES, type StoryState } from "./story.ts";
-import { FNV_OFFSET, mixF64, mixU32 } from "../hash.ts";
+import { FNV_OFFSET, mixF64, mixU32 as mixWord } from "../hash.ts";
 import { FACTION_IDS, type FactionId } from "../../content/kingdom/factions.ts";
 import { ROAD_TERRAIN_IDS, WEATHER_IDS } from "../../content/kingdom/terrain.ts";
 import { BUILDING_IDS } from "../../content/kingdom/buildings.ts";
@@ -36,6 +36,21 @@ import { ABILITY_IDS } from "../../content/abilities.ts";
 import { AI_GOALS, ARMY_POSTURES, CONTACT_KINDS, type Army } from "./state.ts";
 import { COMPANY_STATES } from "../../content/kingdom/mercenaries.ts";
 import { KINGDOM_STREAMS, type KingdomWorld } from "./world.ts";
+
+/**
+ * K12: every integer field of the kingdom goes through here, not straight to
+ * the 32-bit mixer. A 32-bit integer (signed or unsigned) mixes exactly as
+ * before, so every hash of a sane state -- and every golden -- is unchanged.
+ * Anything else (a fraction, NaN, an infinity, a number past 32 bits) used to
+ * be truncated by `>>> 0`, so two peers whose "integer" disagreed by 0.0001
+ * hashed alike; it now mixes a marker and its exact bits, and the desync check
+ * sees it on the tick it happens. The kingdom lockstep sweep nudges every
+ * numeric field by 0.0001 to keep this true.
+ */
+function mixU32(h: number, v: number): number {
+  if (v === (v | 0) || v === v >>> 0) return mixWord(h, v);
+  return mixF64(mixWord(h, 0x7ff8f00d), v);
+}
 
 function mixStr(h: number, s: string | null): number {
   if (s === null) return mixU32(h, 0xffffffff);
@@ -164,7 +179,30 @@ function mixLedgerDay(h: number, d: LedgerDay | null): number {
   return h;
 }
 
-export function kingdomHash(world: KingdomWorld): string {
+/**
+ * K12: what a hash covers of the orders not yet applied.
+ *
+ * `inFlight: true` (the default: the save, the replay and the goldens) also
+ * mixes the orders queued for later ticks and the per-player sequence
+ * counters -- a world resumed without them would diverge later, so a save is
+ * only whole with them.
+ *
+ * `inFlight: false` is the NETPLAY comparison (peerHash). Under an input
+ * delay an order is stamped for a later tick and is on the wire for a while:
+ * the peer that issued it has it queued, the other may not have it yet, and
+ * the counters of whoever issued it are ahead. Neither has diverged -- the
+ * order applies on both at the tick it is stamped for -- so a desync check
+ * that mixed the queue would cry wolf on every order in flight. Everything
+ * already applied is state, and is mixed either way.
+ */
+export type KingdomHashOptions = { readonly inFlight?: boolean };
+
+/** The netplay desync comparison: every bit of state, but not the orders still in flight (see KingdomHashOptions). */
+export function peerHash(world: KingdomWorld): string {
+  return kingdomHash(world, { inFlight: false });
+}
+
+export function kingdomHash(world: KingdomWorld, opts: KingdomHashOptions = {}): string {
   let h = FNV_OFFSET | 0;
   h = mixU32(h, world.now);
   h = mixU32(h, world.seed);
@@ -349,12 +387,14 @@ export function kingdomHash(world: KingdomWorld): string {
   // K9: the story, only in a realm that has one -- so every older realm's hash is unchanged.
   if (world.story) h = mixStory(h, world.story);
 
-  const queued = world.orders.queued();
-  h = mixU32(h, queued.length);
-  for (const o of queued) h = mixOrder(h, o);
-  const seqs = world.orders.sequences();
-  h = mixU32(h, seqs.length);
-  for (const s of seqs) h = mixU32(h, s);
+  if (opts.inFlight !== false) {
+    const queued = world.orders.queued();
+    h = mixU32(h, queued.length);
+    for (const o of queued) h = mixOrder(h, o);
+    const seqs = world.orders.sequences();
+    h = mixU32(h, seqs.length);
+    for (const s of seqs) h = mixU32(h, s);
+  }
 
   for (const name of KINGDOM_STREAMS) {
     const st = world.rng[name].snapshot();

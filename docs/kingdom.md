@@ -1593,3 +1593,97 @@ the kingdom hash and the result hash only when non-zero.
   the day) and `k10-keep-gates` (the Hare at the king's walls; Retreat to the
   keep; the keep's dialog; its siege; the gate swung open and shut with the
   real G key; the keep held, in the report and the feed).
+
+## K12 — netplay readiness: kingdom lockstep verification
+
+PLAN.md §B.11's K12 row ("kingdom lockstep verification | kingdom-lockstep.ts
+green") and §B.10's test line. `tools/kingdom-lockstep.ts` (in `npm test`)
+is to the kingdom what `tools/lockstep.ts` is to the battle: no network, the
+claim being that the *simulation* is lockstep-safe. Choices are in
+docs/PROVISIONAL.md K12.1–9.
+
+### What it runs
+One **leader** realm (seed `0x6b120001`, the full campaign: opening hosts,
+captains' AI and invasion waves, auto-resow, the story) is played four
+in-game years by a scripted king that only reads the leader and only writes
+it through `world.issue` (K12.6). Every stamped order goes on a "wire"; the
+**followers** never decide anything -- they run only what arrives, as a peer
+would -- and their hash is compared with the leader's after every tick. The
+run: 11 546 ticks, 1 440 days, 664 orders, 26 contacts, 20 captains' armies,
+two invasion waves, the story into Act IV. Every one of the 35 order kinds
+goes over the wire, and all but the hand harvest (a ripe field is reaped by
+itself the day it ripens, ECON) is applied: marches, recruits (levy and
+trained), splits, merges, patrols, garrisons, ambushes, chases, builds, hand
+sowing and auto-resow off and on, taxes, justice, feasts, pardons, letter and
+site answers, hired companies (hire, renew, match a bid, dismiss), the
+defence tools (levy, burnt fields, ambush) and descent results (fight with a
+result, auto, withdraw).
+
+### What it proves (38 checks)
+1. **One log, one realm.** Two followers -- one fed in issue order, one with
+   each tick's orders shuffled -- match the leader on every tick.
+2. **Arrival order changes nothing.** The whole log submitted backwards up
+   front, and the log arriving in random chunks (each order by its own tick),
+   both reproduce the run. Under an **input delay** (orders stamped three
+   ticks ahead and delivered at any moment before they fall due) the peers
+   stay identical every tick by `peerHash` (K12.1); once the wire drains the
+   full hash agrees too.
+3. **The detector detects.** A 0.0001 nudge to the king's grain, a town's
+   people, a field's growth, an army's place on its road or the king's
+   legitimacy is caught on the next check. Every 120 days a **sweep** nudges
+   every leaf of the state (a number by 0.0001, a boolean flipped, a string
+   altered; the first, middle and last of every list) and asks the hash
+   whether it saw: 4 711 nudges, none unseen. The world's own fields are
+   enumerated at run time, and each must be swept or set aside with a reason
+   (K12.3), so a field added later cannot slip past.
+4. **Save → load, then on.** A save taken every season, with a contact
+   waiting and with orders queued for later ticks, loads as one more follower
+   and continues tick-identical (17 loads); the loaded state equals the
+   saved field for field. The realm must also save and load at the turn of
+   **every day** (1 441) and on the tick after **every contact** (26).
+5. **The layer hash with a battle in progress.** Two peers reach the king's
+   first field contact together, build the same `BattleSpec`, fight it on two
+   real battle `World`s with `layerHash` agreeing throughout, read the same
+   `BattleResult`, and apply it identically for a month after. A 0.0001 nudge
+   to a soldier is blamed on the battle layer, one to the kingdom's coin on
+   the kingdom layer (`driftedLayer`).
+
+### Gaps it found, and the fixes
+- **Integer fields were blind to a fraction.** The kingdom hash mixed every
+  integer field with the battle's `mixU32`, i.e. `>>> 0`: 101 fields (stocks
+  that are whole, unrest, days, ids...) saw a nudge of 1 but not of 0.0001,
+  so two peers whose "integer" had drifted by a fraction hashed alike.
+  `kingdom/hash.ts` now mixes through a guard: a 32-bit integer mixes
+  exactly as before, anything else mixes a marker and its exact bits (K12.2).
+  Every sane state hashes as before; no golden moved.
+- **A realm the save refused (three states).** Each was a state the sim
+  itself tolerates for a tick, but which the loader rightly rejects -- a
+  realm that cannot be resumed, nor sent to a peer to resynchronise:
+  - a won field: the fallen host was written into the **disengaged pairs**
+    after it was taken off the map (`settled` now records a pair only when
+    both armies stand; `removeArmy` also strikes a gone army from the pairs);
+  - a captain whose host broke still **rode with** it until his next day
+    (`removeArmy` clears `minds[f].rides`, which the AI reads as "none" for
+    a gone army anyway);
+  - an army that **fell back** (withdrew or fled) had its posture written by
+    hand, so a patrolling army kept its patrol list and a garrison its place
+    in the holding's garrison while it marched off (`fallBack` goes through
+    `setPosture`). Proved on a fork of the leader put on patrol at a field
+    contact (K12.6), which must withdraw, save, load and carry on identical.
+  None changes what the sim does next, only what a save of it holds.
+- **Netplay's comparison** (`peerHash`, K12.1): the full hash mixes the
+  orders still queued and the sequence counters, so under an input delay it
+  differs between peers whenever an order is on the wire (it would have cried
+  desync on 279 of 5 787 ticks of the delayed run) though nothing has
+  diverged.
+
+### Files
+- `tools/kingdom-lockstep.ts` -- the proof (new; in `npm test`, about a minute).
+- `src/sim/kingdom/hash.ts` -- `peerHash`, `KingdomHashOptions`, the integer guard.
+- `src/sim/kingdom/armies.ts` -- `removeArmy` clears the disengaged pairs and the captain's ride.
+- `src/sim/kingdom/descent.ts` -- `fallBack` through `setPosture`; `settled` checks both armies.
+
+### Determinism and the golden
+No golden moved: the kingdom decade still hashes `bf9431cc`; the battle
+`world` and `stable` tiers are untouched (the battle's `mixU32` is not
+changed, only the kingdom's use of it).
