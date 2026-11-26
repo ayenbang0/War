@@ -22,12 +22,23 @@
  * where an ending is chosen): kindly, harshly, or carelessly with the
  * realm's trust -- and in one run, the king rides into a battle he loses.
  *
+ * K10 ("Act IV playable", PLAN §B.11) adds a fifth run, the kind king again,
+ * in which the stand-in is lifted for the siege of the capital: every assault
+ * of the king's on the Crown Seat's walls is fought as a real battle World
+ * (app/battle-config.ts, as the descent builds it), the machine commanding
+ * both sides, and its result -- walls battered, the capital taken or held --
+ * is applied back. That king plays as a careful player would: he does not
+ * storm the capital on his way past it before the story brings him there,
+ * and he takes a siege train (engines from a barracks of his, iron from his
+ * forges) to its walls.
+ *
  * Deterministic: a fixed seed and a fixed bot, so each run lands on the same
  * day with the same hash every time.
  */
 
 import {
   KingdomWorld, TICKS_PER_DAY, armiesOf, planArmyRoute, armyById, buildBattleSpec, kingdomHash, replayLog, standsIn,
+  resultFromBattle, resultRefusal, hasBarracks,
   type Holding, type KingdomOrderBody,
 } from "../src/sim/kingdom/index.ts";
 import type { BattleResult } from "../src/sim/layers.ts";
@@ -41,6 +52,7 @@ import { ACTS } from "../src/content/story/acts.ts";
 import { LEDGER_CATEGORY_IDS } from "../src/content/kingdom/economy.ts";
 import { saveToJson, loadFromJson } from "../src/sim/kingdom/save.ts";
 import { ABILITY_IDS } from "../src/content/abilities.ts";
+import { battleFromSpec, battleWorld } from "../src/app/battle-config.ts";
 
 const SEED = 0x5709;
 const MAX_DAYS = 360 * 8;
@@ -125,6 +137,25 @@ function storyGround(w: KingdomWorld): Set<number> {
 }
 
 /** The next holding to take: an armed encounter first, else the nearest one not his that the march can reach. */
+/**
+ * K10's real run: a king who does not march past the Crown Seat's walls
+ * (which would be an assault on them) until the story brings him there.
+ */
+let avoidSeat = false;
+/** The engines the king takes to the capital's walls in the real run. */
+const SIEGE_TRAIN = 2;
+
+/** May the king be sent here? (In the real run, not by a road through the Crown Seat before its siege.) */
+function viaSeat(w: KingdomWorld, to: number): boolean {
+  if (!avoidSeat) return false;
+  const siege = ENCOUNTERS.findIndex((x) => x.id === "crown-siege");
+  if (w.story!.encounters[siege].state === "armed") return false;
+  const seat = w.holdingByKey(w.map.crownSeat)!.id;
+  if (to === seat) return true;
+  const p = w.planKingRoute(to);
+  return !!p && p.route.nodes.includes(seat);
+}
+
 function nextTarget(w: KingdomWorld): number {
   const s = w.story!;
   for (let i = 0; i < ENCOUNTERS.length; i++) {
@@ -132,13 +163,13 @@ function nextTarget(w: KingdomWorld): number {
     const host = armyById(w, s.encounters[i].host);
     const at = host ? standsIn(host.mover) : w.holdingByKey(ENCOUNTERS[i].holding)!.id;
     if (!at) continue;
-    if (w.planKingRoute(at)) return at;
+    if (w.planKingRoute(at) && !viaSeat(w, at)) return at;
     // Not known yet: explore toward it, by the known holding nearest to it that is not where he stands.
     const goal = w.holding(at)!;
     let best = 0;
     let d2 = Infinity;
     for (const h of w.holdings) {
-      if (h.id === kingAt(w) || !w.planKingRoute(h.id)) continue;
+      if (h.id === kingAt(w) || !w.planKingRoute(h.id) || viaSeat(w, h.id)) continue;
       const d = (h.x - goal.x) ** 2 + (h.y - goal.y) ** 2;
       if (d < d2) { d2 = d; best = h.id; }
     }
@@ -152,7 +183,7 @@ function nextTarget(w: KingdomWorld): number {
     if (h.owner === "king" || avoid.has(h.id) || h.id === seat) continue;
     if (h.owner !== null && s.sworn.includes(FACTION_IDS.indexOf(h.owner))) continue;
     const p = w.planKingRoute(h.id);
-    if (!p || p.route.nodes.length === 0) continue;
+    if (!p || p.route.nodes.length === 0 || viaSeat(w, h.id)) continue;
     // An empty holding is claimed for the asking (and its cellars with it); a held one is a battle.
     const cost = h.owner === null && h.garrison.length === 0 ? p.etaTicks : p.etaTicks * 2;
     if (cost < eta) { eta = cost; best = h.id; }
@@ -177,9 +208,47 @@ function nearestFor(w: KingdomWorld, id: number): number {
   return best;
 }
 
-type Run = { w: KingdomWorld; ending: string | null; day: number; acts: number[]; letters: number; encounters: string[]; problem: string };
+/** K10: one siege of the capital fought as a real battle World, and what the kingdom made of it. */
+type RealSiege = {
+  act: number; level: string; fortification: string; victory: string; worn: number; seconds: number;
+  winner: number; walls: number; refusal: string | null; wallsBefore: number; wallsAfter: number; owner: string;
+  /** Fought as the story's crown-siege encounter (else a plain assault on the capital). */
+  encounter: boolean;
+};
 
-function play(t: Temper): Run {
+type Run = {
+  w: KingdomWorld; ending: string | null; day: number; acts: number[]; letters: number; encounters: string[]; problem: string;
+  sieges: RealSiege[];
+};
+
+/**
+ * K10: the capital siege fought for real -- the waiting contact's spec built
+ * into a battle World (app/battle-config.ts, as the descent does), the
+ * machine commanding both sides to the end, its result read back the way a
+ * battle reports itself (resultFromBattle).
+ */
+function fightForReal(w: KingdomWorld): { result: BattleResult; siege: RealSiege } {
+  const c = w.contact!;
+  const spec = buildBattleSpec(w, c);
+  const { world, fielded } = battleWorld(battleFromSpec(spec), { aiPlayers: [0, 1] });
+  world.deploying = false;
+  const cap = (spec.duration + 30) * 20;
+  let ticks = 0;
+  while (!world.outcome && ticks < cap) { world.step(); ticks++; }
+  const result = resultFromBattle(spec, world, fielded);
+  const h = w.holding(c.holding)!;
+  return {
+    result,
+    siege: {
+      act: w.story!.act, level: spec.terrain.level, fortification: spec.terrain.fortification, victory: spec.victory.mode,
+      worn: spec.terrain.worn, seconds: ticks / 20, winner: result.winner, walls: result.damage.walls,
+      refusal: resultRefusal(spec, result), wallsBefore: h.walls, wallsAfter: -1, owner: "", encounter: false,
+    },
+  };
+}
+
+function play(t: Temper, realCapital = false): Run {
+  avoidSeat = realCapital;
   const w = new KingdomWorld({ seed: SEED, hosts: true, captains: true, autoFarm: true, story: true });
   const acts: number[] = [1];
   const encounters: string[] = [];
@@ -189,7 +258,33 @@ function play(t: Temper): Run {
   let target = 0;
   let stuck = 0;
   const rallied = new Set<number>();
+  const sieges: RealSiege[] = [];
+  const crownSiege = ENCOUNTERS.findIndex((x) => x.id === "crown-siege");
   while (w.story!.ending === null && w.date.day < MAX_DAYS) {
+    // K10: the siege of the capital, fought as a real battle.
+    // Every assault the king's side makes on the Crown Seat is that siege --
+    // the story's own (the Chancery Guard, armed by its letter) or a march on
+    // the capital's walls before the letter came.
+    if (realCapital && w.contact && w.contact.holding === w.holdingByKey(w.map.crownSeat)!.id && w.contact.attacker === 0 &&
+        buildBattleSpec(w, w.contact).terrain.fortification !== "none") {
+      const encounter = w.story!.encounters[crownSiege].state === "armed";
+      // A careful king does not storm the capital on his way past it before
+      // the story brings him to its walls: he draws off.
+      if ((!encounter || w.contact.sides[0].army !== w.king.army) &&
+          issue(w, { kind: "resolveContact", contact: w.contact.id, choice: "withdraw", result: null })) {
+        w.tick();
+        continue;
+      }
+      const f = fightForReal(w);
+      f.siege.encounter = encounter;
+      issue(w, { kind: "resolveContact", contact: w.contact.id, choice: "fight", result: f.result });
+      for (const ev of w.tick()) {
+        if (ev.kind === "encounterFought") encounters.push(ENCOUNTERS[ev.encounter].id + (ev.won ? "" : " (lost)") + " [real battle]");
+      }
+      const seat = w.holdingByKey(w.map.crownSeat)!;
+      sieges.push({ ...f.siege, wallsAfter: seat.walls, owner: seat.owner ?? "" });
+      continue;
+    }
     if (w.contact) {
       // The doomed king loses the first battle of the second act he rides into, and is taken with his army.
       const lose = t === "doomed" && w.story!.act >= 2;
@@ -223,7 +318,7 @@ function play(t: Temper): Run {
       if (ev.kind === "letterAnswered") letters++;
     }
   }
-  return { w, ending: w.story!.ending, day: w.date.day, acts, letters, encounters, problem };
+  return { w, ending: w.story!.ending, day: w.date.day, acts, letters, encounters, problem, sieges };
 
   /**
    * What a temper does with the realm besides its letters: the harsh king
@@ -350,6 +445,30 @@ function play(t: Temper): Run {
     if (here !== 0 && e.stocks.levy > 24 && army.squads.length >= 4) {
       for (let i = 0; i < 3; i++) issue(w, { kind: "recruit", at: here, army: 0, unit: "line", levy: true });
     }
+    // K10's real run: stone walls are not stormed with levies alone. Once the
+    // story brings the king to the capital, he first takes a siege train into
+    // his army -- engines trained at a barracks of his, built where he stands
+    // if there is none -- and only then marches on the walls.
+    if (avoidSeat && s.encounters[ENCOUNTERS.findIndex((x) => x.id === "crown-siege")].state === "armed" &&
+        army.squads.filter((q) => q.unit === "siege").length < SIEGE_TRAIN) {
+      if (here === 0) return;
+      const h = w.holding(here) as Holding;
+      if (h.owner === "king" && hasBarracks(h)) {
+        issue(w, { kind: "recruit", at: here, army: army.id, unit: "siege", levy: false });
+        return;
+      }
+      if (h.owner === "king" && (h.buildings.includes("barracks") || issue(w, { kind: "build", holding: here, building: "barracks" }))) return;
+      // Nowhere to train them here: to the nearest holding of his with a barracks.
+      let best = 0;
+      let eta = Infinity;
+      for (const x of w.holdingsOf("king")) {
+        if (x.id === here || !hasBarracks(x)) continue;
+        const p = w.planKingRoute(x.id);
+        if (p && p.etaTicks < eta && !p.route.nodes.includes(w.holdingByKey(w.map.crownSeat)!.id)) { eta = p.etaTicks; best = x.id; }
+      }
+      if (best && w.king.mover.route.length === 0) issue(w, { kind: "moveKing", to: best });
+      return;
+    }
     // Riding: fill the ranks from the followers, claim what is empty, march on the next.
     if (here !== 0 && e.stocks.levy >= 8 && army.squads.length < 4) issue(w, { kind: "recruit", at: here, army: army.id, unit: army.squads.length % 2 ? "slinger" : "line", levy: true });
     if (here !== 0) {
@@ -384,7 +503,8 @@ function play(t: Temper): Run {
  */
 function steward(w: KingdomWorld, t: Temper): void {
   for (const h of w.holdingsOf("king")) {
-    for (const b of ["granary", "farm", "shrine", "watchtower"] as const) {
+    // K10's real run: timber and iron, for the engines the capital's walls will want.
+    for (const b of avoidSeat ? ["granary", "farm", "woodcutter", "forge", "shrine", "watchtower"] as const : ["granary", "farm", "shrine", "watchtower"] as const) {
       if (h.buildings.includes(b)) continue;
       if (issue(w, { kind: "build", holding: h.id, building: b })) return;
     }
@@ -429,6 +549,35 @@ const careless = play("careless");
 report("the careless king", careless, "hollow-crown");
 const doomed = play("doomed");
 report("the doomed king", doomed, "the-fallen");
+
+// K10 ("Act IV playable", PLAN §B.11): the kind king again, but the capital
+// siege is fought as a real battle World -- the walls of Rimaros raised from
+// the holding, the king's host storming them, the machine on both sides --
+// and its result (the walls battered, the capital taken or held) applied back.
+const real = play("kind", true);
+console.log("\nthe kind king, the capital fought for real: " + (real.ending ?? "no ending") + " on day " + real.day + ", acts " + real.acts.join(">"));
+console.log("  encounters: " + (real.encounters.join(", ") || "none"));
+for (const g of real.sieges) {
+  console.log("  siege of the capital (act " + g.act + (g.encounter ? ", the crown-siege encounter" : ", an assault") + "): " + g.level + ", " + g.fortification + " (" + g.worn + "‰ worn), " + g.victory +
+    ", " + g.seconds + " s, winner " + g.winner + ", walls +" + g.walls + "‰ -> " + g.wallsAfter + "‰, held by " + g.owner);
+}
+check("the real run reaches Act IV", real.acts.includes(4));
+check("the capital siege is fought as a real battle World", real.sieges.length > 0 && real.sieges.every((g) => g.act === 4 && g.seconds > 0));
+check("each is a siege of the capital's stone walls on its own field, won by breaking in or holding out",
+  real.sieges.every((g) => (!g.encounter || g.level === "last-wall-siege") && g.fortification === "wall" && g.victory === "breakthrough"),
+  real.sieges.map((g) => g.level + "/" + g.fortification + "/" + g.victory).join(" "));
+check("each result passes the kingdom's check", real.sieges.every((g) => g.refusal === null), real.sieges.map((g) => g.refusal).join(" "));
+check("the walls the battles knocked down are applied back to the capital",
+  real.sieges.some((g) => g.walls > 0) && real.sieges.every((g) => g.wallsAfter === Math.min(1000, g.wallsBefore + g.walls)),
+  real.sieges.map((g) => g.wallsBefore + "+" + g.walls + "=" + g.wallsAfter).join(" "));
+check("a siege laid again meets the walls as the last one left them (raised that battered)",
+  real.sieges.every((g, i) => i === 0 || g.worn === real.sieges[i - 1].wallsAfter), real.sieges.map((g) => g.worn).join(" "));
+check("the last siege takes the capital for the king", real.sieges.length > 0 && real.sieges[real.sieges.length - 1].winner === 0 &&
+  real.w.holdingByKey(real.w.map.crownSeat)!.owner === "king");
+check("and the story closes on a crowned ending", ENDINGS.find((e) => e.id === real.ending)?.gate.kind === "crowned", String(real.ending));
+check("the real run's order log (battle results and all) replays to the same realm",
+  kingdomHash(replayLog(SEED, real.w.log, real.w.now, { hosts: true, captains: true, autoFarm: true, story: true })) === kingdomHash(real.w));
+
 check("every ending is reached by some run", ENDINGS.every((e) => [kind, harsh, careless, doomed].some((r) => r.ending === e.id)));
 const again = play("kind");
 check("a run is deterministic (same day, same hash)", again.day === kind.day && kingdomHash(again.w) === kingdomHash(kind.w));

@@ -13,6 +13,7 @@ import type { KingdomEvent } from "../../sim/kingdom/state.ts";
 import type { BattleResult, BattleSpec } from "../../sim/layers.ts";
 import { armyById, armyMen, armyWounded } from "../../sim/kingdom/armies.ts";
 import { DESCENT } from "../../content/kingdom/descent-strings.ts";
+import { INVASION_FEED } from "../../content/kingdom/invasion-strings.ts";
 import { FACTIONS, FACTION_IDS } from "../../content/kingdom/factions.ts";
 
 export function consequenceLines(
@@ -45,6 +46,8 @@ export function consequenceLines(
   }
   for (const e of events) {
     if (e.kind === "stormed") lines.push(DESCENT.stormed({ name: name(e.holding), by: FACTIONS[FACTION_IDS[e.faction]]?.name ?? "?" }));
+    // K10: the siege of a keep the townsmen fell back to, held or fallen.
+    if (e.kind === "siege") lines.push(INVASION_FEED.siege({ place: name(e.holding), held: e.held }));
     // K10: the walls the battle knocked down stay down until they are mended.
     if (e.kind === "wallsDamaged") {
       lines.push(DESCENT.wallsDamaged({ name: name(e.holding), pct: Math.round(e.by / 10), down: Math.round(e.walls / 10) }));

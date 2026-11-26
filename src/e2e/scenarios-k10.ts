@@ -28,8 +28,10 @@ import { credit } from "../sim/kingdom/ledger.ts";
 import { moverAt } from "../sim/kingdom/graph.ts";
 import { CONTACT, DESCENT } from "../content/kingdom/descent-strings.ts";
 import { C } from "../content/kingdom/city-strings.ts";
-import { INVASION_FEED } from "../content/kingdom/invasion-strings.ts";
-import { KING_PLAYER } from "../content/kingdom/factions.ts";
+import { DEFEND, INVASION_FEED } from "../content/kingdom/invasion-strings.ts";
+import { FACTION_IDS, KING_PLAYER } from "../content/kingdom/factions.ts";
+import { gateTiles } from "../sim/siege.ts";
+import { Terrain } from "../sim/terrain.ts";
 import { WALL_REPAIR } from "../content/kingdom/descent.ts";
 import { memoryStorage, scenario, type Driver } from "./harness.ts";
 import { enterByCard, holdingNamed, onScreen, openRegionCard, panelButton, stepDays, stepUntil } from "./scenarios-k3.ts";
@@ -146,4 +148,91 @@ scenario("k10-siege-walls", "march on a walled town: a siege battle at its walls
   const before = harrow.walls;
   stepDays(t, 1);
   t.expect(harrow.walls === Math.max(0, before - WALL_REPAIR.perDay), "a day on, the walls are going up (" + before + " -> " + harrow.walls + ")");
+});
+
+/**
+ * k10-keep-gates -- the king's Rookstead behind a stone wall, its townsmen
+ * alone, the Hare's host (with an engine) on the road at it (a prepared
+ * save). Days pass with the real "." key until the host is at the walls;
+ * Retreat to the keep gives the town up and puts the keep's siege to the
+ * king (the interstitial asks again, about the keep); Fight goes down into a
+ * siege of two courses of stone with one gate, the king's townsmen holding
+ * it; the real G key swings the gate open (the HUD and the terrain say so)
+ * and shut again; the outcome is forced through the hook (the keep holds, a
+ * stretch of it battered down); the report and the feed say the keep held,
+ * and the holding is still the king's, its walls carrying the damage.
+ */
+function keepSave(): string {
+  const w = new KingdomWorld({ seed: SAVE_SEED });
+  const town = w.holdingByKey("rookstead")!;
+  town.owner = "king";
+  town.population = Math.max(town.population, 240);
+  town.buildings[town.buildings.indexOf(null)] = "wall";
+  const hare = FACTION_IDS.indexOf("hare");
+  const host = raiseArmy(w, hare, w.holdingByKey("harrowfield")!.id, ["siege", "line", "line", "line", "archer"], "defensive");
+  host.supply = 5000;
+  w.issue({ kind: "marchArmy", army: host.id, to: town.id }, hare);
+  w.tick();
+  w.events = [];
+  return saveToJson(w);
+}
+
+scenario("k10-keep-gates", "the Hare at the king's walls: retreat to the keep, a real siege of the keep, its gate swung with G, the keep holds", async (t) => {
+  const store = memoryStorage({ [KINGDOM_SAVE_KEY]: keepSave() });
+  t.boot({ storage: () => store });
+  const k = await openRealm(t);
+  const w = k.world;
+  const town = w.holding(holdingNamed(k, "Rookstead").id)!;
+  if (k.clock.run !== "paused") t.key("Space");
+  // Days pass with the real key; word of the host may come first (K8's rumour card), and is put away.
+  for (let i = 0; i < 40 && !w.contact; i++) {
+    if (t.hook.top() === "kingdom-rumour") t.key("Escape");
+    t.key("Period");
+  }
+  t.expect(w.contact !== null && w.contact.kind === "assault" && w.contact.attacker === 1, "the Hare's host comes to Rookstead's walls");
+  await t.waitFor(() => t.hook.top() === "kingdom-contact", () => "the contact interstitial (top: " + t.hook.top() + ")");
+
+  // -- the keep ------------------------------------------------------------------
+  t.clickButton(DEFEND.keep);
+  await t.waitFor(() => t.hook.top() === "kingdom-contact" && (document.querySelector(".k-contact h2")?.textContent ?? "") === CONTACT.titleKeep("Rookstead"),
+    () => "the interstitial again, for the keep (top: " + t.hook.top() + ", title: " + (document.querySelector(".k-contact h2")?.textContent ?? "") + ")");
+  t.expect(w.contact !== null && w.contact.keep === true, "the contact waits, the townsmen in the keep");
+  const how = document.querySelector(".k-contact-siege")?.textContent ?? "";
+  t.expect(how.startsWith("A siege: hold for "), "it says the keep is to be held, and how (" + how + ")");
+  t.expect(!(document.querySelector(".k-contact")?.textContent ?? "").includes(DEFEND.keep), "the keep is not offered twice");
+  const feed = document.getElementById("kingdom-ui")?.textContent ?? "";
+  t.expect(feed.includes(INVASION_FEED.keepRetreat("Rookstead")), "the feed says the town outside is given up");
+
+  // -- the siege of the keep -----------------------------------------------------
+  t.clickButton(CONTACT.fight);
+  await t.waitFor(() => t.hook.battle() !== null, () => "the battle (screens: " + t.hook.screens().join(" > ") + ")");
+  const b = t.hook.battle()!;
+  const works = b.world.siege;
+  t.expect(works !== null && works.defender === 0 && works.thickness === 2 && works.gates.length === 1,
+    "a siege of the keep: two courses, one gate, the king's townsmen holding it");
+  await t.frames(2);
+  t.expect(t.hudText().includes("gates shut - G to open"), "the HUD offers the gate to its holder (" + t.hudText().split("\n").join(" | ") + ")");
+  t.key("Enter");
+  t.expect(!b.world.deploying, "Enter begins the siege");
+  const gate = gateTiles(b.world.terrain, works!, 0);
+  t.key("KeyG");
+  await t.waitFor(() => b.world.gatesOpen(0), "the gate to swing open");
+  t.expect(gate.every((i) => b.world.terrain.type[i] === Terrain.GateOpen), "every course of the gateway stands open");
+  await t.frames(2);
+  t.expect(t.hudText().includes("gates open - G to shut"), "and the HUD says so");
+  t.key("KeyG");
+  await t.waitFor(() => !b.world.gatesOpen(0), "the gate to swing shut");
+  t.expect(gate.every((i) => b.world.terrain.type[i] === Terrain.Gate), "the gateway is shut again");
+  t.hook.forceOutcome(0, { breach: 12 });
+  t.expect(b.world.wallDamage() > 0, "a stretch of the keep is battered down (" + b.world.wallDamage() + "‰)");
+  await t.waitFor(() => t.hook.top() === "after-action", () => "the after-action report (top: " + t.hook.top() + ")");
+  const report = t.byId("report").textContent ?? "";
+  t.expect(report.includes(INVASION_FEED.siege({ place: "Rookstead", held: true })), "the report says the keep held");
+  t.expect(report.includes("walls of Rookstead"), "and what the siege knocked down");
+  t.expect(w.contact === null && town.owner === "king", "Rookstead is still the king's");
+  t.expect(town.walls > 0 && town.walls === b.world.wallDamage(), "its walls carry the siege's damage (" + town.walls + "‰)");
+  t.clickButton(DESCENT.backToMap);
+  await t.waitFor(() => t.hook.top() === "kingdom" && !k.isSuspended, () => "back on the map (top: " + t.hook.top() + ")");
+  const feed2 = document.getElementById("kingdom-ui")?.textContent ?? "";
+  t.expect(feed2.includes(INVASION_FEED.siege({ place: "Rookstead", held: true })), "the feed says the keep held");
 });
