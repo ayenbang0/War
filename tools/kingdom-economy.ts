@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import {
   KingdomWorld, kingdomHash, calendar, saveToJson, loadFromJson, replayLog, migrate, deserialize, mapFingerprint,
   TICKS_PER_DAY, DAYS_PER_SEASON, DAYS_PER_YEAR, KINGDOM_SAVE_VERSION,
-  credit, debit, netOf, flowOf, adjustLegitimacy, storageOf, famineDeaths, taxPerDay, checkEconomyOrder,
+  credit, debit, netOf, flowOf, adjustLegitimacy, storageOf, famineDeaths, taxPerDay, checkEconomyOrder, checkCountingQueued,
   changeLegitimacy, dailyNeed, MIGRATIONS, K3_MAP,
   type KingdomEvent, type KingdomOrderBody, type Holding, type LedgerDay,
 } from "../src/sim/kingdom/index.ts";
@@ -555,6 +555,23 @@ section("orders");
   void h0;
   check("checkEconomyOrder is what world.check answers", checkEconomyOrder(w, { kind: "forage" }, 0) === w.check({ kind: "forage" }));
   check("captains' economies wait for K8", w.check({ kind: "forage" }, 1) === REFUSAL.onlyKing);
+  // K11 (audit U2-05): while paused, a menu counts what orders waiting on the clock will spend.
+  {
+    const id = BUILDING_IDS.find((b) => {
+      const order: KingdomOrderBody = { kind: "build", holding: ch.id, building: b };
+      for (const st of STOCK_IDS) kingE(w).stocks[st] = Math.max(kingE(w).stocks[st], BUILDINGS[b].cost[st] ?? 0);
+      return !BUILDINGS[b].unique && Object.keys(BUILDINGS[b].cost).length > 0 && w.check(order) === null;
+    });
+    if (id === undefined) check("a building to queue", false);
+    else {
+      const order: KingdomOrderBody = { kind: "build", holding: ch.id, building: id };
+      for (const st of STOCK_IDS) if (BUILDINGS[id].cost[st]) kingE(w).stocks[st] = BUILDINGS[id].cost[st]!;
+      check("with the stores for one " + id + ", the menu offers it", checkCountingQueued(w, order) === null);
+      w.issue(order);
+      check("with that one queued, the sim's own check still offers a second (it checks the stores as they are)", w.check(order) === null);
+      check("but the menu says the stores are promised", checkCountingQueued(w, order) === REFUSAL.promised, String(checkCountingQueued(w, order)));
+    }
+  }
 }
 
 // -- 9. famine ---------------------------------------------------------------------------

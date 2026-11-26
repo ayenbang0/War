@@ -95,6 +95,8 @@
   margin: 0; max-width: 30em; text-align: right; color: #3a3124;
   background: rgba(239, 232, 214, 0.85); padding: 4px 10px; border-radius: 3px;
 }
+.k-keys-tab { cursor: pointer; font-weight: 600; }
+.k-keys[open] .k-keys-tab { display: inline; margin-right: 0.5em; }
 
 /* -- cards (non-modal: the map stays live beside them) ------------------- */
 .k-card {

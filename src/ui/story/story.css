@@ -58,6 +58,15 @@
 /* U3: the map's feed and result line live bottom-left too; while the coach is
    up they stand above it, so "that line means nothing" is never hidden. */
 .s-coached .k-foot { bottom: calc(var(--s-coach-h, 15rem) + 1.25rem); }
+/* U3-11 (K11): the town's panel is a column down the left, the same side as
+   the coach; while the coach is up the panel stops above it (it scrolls, as
+   it always could), so on a short window the coach never covers its foot. */
+.s-coached .c-panel { max-height: calc(100vh - 96px - var(--s-coach-h, 15rem) - 1.25rem); }
+/* ...and on a short window the coach drops its figure (the step's words and
+   its hint say the same thing), so it takes less of the screen at all. */
+@media (max-height: 680px) {
+  .s-coach-figure { display: none !important; }
+}
 @media (max-width: 700px) {
   .s-coach { left: 0.5rem; right: 0.5rem; width: auto; bottom: 0.5rem; }
   .s-coach-figure { width: 7rem; height: 4.5rem; }

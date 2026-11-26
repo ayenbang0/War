@@ -77,6 +77,7 @@ export class KingdomHud {
   private shownWeather = "";
   private shownRun = "";
   private readonly alertLines: string[] = [];
+  private readonly alertFolds: (string | null)[] = [];
   private readonly doc: Document;
   /** K9: "Letters (n)", shown while letters wait for an answer. */
   private lettersButton: HTMLElement | null = null;
@@ -154,7 +155,16 @@ export class KingdomHud {
     this.resultLine.setAttribute("aria-live", "polite");
     foot.append(this.notice, this.alerts, this.resultLine);
 
-    const keys = make(doc, "p", "k-keys", K.keyHint);
+    // K11 (audit U1-R2): at 1024x640 the hint covered the holding labels
+    // beneath it. It is now a fold: open on a roomy window, a small "Keys"
+    // tab on a short or narrow one, a click away either way.
+    const keys = make(doc, "details", "k-keys");
+    const keysTab = make(doc, "summary", "k-keys-tab", K.keysTab);
+    keys.append(keysTab, make(doc, "span", "k-keys-list", K.keyHint));
+    // Give the keys back at once, so the next Space pauses rather than folds.
+    keysTab.addEventListener("click", () => (keysTab as HTMLElement).blur());
+    const view = doc.defaultView;
+    if (view && view.innerWidth >= 1280 && view.innerHeight >= 760) keys.setAttribute("open", "");
 
     this.cardRoot = make(doc, "aside", "k-card");
     this.cardRoot.style.display = "none";
@@ -211,11 +221,30 @@ export class KingdomHud {
   }
 
   /** A dated line in the feed, newest first. */
-  alert(day: number, text: string): void {
-    this.alertLines.unshift("Day " + (day + 1) + "  " + text);
+  /**
+   * A line in the feed. A `fold` key (K11, audit U2-09) lets a run of the
+   * same news replace its own line rather than add one a day: a rally's
+   * followers are one line per rally, not one per day it brings someone.
+   */
+  alert(day: number, text: string, fold: string | null = null): void {
+    const line = "Day " + (day + 1) + "  " + text;
+    if (fold !== null) {
+      // The run's earlier line goes; the newest count comes to the top.
+      for (let i = this.alertFolds.length - 1; i >= 0; i--) {
+        if (this.alertFolds[i] === fold) { this.alertFolds.splice(i, 1); this.alertLines.splice(i, 1); }
+      }
+    }
+    this.alertLines.unshift(line);
+    this.alertFolds.unshift(fold);
     this.alertLines.length = Math.min(this.alertLines.length, ALERTS_SHOWN);
+    this.alertFolds.length = Math.min(this.alertFolds.length, ALERTS_SHOWN);
     this.alerts.textContent = "";
     for (const line of this.alertLines) this.alerts.appendChild(make(this.doc, "li", undefined, line));
+  }
+
+  /** Whether a line with this fold key is still in the feed. */
+  hasFold(fold: string): boolean {
+    return this.alertFolds.includes(fold);
   }
 
   /** What the last stroke did, or why it did nothing. */

@@ -8,6 +8,33 @@ import { ARMY_ORDINALS } from "./armies.ts";
 import { MORALE_WORDS } from "./morale-strings.ts";
 import { ARMY_MORALE } from "./morale.ts";
 
+
+/**
+ * K11 (M-09): a free company's name is a possessive plural ("Harker's
+ * Outriders"), so it takes no article and a plural verb: "Harker's Outriders
+ * dig in", not "The Harker's Outriders digs in". The king's and the lords'
+ * armies ("First Army") keep "the" and the singular.
+ */
+export function isCompanyName(name: string): boolean {
+  return name.includes("'s ");
+}
+/** The army's name as a sentence's subject: "The First Army", "Harker's Outriders". */
+export function The(name: string): string {
+  return isCompanyName(name) ? name : "The " + name;
+}
+/** ...and inside a sentence: "the First Army", "Harker's Outriders". */
+export function the(name: string): string {
+  return isCompanyName(name) ? name : "the " + name;
+}
+/** The verb that agrees with it. */
+export function agree(name: string, singular: string, plural: string): string {
+  return isCompanyName(name) ? plural : singular;
+}
+/** Its possessive: "the First Army's", "Harker's Outriders'". */
+export function its(name: string): string {
+  return isCompanyName(name) ? name + "'" : "the " + name + "'s";
+}
+
 /** Why an army order is refused. The same string disables the button and rejects the order. */
 export const ARMY_REFUSAL = {
   noSuchArmy: "there is no such army",
@@ -53,21 +80,21 @@ export function armyName(ordinal: number): string {
 /** The pen's plates (at the pen tip while drawing) and result lines (after release), for army orders. */
 export const PEN = {
   armyMarchPlate: (p: { army: string; name: string; eta: string }) => p.army + ": march to " + p.name + " · " + p.eta,
-  armySetOut: (p: { army: string; name: string; eta: string }) => "The " + p.army + " sets out for " + p.name + ": " + p.eta + " by road.",
+  armySetOut: (p: { army: string; name: string; eta: string }) => The(p.army) + " " + agree(p.army, "sets", "set") + " out for " + p.name + ": " + p.eta + " by road.",
   armyQueuedOut: (p: { army: string; name: string; eta: string }) =>
-    "Ordered: the " + p.army + " sets out for " + p.name + " (" + p.eta + ") when the clock runs.",
-  interceptPlate: (p: { army: string; target: string }) => p.army + ": intercept the " + p.target,
-  interceptDone: (p: { army: string; target: string }) => "The " + p.army + " marches to meet the " + p.target + ".",
-  mergePlate: (p: { army: string; into: string }) => "Merge the " + p.army + " into the " + p.into,
-  mergeDone: (p: { army: string; into: string }) => "The " + p.army + " will join the " + p.into + ".",
+    "Ordered: " + the(p.army) + " " + agree(p.army, "sets", "set") + " out for " + p.name + " (" + p.eta + ") when the clock runs.",
+  interceptPlate: (p: { army: string; target: string }) => p.army + ": intercept " + the(p.target),
+  interceptDone: (p: { army: string; target: string }) => The(p.army) + " " + agree(p.army, "marches", "march") + " to meet " + the(p.target) + ".",
+  mergePlate: (p: { army: string; into: string }) => "Merge " + the(p.army) + " into " + the(p.into),
+  mergeDone: (p: { army: string; into: string }) => The(p.army) + " will join " + the(p.into) + ".",
   joinPlate: (army: string) => "The king rides with the " + army,
   joinDone: (army: string) => "The king rides with the " + army + ".",
-  splitPlate: (p: { army: string; n: number }) => "Split " + p.n + " squad" + (p.n === 1 ? "" : "s") + " off the " + p.army,
-  splitDone: (p: { army: string; n: number }) => p.n + " squad" + (p.n === 1 ? "" : "s") + " part from the " + p.army + " as a new army.",
+  splitPlate: (p: { army: string; n: number }) => "Split " + p.n + " squad" + (p.n === 1 ? "" : "s") + " off " + the(p.army),
+  splitDone: (p: { army: string; n: number }) => p.n + " squad" + (p.n === 1 ? "" : "s") + " part from " + the(p.army) + " as a new army.",
   garrisonPlate: (p: { army: string; name: string }) => p.army + ": hold " + p.name,
-  garrisonDone: (p: { army: string; name: string }) => "The " + p.army + " digs in at " + p.name + ".",
+  garrisonDone: (p: { army: string; name: string }) => The(p.army) + " " + agree(p.army, "digs", "dig") + " in at " + p.name + ".",
   patrolPlate: (p: { army: string; n: number }) => p.army + ": patrol " + p.n + " holdings",
-  patrolDone: (p: { army: string; names: string }) => "The " + p.army + " patrols " + p.names + ".",
+  patrolDone: (p: { army: string; names: string }) => The(p.army) + " " + agree(p.army, "patrols", "patrol") + " " + p.names + ".",
   recoverPlate: (army: string) => army + ": rest and mend",
   recoverDone: (army: string) => "The " + army + " rests to mend its wounded.",
   refusedPlate: (why: string) => "no order: " + why,
@@ -124,11 +151,11 @@ export const AC = {
   disbandKeep: "Keep the army",
   disbandYes: "Stand it down",
   hostileNote: "Not yours: what your scouts can tell.",
-  pickMarch: (name: string) => "Choose where the " + name + " marches",
-  pickPatrol: (name: string) => "Choose two holdings for the " + name + " to patrol between",
+  pickMarch: (name: string) => "Choose where " + the(name) + " " + agree(name, "marches", "march"),
+  pickPatrol: (name: string) => "Choose two holdings for " + the(name) + " to patrol between",
   pickPatrolSecond: (first: string) => "…and the holding to walk to from " + first,
   pickMerge: (name: string) => "Choose the army the " + name + " joins",
-  pickIntercept: (name: string) => "Choose the army the " + name + " marches to meet",
+  pickIntercept: (name: string) => "Choose the army " + the(name) + " " + agree(name, "marches", "march") + " to meet",
   pickDoctrine: (name: string) => "How the " + name + " fights",
   pickAbility: (name: string) => "An ability for the " + name,
   abilityCost: (p: { coin: number; legitimacy: number }) => p.coin + " coin, " + p.legitimacy + " legitimacy",
@@ -146,8 +173,8 @@ export const AC = {
   ridesWith: "Rides with",
   ridesAlone: "no army: his party alone",
   recruitButton: "Raise squads…",
-  armyRaised: (name: string, at: string) => "The " + name + " is raised at " + at + ".",
-  recruited: (p: { unit: string; men: number; army: string }) => p.unit + ", " + p.men + " men, join the " + p.army + ".",
+  armyRaised: (name: string, at: string) => The(name) + " " + agree(name, "is", "are") + " raised at " + at + ".",
+  recruited: (p: { unit: string; men: number; army: string }) => p.unit + ", " + p.men + " men, join " + the(p.army) + ".",
   armyGone: {
     starved: (n: string) => "The " + n + " has starved away.",
     deserted: (n: string) => "The " + n + " has melted away.",
@@ -158,12 +185,12 @@ export const AC = {
     // K7 (a company army's leaving has its own line in MERC_FEED; this is the fallback).
     expired: (n: string) => n + " rode away at the end of their contract.",
   },
-  mergedNews: (p: { army: string; into: string }) => "The " + p.army + " joins the " + p.into + ".",
-  splitNews: (p: { army: string; into: string }) => "The " + p.into + " parts from the " + p.army + ".",
-  intercepted: (p: { army: string; target: string }) => "The " + p.army + " meets the " + p.target + ".",
+  mergedNews: (p: { army: string; into: string }) => The(p.army) + " " + agree(p.army, "joins", "join") + " " + the(p.into) + ".",
+  splitNews: (p: { army: string; into: string }) => The(p.into) + " " + agree(p.into, "parts", "part") + " from " + the(p.army) + ".",
+  intercepted: (p: { army: string; target: string }) => The(p.army) + " " + agree(p.army, "meets", "meet") + " " + the(p.target) + ".",
   hungry: (n: string) => "The " + n + " is going hungry; men are leaving.",
   unpaid: (n: string) => "The " + n + " has not been paid; trained men are leaving.",
-  arrived: (p: { army: string; name: string }) => "The " + p.army + " reaches " + p.name + ".",
+  arrived: (p: { army: string; name: string }) => The(p.army) + " " + agree(p.army, "reaches", "reach") + " " + p.name + ".",
   followersLeft: (n: number) => n + " follower" + (n === 1 ? "" : "s") + " walked home from a hungry camp.",
   kingAlone: "The king rides alone again.",
   kingRidesWith: (army: string) => "The king rides with the " + army + ".",

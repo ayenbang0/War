@@ -61,6 +61,7 @@ import type { ContactChoice } from "../sim/kingdom/orders.ts";
 import type { Contact } from "../sim/kingdom/state.ts";
 import type { BattleResult } from "../sim/layers.ts";
 import { CONTACT_FEED } from "../content/kingdom/descent-strings.ts";
+import { contactPoint } from "../sim/kingdom/descent.ts";
 import { BAND_WORD, MORALE_FEED } from "../content/kingdom/morale-strings.ts";
 import { ARMY_MORALE } from "../content/kingdom/morale.ts";
 import { rumourCard, type RumourNews } from "../ui/kingdom/rumour-card.ts";
@@ -192,6 +193,8 @@ export class KingdomLayer implements LayerKeys {
   private stroke: InkStroke | null = null;
   private fades: Fade[] = [];
   private pulses: Pulse[] = [];
+  /** K11 (audit U2-09): the rally the feed's newest line is counting. */
+  private rallyFold: { holding: number; total: number; since: number } | null = null;
   private lastWeather: string;
   private saveFailing = false;
   /** Set by an event that changes what the resources bar shows. */
@@ -199,6 +202,8 @@ export class KingdomLayer implements LayerKeys {
   private oldCanvasLabel: string | null = null;
   /** K3b: a city is open over the map. The realm still runs (the city drives `advance`); the map is not drawn and takes no input. */
   private suspended = false;
+  /** K11 (KA-06): what the map is suspended under, while it is. */
+  private below: "city" | "battle" | null = null;
   /** K3b: the map's zoom when a city was entered, to ease back out to. */
   private zoomBefore = 0;
   /** K3b: the last tap on a holding, for a double tap. */
@@ -246,6 +251,15 @@ export class KingdomLayer implements LayerKeys {
     this.hud.alert(world.date.day, opening === "begun" ? K.begun : K.resumed(dateLine(world.date)));
     if (notice) this.hud.setNotice(notice);
     this.hud.setLetters(world.story?.pending.length ?? 0);
+    // K11 (KA-07): word heard before the save and not yet seen out is put to
+    // the king again when the realm is continued -- the sim kept the rumour
+    // (world.rumours); only the card, a thing of the page, had been lost.
+    if (opening === "resumed") {
+      for (const r of world.rumours) {
+        const a = world.armies.find((x) => x.id === r.army);
+        if (a) this.rumoursWaiting.push({ army: r.army, owner: a.owner, target: r.target, from: r.from, days: r.days });
+      }
+    }
     this.explore = new ExploreUi(env.doc, world, {
       pushScreen: (sc) => this.hooks.pushScreen(sc),
       popScreen: (sc) => this.hooks.popScreen(sc),
@@ -573,7 +587,12 @@ export class KingdomLayer implements LayerKeys {
    * arrived since it was heard (sim/kingdom/invasions.ts) is dropped unseen.
    */
   openRumour(): void {
-    if (this.rumourScreen || this.contactScreen || this.suspended || this.phase !== "live") return;
+    // K11 (KA-06): a rumour is put to the king in his town too -- the realm's
+    // clock runs on under a city, so the riders are as near as on the map. The
+    // card goes over the city and closes back to it; its tools are kingdom
+    // orders either way. Under a battle it still waits (the field is its own).
+    if (this.rumourScreen || this.contactScreen || this.phase !== "live") return;
+    if (this.suspended && this.below !== "city") return;
     this.rumoursWaiting = this.rumoursWaiting.filter((n) => this.world.rumours.some((r) => r.army === n.army && r.target === n.target));
     const news = this.rumoursWaiting.shift();
     if (!news) return;
@@ -616,6 +635,8 @@ export class KingdomLayer implements LayerKeys {
     this.closeCard();
     this.lastContact = c;
     this.save();
+    // K11 (audit KD-03): an arrival beat where the armies meet (none under reduced motion).
+    this.pulse(contactPoint(this.world, c));
     const view = contactDialog(this.contactRoot, this.env.doc, this.world, {
       choose: (choice) => this.chooseContact(choice),
       close: (sc) => this.hooks.popScreen(sc),
@@ -732,9 +753,15 @@ export class KingdomLayer implements LayerKeys {
       case "harvested":
         this.hud.alert(day, E.harvestDone({ name: name(e.holding), gains: amountsLine(e.gains) }));
         return false;
-      case "rallied":
-        this.hud.alert(day, E.rallied({ n: e.followers, name: name(e.holding) }));
+      case "rallied": {
+        // K11 (audit U2-09): one line per rally, its count kept up to date.
+        const fold = "rally:" + e.holding;
+        if (!this.hud.hasFold(fold) || this.rallyFold === null || this.rallyFold.holding !== e.holding) this.rallyFold = { holding: e.holding, total: 0, since: day };
+        this.rallyFold.total += e.followers;
+        const n = this.rallyFold.total;
+        this.hud.alert(day, n > e.followers ? E.ralliedSince({ n, name: name(e.holding), since: this.rallyFold.since + 1 }) : E.rallied({ n, name: name(e.holding) }), fold);
         return false;
+      }
       case "rallyDone":
         this.hud.alert(day, E.rallySpent(name(e.holding)));
         return false;
@@ -1259,6 +1286,7 @@ export class KingdomLayer implements LayerKeys {
   suspend(below: "city" | "battle" = "city"): void {
     if (this.phase !== "live" || this.suspended) return;
     this.suspended = true;
+    this.below = below;
     this.env.win.cancelAnimationFrame(this.raf);
     this.pen.setEnabled(false);
     this.controls.setEnabled(false);
@@ -1291,6 +1319,7 @@ export class KingdomLayer implements LayerKeys {
   resumeAt(at: MapPoint | null, said: string | null = null): void {
     if (this.phase !== "live" || !this.suspended) return;
     this.suspended = false;
+    this.below = null;
     this.hud.root.classList.remove("in-city");
     if (at) {
       const out = Math.min(this.zoomBefore || this.cam.zoom, this.cam.zoomForSpan(RETURN_MILES));
@@ -1381,6 +1410,7 @@ export class KingdomLayer implements LayerKeys {
       tip,
       fades: this.fades,
       pulses: this.pulses,
+      contactAt: this.world.contact ? contactPoint(this.world, this.world.contact) : null,
       selectedHolding: this.card && this.card.kind === "region" ? this.card.holding : 0,
       kingSelected: this.card !== null && this.card.kind === "king",
       armies,

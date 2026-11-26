@@ -211,6 +211,8 @@ export const REFUSAL = {
   needsFirst: (name: string) => "it is built over a " + name.toLowerCase() + ", and there is none standing here",
   noSlot: "every building slot here is taken",
   cannotAfford: "the stores cannot pay for it",
+  /** K11 (audit U2-05): the stores would pay, but orders waiting on the clock have them spoken for. */
+  promised: "the stores are already promised to orders waiting on the clock",
   noSuchPlot: "there is no such field",
   noSuchCrop: "there is no such crop",
   orchardStands: "the orchard will fruit again next year; it needs no sowing",
@@ -345,6 +347,8 @@ export const E = {
   hungerBegins: "The king's party goes hungry.",
   hungerEnds: "The king's party eats again.",
   rallied: (p: { n: number; name: string }) => p.n + (p.n === 1 ? " follower joins" : " followers join") + " the king at " + p.name + ".",
+  /** K11 (audit U2-09): a rally's running count, on its one line. */
+  ralliedSince: (p: { n: number; name: string; since: number }) => p.n + " followers have joined the king at " + p.name + " since day " + p.since + ".",
   rallySpent: (name: string) => "No one else at " + name + " will follow; the rally ends.",
   claimed: (name: string) => "The king claims " + name + ".",
   ripe: (p: { crop: string; name: string }) => p.crop + " is ripe at " + p.name + ": harvest it before it spoils.",

@@ -47,15 +47,28 @@ type Slot = {
   readonly cool: HTMLElement;
 };
 
+/**
+ * K11 (audit K10-05): the siege defender's gates, on a button as well as G,
+ * so a player with only a pointer can sally or shut the door. The press goes
+ * through the same path as the key (BattleLayer.toggleGates); the sim still
+ * refuses to shut a gate on men.
+ */
+export type GateControl = {
+  /** Swing the gates; the layer issues the order. */
+  readonly toggle: () => void;
+};
+
 export class AbilityBar {
   private readonly slots: Slot[] = [];
   private readonly root: HTMLElement;
+  private gate: HTMLButtonElement | null = null;
+  private gateShown: "open" | "shut" = "shut";
 
-  constructor(root: HTMLElement, ids: readonly AbilityId[], commander: Commander) {
+  constructor(root: HTMLElement, ids: readonly AbilityId[], commander: Commander, gates: GateControl | null = null) {
     this.root = root;
     root.textContent = "";
     root.className = "ability-bar";
-    if (ids.length === 0) {
+    if (ids.length === 0 && gates === null) {
       root.style.display = "none";
       return;
     }
@@ -94,10 +107,42 @@ export class AbilityBar {
       root.appendChild(b);
       this.slots.push({ id, root: b, count, cool });
     });
+
+    if (gates !== null) {
+      const g = document.createElement("button");
+      g.className = "ability ability-gates";
+      const key = document.createElement("span");
+      key.className = "ability-key";
+      key.textContent = "G";
+      const mark = document.createElement("span");
+      mark.className = "ability-mark";
+      mark.textContent = "⛩";
+      const name = document.createElement("span");
+      name.className = "ability-name";
+      name.textContent = "Open the gates";
+      g.append(key, mark, name);
+      g.onclick = () => {
+        gates.toggle();
+        g.blur();
+      };
+      root.appendChild(g);
+      this.gate = g;
+    }
   }
 
   /** Refresh counts, cooldowns and which one is armed. Called once a frame. */
   update(world: World, player: number, commander: Commander, tickRate: number): void {
+    if (this.gate !== null) {
+      const live = !world.deploying && !world.outcome && world.hasGates(player);
+      const open = world.gatesOpen(player);
+      const want = open ? "open" : "shut";
+      if (this.gateShown !== want) {
+        this.gateShown = want;
+        (this.gate.querySelector(".ability-name") as HTMLElement).textContent = open ? "Shut the gates" : "Open the gates";
+      }
+      this.gate.disabled = !live;
+      this.gate.classList.toggle("spent", !live);
+    }
     for (const s of this.slots) {
       const c = world.abilityState[player].get(s.id);
       const left = c ? c.left : 0;

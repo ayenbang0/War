@@ -187,6 +187,8 @@ export function regionCard(root: HTMLElement, doc: Document, world: KingdomWorld
   // K8: the defence tools a holding of the king's offers (the rumour card offers them too).
   const defence: { el: HTMLElement; order: KingdomOrderBody }[] = [];
   let defenceWhy: HTMLElement | null = null;
+  /** K11 (KA-08): what the two tools cost, said on this card too, not only on the rumour card. */
+  let defenceCost: HTMLElement | null = null;
   let lastDefence: HTMLElement | null = null;
 
   const refresh = (): void => {
@@ -208,6 +210,10 @@ export function regionCard(root: HTMLElement, doc: Document, world: KingdomWorld
       if (defenceWhy) {
         setText(defenceWhy, reason);
         defenceWhy.style.display = reason ? "block" : "none";
+      }
+      if (defenceCost) {
+        setText(defenceCost, mine ? RUMOUR.levy + ": " + RUMOUR.levyHint(levyMen(h)) + " " + RUMOUR.burn + ": " + RUMOUR.burnHint : "");
+        defenceCost.style.display = mine ? "block" : "none";
       }
     }
     setText(owner, h.owner === null ? capital(K.unclaimed) : capital(FACTIONS[h.owner].name));
@@ -287,6 +293,9 @@ export function regionCard(root: HTMLElement, doc: Document, world: KingdomWorld
     defenceWhy = make(doc, "p", "k-why");
     defenceWhy.style.display = "none";
     body.appendChild(defenceWhy);
+    defenceCost = make(doc, "p", "k-sub k-defence-cost");
+    defenceCost.style.display = "none";
+    body.appendChild(defenceCost);
     const tool = (text: string, order: KingdomOrderBody, said: () => string): void => {
       const b = make(doc, "button", "k-btn", text);
       b.setAttribute("type", "button");

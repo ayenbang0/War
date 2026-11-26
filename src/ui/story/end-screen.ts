@@ -12,7 +12,10 @@
  * Focus goes to the title, so a screen reader starts at "The Iron Crown"
  * and not at a button; the body is plain prose at the story's reading size.
  * There is no Esc-to-dismiss: nothing lies behind it to go back to but a
- * realm that has stopped, so Esc means the front screen, as everywhere.
+ * realm that has stopped, so Esc means the front screen, as everywhere --
+ * but not at one press (U3-10, K11): the first Esc puts focus on "Return to
+ * the front screen" and says so; Esc again (or Enter) goes. The epilogue is
+ * the end of a long game, and a stray key should not take it away.
  */
 
 import { domScreen } from "../dom-screen.ts";
@@ -45,6 +48,8 @@ export function epilogueOf(world: KingdomWorld, ending: string): string[] {
 
 export function endScreen(root: HTMLElement, doc: Document, world: KingdomWorld, ending: string, hooks: EndHooks): Screen {
   let first: HTMLElement | null = null;
+  /** U3-10: the first Esc comes here, the second goes home. */
+  let homeButton: HTMLElement | null = null;
   return domScreen({
     name: "story-end",
     kind: "full",
@@ -84,9 +89,14 @@ export function endScreen(root: HTMLElement, doc: Document, world: KingdomWorld,
       panel.appendChild(actions);
       root.appendChild(panel);
       first = title;
+      homeButton = home;
     },
     onKey: (k): KeyVerdict => {
       if (k.code !== "Escape") return "pass";
+      if (homeButton && doc.activeElement !== homeButton) {
+        homeButton.focus();
+        return "handled";
+      }
       hooks.home();
       return "handled";
     },

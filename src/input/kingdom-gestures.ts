@@ -324,6 +324,17 @@ export function recognizeKingdom(raw: readonly Point[], ctx: KingdomGestureConte
     if (token.kind === "king") return { kind: "join", army: other.id };
     return { kind: "merge", army: token.id, into: other.id };
   }
+  // K11 (audit A-07): an army standing under the king has its counter just
+  // below his, so a cut drawn down across it starts on the king. A line from
+  // the king that goes nowhere (no holding of its own to march to) but runs
+  // across exactly one army of yours is the cut it looks like.
+  if (token.kind === "king" && !other && (!dest || dest.id === token.at)) {
+    const grab = tokenGrab(ctx.pxToWorld);
+    const crossed = ctx.tokens.filter((t) => t.kind === "army" && t.owner === ctx.player &&
+      strokeDistance(raw, t) <= grab &&
+      Math.hypot(first.x - t.x, first.y - t.y) > grab && Math.hypot(last.x - t.x, last.y - t.y) > grab);
+    if (crossed.length === 1) return { kind: "split", army: crossed[0].id };
+  }
   if (!dest) return { kind: "none", reason: "no-destination" };
   if (dest.id === token.at) return { kind: "none", reason: "already-there" };
 

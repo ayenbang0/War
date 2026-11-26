@@ -103,6 +103,8 @@ export type KingdomFrame = {
   readonly tip: MapPoint | null;
   readonly fades: readonly Fade[];
   readonly pulses: readonly Pulse[];
+  /** K11 (audit KD-02): where a meeting waits on the king's word, ringed under the dialog. */
+  readonly contactAt?: MapPoint | null;
   /** The holding whose card is open, or 0. */
   readonly selectedHolding: number;
   readonly kingSelected: boolean;
@@ -218,17 +220,38 @@ export class KingdomRenderer {
     // -- province names -------------------------------------------------------
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = "italic 600 20px " + P.MAP_FONT;
+    // K11 (audit U1-R1): two names where provinces meet could letter over
+    // each other at the opening zoom. Each name now takes a box; one that
+    // would cross a name already lettered moves a line up or down, then tries
+    // a smaller size, and is left off (its wash still shows) only if neither fits.
+    const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    const clear = (b: { x0: number; y0: number; x1: number; y1: number }): boolean =>
+      placed.every((o) => b.x1 < o.x0 || b.x0 > o.x1 || b.y1 < o.y0 || b.y0 > o.y1);
     for (const p of this.provinceLabels) {
       if (!p.holdings.some((id) => known.has(id))) continue;
       const x = sx(p.x);
       const y = sy(p.y);
       if (x < -200 || x > W + 200 || y < -40 || y > H + 40) continue;
+      const text = spaced(p.name);
+      let at: { y: number; size: number } | null = null;
+      for (const size of [20, 15]) {
+        ctx.font = "italic 600 " + size + "px " + P.MAP_FONT;
+        const half = ctx.measureText(text).width / 2 + 4;
+        const tall = size * 0.75;
+        for (const dy of [0, -1.6, 1.6, -3.2, 3.2]) {
+          const cy = y + dy * size;
+          const box = { x0: x - half, y0: cy - tall, x1: x + half, y1: cy + tall };
+          if (clear(box)) { placed.push(box); at = { y: cy, size }; break; }
+        }
+        if (at) break;
+      }
+      if (!at) continue;
+      ctx.font = "italic 600 " + at.size + "px " + P.MAP_FONT;
       ctx.lineWidth = 4;
       ctx.strokeStyle = "rgba(226, 214, 187, 0.7)";
-      ctx.strokeText(spaced(p.name), x, y);
+      ctx.strokeText(text, x, at.y);
       ctx.fillStyle = P.inkMid;
-      ctx.fillText(spaced(p.name), x, y);
+      ctx.fillText(text, x, at.y);
     }
 
     // -- roads ---------------------------------------------------------------
@@ -347,6 +370,20 @@ export class KingdomRenderer {
       ctx.strokeStyle = "rgba(46, 74, 109, " + (0.85 * (1 - t)).toFixed(3) + ")";
       ctx.lineWidth = 3;
       ctx.stroke();
+    }
+
+    // -- a meeting waiting on the king's word (K11, audit KD-02) ------------------
+    if (f.contactAt) {
+      const cx = sx(f.contactAt.x);
+      const cy = sy(f.contactAt.y);
+      ctx.save();
+      ctx.setLineDash([6, 5]);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(140, 36, 28, 0.85)";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 34, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
     }
 
     // -- the pen: ghost under the wet ink, plate on top ---------------------------

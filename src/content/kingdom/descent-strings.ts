@@ -5,6 +5,12 @@
  * reword (docs/ui-policy.md: text lives in tables).
  */
 
+import { The, agree, its } from "./army-strings.ts";
+
+function capitalise(x: string): string {
+  return x.charAt(0).toUpperCase() + x.slice(1);
+}
+
 /** Why a `resolveContact` order (or an army order during a contact) is refused. The button shows the same words. */
 export const DESCENT_REFUSAL = {
   inContact: "that army has met the enemy: fight, withdraw or have it resolved first",
@@ -25,9 +31,9 @@ export const CONTACT = {
   titleField: (place: string) => "Riders on the " + place + " road",
   titleAssault: (place: string) => "The walls of " + place,
   bodyField: (p: { ours: string; theirs: string; place: string }) =>
-    "The " + p.ours + " has met " + p.theirs + " near " + p.place + ". The realm waits on your word.",
+    The(p.ours) + " " + agree(p.ours, "has", "have") + " met " + p.theirs + " near " + p.place + ". The realm waits on your word.",
   bodyAssault: (p: { ours: string; theirs: string; place: string }) =>
-    "The " + p.ours + " stands before " + p.place + ". Behind its walls, " + p.theirs + " will not open the gates.",
+    The(p.ours) + " " + agree(p.ours, "stands", "stand") + " before " + p.place + ". Behind its walls, " + p.theirs + " will not open the gates.",
   bodyDefend: (p: { ours: string; theirs: string; place: string }) =>
     p.theirs + " has come to the walls of " + p.place + ", and only its townsmen stand to meet it.",
   ourSide: "Yours",
@@ -60,9 +66,9 @@ export const CONTACT = {
 export const DESCENT = {
   heading: "What it means for the realm",
   survivors: (p: { army: string; men: number; was: number; wounded: number }) =>
-    "The " + p.army + ": " + p.men + " of " + p.was + " men came back" + (p.wounded > 0 ? ", " + p.wounded + " of them wounded." : "."),
+    The(p.army) + ": " + p.men + " of " + p.was + " men came back" + (p.wounded > 0 ? ", " + p.wounded + " of them wounded." : "."),
   armyLost: (army: string) => "The " + army + " is gone: none of it came off the field.",
-  fallsBack: (p: { army: string; to: string }) => "The " + p.army + " falls back toward " + p.to + ".",
+  fallsBack: (p: { army: string; to: string }) => The(p.army) + " " + agree(p.army, "falls", "fall") + " back toward " + p.to + ".",
   cutOff: (army: string) => "The " + army + " is cut off and taken.",
   townsmen: (p: { name: string; lost: number }) => p.name + " lost " + p.lost + " of its people on the walls.",
   stormed: (p: { name: string; by: string }) => p.name + " is taken by " + p.by + ".",
@@ -72,7 +78,7 @@ export const DESCENT = {
     "The siege knocked down " + p.pct + "% of the walls of " + p.name + " (" + p.down + "% down now): they stay down until they are mended in the town.",
   legitimacyUp: (n: number) => "Word of it spreads: legitimacy +" + n + ".",
   legitimacyDown: (n: number) => "Word of it spreads: legitimacy -" + n + ".",
-  morale: (p: { army: string; morale: number }) => "The " + p.army + "'s morale is now " + p.morale + ".",
+  morale: (p: { army: string; morale: number }) => capitalise(its(p.army)) + " morale is now " + p.morale + ".",
   backToMap: "Back to the map",
   leaveTitle: "Leave the field?",
   leaveBody:
@@ -84,13 +90,13 @@ export const DESCENT = {
 
 /** The feed's lines for contact news. */
 export const CONTACT_FEED = {
-  met: (p: { ours: string; theirs: string }) => "The " + p.ours + " meets " + p.theirs + ".",
-  walls: (p: { ours: string; place: string }) => "The " + p.ours + " comes to the walls of " + p.place + ".",
+  met: (p: { ours: string; theirs: string }) => The(p.ours) + " " + agree(p.ours, "meets", "meet") + " " + p.theirs + ".",
+  walls: (p: { ours: string; place: string }) => The(p.ours) + " " + agree(p.ours, "comes", "come") + " to the walls of " + p.place + ".",
   won: (army: string) => "The " + army + " holds the field.",
   lost: (army: string) => "The " + army + " is beaten.",
   drawn: (army: string) => "The " + army + "'s battle is undecided.",
   withdrew: (army: string) => "The " + army + " withdraws.",
-  fellBack: (p: { army: string; to: string }) => "The " + p.army + " falls back toward " + p.to + ".",
+  fellBack: (p: { army: string; to: string }) => The(p.army) + " " + agree(p.army, "falls", "fall") + " back toward " + p.to + ".",
   stormed: (p: { name: string; by: string }) => p.name + " is stormed by " + p.by + ".",
   distant: (p: { a: string; b: string; winner: string }) => "Word comes of a fight between " + p.a + " and " + p.b + ": " + p.winner + " held the field.",
 } as const;

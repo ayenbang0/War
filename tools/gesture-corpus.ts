@@ -1081,6 +1081,13 @@ function armyScene(rnd: () => number): KingdomCase[] {
     const c4 = C("A4");
     add("none:not-from-king", stroke([{ x: c1.x - 40 * px, y: c1.y }, { x: c4.x + 40 * px, y: c4.y }], 24, 0.5 * px, rnd), "line along the fan across A1 and A4");
     add("split:A2", stroke([{ x: c2.x + 10 * px, y: c2.y + 50 * px }, { x: c2.x - 5 * px, y: c2.y - 50 * px }], 20, 0.8 * px, rnd), "upward line across A2");
+    // K11 (audit A-07): the cut drawn down across the army under the king starts on the king's counter.
+    {
+      const len = Math.hypot(c1.x - kc.x, c1.y - kc.y) || 1;
+      const ux = (c1.x - kc.x) / len;
+      const uy = (c1.y - kc.y) / len;
+      add("split:A1", stroke([kc, { x: c1.x + ux * 45 * px, y: c1.y + uy * 45 * px }], 20, 0.6 * px, rnd), "line down from the king across A1 under him");
+    }
 
     // -- closed shapes: garrison rings, patrol rings, hearts
     const g = named("Greyshaw");

@@ -281,6 +281,51 @@ function slotFor(h: Holding, def: BuildingDef): { slot: number; why: string | nu
 // -- validating orders: one function for the button and the sim -----------------------
 
 /**
+ * K11 (audit U2-05): what an economy order would cost (build, sow, mend the
+ * walls), or null for one that costs nothing.
+ */
+export function economyOrderCost(world: KingdomWorld, body: KingdomOrderBody): Cost | null {
+  if (body.kind === "build") return BUILDINGS[body.building]?.cost ?? null;
+  if (body.kind === "sow") {
+    const found = findPlot(world, body.plot);
+    const crop = CROPS[body.crop];
+    return found && crop ? seedCost(crop, found.holding) : null;
+  }
+  if (body.kind === "repairWalls") {
+    const h = world.holding(body.holding);
+    return h ? wallRepairCost(h) : null;
+  }
+  return null;
+}
+
+/**
+ * K11 (audit U2-05): the check a menu offers an order by, counting what the
+ * player's orders still waiting on the clock will spend. While paused, two
+ * builds the stores pay for one at a time were both offered and the second
+ * refused when time ran; now the second says the stores are promised. Never
+ * called by the tick (the sim still checks each order against the stores as
+ * they are when it lands), so nothing it says moves a hash.
+ */
+export function checkCountingQueued(world: KingdomWorld, body: KingdomOrderBody, player: number = KING_PLAYER): string | null {
+  const why = world.check(body, player);
+  if (why !== null) return why;
+  const cost = economyOrderCost(world, body);
+  if (cost === null) return null;
+  const promised: Partial<Record<StockId, number>> = {};
+  let any = false;
+  for (const o of world.orders.queued()) {
+    if (o.player !== player) continue;
+    const c = economyOrderCost(world, o);
+    if (c === null) continue;
+    for (const s of STOCK_IDS) if (c[s]) { promised[s] = (promised[s] ?? 0) + c[s]!; any = true; }
+  }
+  if (!any) return null;
+  const stocks = world.economy[player].stocks;
+  for (const s of STOCK_IDS) if ((cost[s] ?? 0) + (promised[s] ?? 0) > stocks[s]) return REFUSAL.promised;
+  return null;
+}
+
+/**
  * Why an economy order would be refused right now, or null if it would be
  * applied. The panels call this to decide which buttons to offer and to say
  * why one is not on offer, and applyEconomyOrder calls the SAME function, so

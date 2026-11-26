@@ -196,7 +196,9 @@ export class BattleLayer implements LayerKeys {
     };
     this.snapshotInto(this.prev);
     // K9: the drill has abilities too (readying and casting one is taught).
-    this.abilityBar = new AbilityBar(env.abilityRoot, this.abilityKeys, this.commander);
+    // K11 (audit K10-05): a siege defender gets a gate button beside them.
+    const gates = world.siege && world.hasGates(PLAYER) ? { toggle: () => { this.toggleGates(); } } : null;
+    this.abilityBar = new AbilityBar(env.abilityRoot, this.abilityKeys, this.commander, gates);
 
     this.cachedHash = hashWorld(world);
   }
@@ -305,11 +307,7 @@ export class BattleLayer implements LayerKeys {
     // door shut in the stormers' faces). The order is the sim's to refuse:
     // a gate with men standing in it does not shut.
     if (k.code === "KeyG" && pen && world.hasGates(PLAYER)) {
-      if (k.repeat || world.deploying || world.outcome) return "handled";
-      const open = !world.gatesOpen(PLAYER);
-      world.orders.issue({ kind: "gates", open }, PLAYER, world.tick + 1);
-      // Audit K10-04: a gate is never shut on men, so say so rather than claim it shut.
-      this.pen.lastAction = open ? "gates open" : world.gateHeldOpen(PLAYER) ? "men in the gateway - it stays open" : "gates shut";
+      if (!k.repeat) this.toggleGates();
       return "handled";
     }
 
@@ -336,6 +334,16 @@ export class BattleLayer implements LayerKeys {
     }
     if (contexts.includes("camera") && this.controls.keyDown(k.code)) return "handled";
     return "pass";
+  }
+
+  /** Open or shut the defender's gates: G, or the gate button (K11, audit K10-05). */
+  toggleGates(): void {
+    const world = this.world;
+    if (this.phase !== "live" || !world.hasGates(PLAYER) || world.deploying || world.outcome) return;
+    const open = !world.gatesOpen(PLAYER);
+    world.orders.issue({ kind: "gates", open }, PLAYER, world.tick + 1);
+    // Audit K10-04: a gate is never shut on men, so say so rather than claim it shut.
+    this.pen.lastAction = open ? "gates open" : world.gateHeldOpen(PLAYER) ? "men in the gateway - it stays open" : "gates shut";
   }
 
   keyUp(code: string): void {

@@ -836,6 +836,10 @@ scenario("k9-letter-and-chronicle", "after the tutorial, in the king's own realm
   t.clickButton(STORY_UI.menuChronicle);
   await t.waitFor(() => t.hook.top() === "story-chronicle", "the menu's Read the chronicle");
   t.key("Escape");
+  // K11 (U3-12): back to the Menu it was opened from, then Esc to the map.
+  t.expect(t.hook.top() === "story-menu", "closing it comes back to the Menu (top: " + t.hook.top() + ")");
+  t.key("Escape");
+  t.expect(t.hook.top() === "kingdom", "and Esc on the Menu goes back to the map");
 });
 
 // -- Esc in the drill (was K0's tutorial-esc) ------------------------------------------
@@ -949,6 +953,17 @@ scenario("k9-ending", "the story ends: its end screen over the map, the chronicl
   t.expect(t.hook.top() === "confirm", "a new exile asks first: it throws this realm away");
   t.clickButton(K.newNo);
   t.expect(t.hook.top() === "story-end" && store.getItem(KINGDOM_SAVE_KEY) !== null, "keeping it keeps the realm and its save");
+
+  // K11 (U3-10): one stray Esc does not take the epilogue away -- it puts
+  // focus on the way home; a second Esc goes.
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  t.key("Escape");
+  t.expect(t.hook.top() === "story-end", "the first Esc stays on the end screen");
+  t.expect(document.activeElement?.textContent === STORY_UI.endHome, "and puts focus on the way to the front screen");
+  t.key("Escape");
+  await t.waitFor(() => t.hook.top() === "home", "the front screen, at the second Esc");
+  t.clickButton(K.homeButton);
+  await t.waitFor(() => t.hook.top() === "story-end", () => "Continue opens on the ending again (top: " + t.hook.top() + ")");
 
   t.clickButton(STORY_UI.endHome);
   await t.waitFor(() => t.hook.top() === "home", "the front screen");

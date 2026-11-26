@@ -226,6 +226,17 @@ scenario("k10-keep-gates", "the Hare at the king's walls: retreat to the keep, a
   t.key("KeyG");
   await t.waitFor(() => !b.world.gatesOpen(0), "the gate to swing shut");
   t.expect(gate.every((i) => b.world.terrain.type[i] === Terrain.Gate), "the gateway is shut again");
+  // K11 (audit K10-05): the same gate on a button, for a player with only a pointer.
+  const gateButton = document.querySelector<HTMLButtonElement>(".ability-gates");
+  t.expect(t.visible(gateButton) && !gateButton.disabled && (gateButton.textContent ?? "").includes("Open the gates"),
+    "a live \"Open the gates\" button sits on the bar");
+  t.click(gateButton!);
+  await t.waitFor(() => b.world.gatesOpen(0), "the gate button to swing it open");
+  await t.frames(2);
+  t.expect((gateButton!.textContent ?? "").includes("Shut the gates") && document.activeElement !== gateButton,
+    "the button now offers to shut them, and gives the keys back");
+  t.click(gateButton!);
+  await t.waitFor(() => !b.world.gatesOpen(0), "the gate button to swing it shut");
   t.hook.forceOutcome(0, { breach: 12 });
   t.expect(b.world.wallDamage() > 0, "a stretch of the keep is battered down (" + b.world.wallDamage() + "‰)");
   await t.waitFor(() => t.hook.top() === "after-action", () => "the after-action report (top: " + t.hook.top() + ")");

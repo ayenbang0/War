@@ -26,7 +26,7 @@ import { DOCTRINES, DOCTRINE_IDS } from "../../content/doctrines.ts";
 import { ABILITIES, ABILITY_IDS } from "../../content/abilities.ts";
 import { E, etaWords } from "../../content/kingdom/ui-strings.ts";
 import { INVASION_FEED, RUMOUR } from "../../content/kingdom/invasion-strings.ts";
-import { AC } from "../../content/kingdom/army-strings.ts";
+import { AC, PEN, The, agree, its } from "../../content/kingdom/army-strings.ts";
 import { MERCENARIES, RENEW_WINDOW } from "../../content/kingdom/mercenaries.ts";
 import { CONTRACT, REPUTATION_WORD } from "../../content/kingdom/mercenary-strings.ts";
 import { companyOf, hireFee, renewFee } from "../../sim/kingdom/mercenaries.ts";
@@ -247,12 +247,12 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
         const plan = a ? planArmyRoute(world, a, h.id) : null;
         return {
           key: "march-" + h.id, label: h.name, lines: plan ? [capital(etaWords(plan.etaTicks, TICKS_PER_DAY)) + " by road"] : [],
-          why: world.check(order), order, said: AC.arrived({ army: name(), name: h.name }).replace("reaches", "sets out for"),
+          why: world.check(order), order, said: The(name()) + " " + agree(name(), "sets", "set") + " out for " + h.name + ".",
         };
       }).sort((p, q) => (p.why ? 1 : 0) - (q.why ? 1 : 0)),
     }));
     add(actions, AC.halt, () => ({ kind: "haltArmy", army: id }), () => name() + ": halted.", moving);
-    add(actions, AC.hold, () => ({ kind: "garrison", army: id }), () => "The " + name() + " digs in.", standing);
+    add(actions, AC.hold, () => ({ kind: "garrison", army: id }), () => The(name()) + " " + agree(name(), "digs", "dig") + " in.", standing);
     pick(actions, AC.patrol, () => ({
       title: AC.pickPatrol(name()), intro: "",
       options: () => {
@@ -261,12 +261,12 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
           const order: KingdomOrderBody = { kind: "patrol", army: id, holdings: [here, h.id] };
           return {
             key: "patrol-" + h.id, label: (world.holding(here)?.name ?? "?") + " and " + h.name, lines: [],
-            why: world.check(order), order, said: "The " + name() + " patrols " + (world.holding(here)?.name ?? "?") + " and " + h.name + ".",
+            why: world.check(order), order, said: PEN.patrolDone({ army: name(), names: (world.holding(here)?.name ?? "?") + " and " + h.name }),
           };
         }).sort((p, q) => (p.why ? 1 : 0) - (q.why ? 1 : 0));
       },
     }), standing);
-    add(actions, AC.recover, () => ({ kind: "recover", army: id }), () => "The " + name() + " rests to mend.", standing);
+    add(actions, AC.recover, () => ({ kind: "recover", army: id }), () => The(name()) + " " + agree(name(), "rests", "rest") + " to mend.", standing);
     // K8: lie in wait where it stands (hidden from all but those who come to the same place; it strikes first).
     add(actions, RUMOUR.ambush, () => ({ kind: "ambush", army: id }), () => INVASION_FEED.ambush(name()), standing);
     const ownRanks = (): boolean => !isCompany;
@@ -298,14 +298,14 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
       options: () => world.armies.filter((b) => b.owner !== KING_PLAYER && armyVisible(world, KING_PLAYER, b)).map((b): Option => {
         const order: KingdomOrderBody = { kind: "intercept", army: id, target: b.id };
         const who = AC.hostileTitle(b.name, FACTIONS[FACTION_IDS[b.owner]].name);
-        return { key: "intercept-" + b.id, label: who, lines: [strengthLine(b)], why: world.check(order), order, said: "The " + name() + " marches to meet the " + b.name + "." };
+        return { key: "intercept-" + b.id, label: who, lines: [strengthLine(b)], why: world.check(order), order, said: PEN.interceptDone({ army: name(), target: b.name }) };
       }),
     }), () => world.armies.some((b) => b.owner !== KING_PLAYER && armyVisible(world, KING_PLAYER, b)));
     pick(actions, AC.setDoctrine, () => ({
       title: AC.pickDoctrine(name()), intro: "",
       options: () => DOCTRINE_IDS.map((d): Option => {
         const order: KingdomOrderBody = { kind: "setDoctrine", army: id, doctrine: d };
-        return { key: "doctrine-" + d, label: DOCTRINES[d].name, lines: [DOCTRINES[d].blurb], why: world.check(order), order, said: "The " + name() + " will fight " + DOCTRINES[d].name.toLowerCase() + "." };
+        return { key: "doctrine-" + d, label: DOCTRINES[d].name, lines: [DOCTRINES[d].blurb], why: world.check(order), order, said: The(name()) + " will fight " + DOCTRINES[d].name.toLowerCase() + "." };
       }),
     }));
     pick(actions, AC.unlock, () => ({
@@ -313,7 +313,7 @@ export function armyCard(root: HTMLElement, doc: Document, world: KingdomWorld, 
       options: () => ABILITY_IDS.map((x): Option => {
         const order: KingdomOrderBody = { kind: "unlockAbility", army: id, ability: x };
         const p = abilityPrice(x, army()?.doctrine ?? first.doctrine);
-        return { key: "ability-" + x, label: ABILITIES[x].name, lines: [AC.abilityCost(p), ABILITIES[x].blurb], why: world.check(order), order, said: ABILITIES[x].name + " is the " + name() + "'s to call on." };
+        return { key: "ability-" + x, label: ABILITIES[x].name, lines: [AC.abilityCost(p), ABILITIES[x].blurb], why: world.check(order), order, said: ABILITIES[x].name + " is " + its(name()) + " to call on." };
       }),
     }));
     add(actions, AC.joinKing, () => ({ kind: "kingJoin", army: id }), () => "The king rides with the " + name() + ".", () => world.king.army !== id);

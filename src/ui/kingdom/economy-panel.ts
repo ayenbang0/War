@@ -33,7 +33,7 @@ import type { KeyVerdict, Screen } from "../screen-stack.ts";
 import type { KingdomWorld } from "../../sim/kingdom/world.ts";
 import type { KingdomOrderBody } from "../../sim/kingdom/orders.ts";
 import type { FieldPlot, Holding } from "../../sim/kingdom/state.ts";
-import { seedCost, taxPerDay } from "../../sim/kingdom/economy.ts";
+import { checkCountingQueued, seedCost, taxPerDay } from "../../sim/kingdom/economy.ts";
 import { DAYS_PER_YEAR, daysUntilSeason } from "../../sim/kingdom/clock.ts";
 import { BUILDINGS, BUILDING_IDS, type BuildingId, type Cost } from "../../content/kingdom/buildings.ts";
 import { CROPS, CROP_IDS, daysToRipe, type CropDef, type CropId } from "../../content/kingdom/crops.ts";
@@ -374,7 +374,8 @@ export function buildMenu(doc: Document, world: KingdomWorld, h: Holding, hooks:
         key: "build-" + id,
         label: def.name,
         lines: [def.purpose, E.costLine(costOf(def.cost)), E.daysLine({ days: def.days, upkeep })],
-        why: world.check(order),
+        // K11 (audit U2-05): counting what orders waiting on the clock will spend.
+        why: checkCountingQueued(world, order),
         order,
         said: E.chosen,
       };
@@ -475,7 +476,7 @@ export function sowMenu(doc: Document, world: KingdomWorld, h: Holding, index: n
           // ECON: what sowing it today comes to, said before the seed is paid.
           ...(crop.sow.includes(world.date.season) ? [ripeEstimate(world, crop, null)].map((r) => (r ? E.ripeBy(r) : E.tooLate)) : []),
         ],
-        why: world.check(order),
+        why: checkCountingQueued(world, order),
         order,
         said: E.chosen,
       };

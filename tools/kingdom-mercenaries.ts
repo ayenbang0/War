@@ -36,6 +36,7 @@ import {
   MERC_REFUSAL, ARMY_REFUSAL,
 } from "../src/content/kingdom/index.ts";
 import { REFUSAL } from "../src/content/kingdom/ui-strings.ts";
+import { PEN, isCompanyName } from "../src/content/kingdom/army-strings.ts";
 import { UNIT_TYPES } from "../src/content/unit-types.ts";
 
 let failures = 0;
@@ -138,6 +139,11 @@ section("the tables");
   check("a new world: every company waiting, in table order", w.companies.length === MERCENARIES.length &&
     w.companies.every((c, i) => c.index === i && c.state === "waiting" && c.army === 0));
   check("'hiring' is a sink of the ledger", LEDGER_CATEGORY_IDS.includes("hiring"));
+  // K11 (audit M-09): a company's name takes no "the" and a plural verb.
+  const said = PEN.garrisonDone({ army: MERCENARIES[0].name, name: "Rookstead" });
+  check("a company digs in without a stray article: \"" + said + "\"", said === MERCENARIES[0].name + " dig in at Rookstead.");
+  check("and the king's own armies keep theirs", PEN.garrisonDone({ army: "First Army", name: "Rookstead" }) === "The First Army digs in at Rookstead.");
+  check("every company's name reads as one", MERCENARIES.every((m) => isCompanyName(m.name)));
 }
 
 // -- 2. offers ---------------------------------------------------------------------------------

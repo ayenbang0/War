@@ -118,6 +118,11 @@ export async function claimGreyshaw(t: Driver, k: KingdomLayer, handFarm = true)
   stepUntil(t, () => w.kingStocks.stocks.levy >= 4, 10, "rallying at the hamlet brings followers");
   t.expect(shown(k, "levy") >= 4, "the bar counts the followers (" + shown(k, "levy") + ")");
   t.expect(w.holding(w.king.mover.node)!.population < 30, "the followers came from the hamlet's people");
+  // K11 (audit U2-09): a rally is one line in the feed, its count kept up to date.
+  const feedLines = Array.from(document.querySelectorAll(".k-alerts li")).map((li) => li.textContent ?? "");
+  const rallyLines = feedLines.filter((l) => l.includes("the king at Cold Hearth"));
+  t.expect(rallyLines.length === 1 && rallyLines[0].includes(String(w.kingStocks.stocks.levy)),
+    "the rally is one line in the feed, counting every follower (" + rallyLines.join(" | ") + ")");
 
   t.clickButton(E.forage);
   stepUntil(t, () => w.kingStocks.stocks.grain >= 70 && w.kingStocks.stocks.timber >= 4, 14, "foraging gathers grain and deadwood for the road");
