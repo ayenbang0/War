@@ -70,7 +70,7 @@ bid (7 coin) — only while a bid stands — and Dismiss (for Stand down).
 | M-06 | P2 | counter mark | a company has no ordinal, so the Roman numeral was blank | the counter carries the company's initial | K7 | closed |
 | M-07 | P2 | feed noise | a hire, renewal or matched bid said twice (result line and feed) | the feed is silent on those; it speaks on offers, moving on, the contract's last 15 days, a bid, and a leaving, each in its own words, and K4's generic "army gone" line is suppressed for a company's leaving | K7 | closed |
 | M-08 | P2 | portrait phone | the market rows are long (six lines) | none in code: the shared menu scrolls | — | open, runtime pass pending (no browser here) |
-| M-09 | P3 | grammar | K4's said-lines ("The Harker's Outriders digs in.") read oddly for a company's plural name | none yet | — | open (K10 text pass) |
+| M-09 | P3 | grammar | K4's said-lines ("The Harker's Outriders digs in.") read oddly for a company's plural name | `The()`/`agree()` in army-strings.ts | — | **fixed K11** (kingdom-mercenaries) |
 | M-10 | P3 | touch | hiring by touch | the same buttons; no gesture is added | — | open, runtime pass pending |
 
 No P0. Every P1 is fixed.
@@ -81,5 +81,5 @@ No P0. Every P1 is fixed.
 |---|---|---|---|
 | M-01..M-07 | P1–P2 | as fixed above; text sizes are the shared menu's and card's (16px floor, ui-check); no animation is added, so reduced motion is unaffected | closed |
 | M-08 | P2 | portrait phone scroll of the market | open, runtime pass pending |
-| M-09 | P3 | said-line grammar for plural company names | open |
+| M-09 | P3 | said-line grammar for plural company names | fixed K11 |
 | M-10 | P3 | touch | open |

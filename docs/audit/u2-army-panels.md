@@ -154,7 +154,7 @@ sim uses.
 | A-04 | P1 | state readable | bare counts | men of full + fit %; bar | K4 | fixed |
 | A-05 | P2 | readability under load | stacked counters | fan; labels never cover counters | K4 | fixed (one row, 30 px; see A-08) |
 | A-06 | P2 | wages and rations invisible | the bar shows stocks only | burn lines from the sim's own `armyUpkeep` | K4 | fixed (one line, see re-audit) |
-| A-07 | P2 | a stroke means the same wherever it is drawn | a VERTICAL line across an army that stands under the king begins on the king's counter (30 px above the point; the army's is 30 px below), so it reads as the king's line, not a split | draw the cut across, not along the stem; the plate says what it will do before release | K4 | open (P2: the ghost shows it) |
+| A-07 | P2 | a stroke means the same wherever it is drawn | a VERTICAL line across an army that stands under the king begins on the king's counter (30 px above the point; the army's is 30 px below), so it reads as the king's line, not a split | draw the cut across, not along the stem; the plate says what it will do before release | K4 | **fixed K11**: a line from the king across the army under him is the cut (gesture corpus) |
 | A-08 | P2 | readability under load | eight armies at one holding fan into one 240 px row | two rows past four | K5 | open |
 | A-09 | P3 | the card's numbers match the counter's | a hostile counter shows men rounded ("~40"); its card shows the exact count | round on the card too when the fog rules land (K8) | K8 | open |
 | A-10 | P3 | camera-systems: user-initiated framing | no "Show on map" (F flies to the king only) | add with K5's army selection | K5 | open |

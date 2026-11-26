@@ -26,6 +26,8 @@ export type MenuHooks = {
   front(): void;
   /** False in the practice realm itself: the tutorial is already running. */
   canReplay: boolean;
+  /** K11: the realm's difficulty by name, said under the title. */
+  difficulty?: string;
 };
 
 function make(doc: Document, tag: string, cls?: string, text?: string): HTMLElement {
@@ -55,6 +57,7 @@ export function menuScreen(root: HTMLElement, doc: Document, hooks: MenuHooks): 
       title.id = "s-menu-title";
       panel.setAttribute("aria-labelledby", title.id);
       panel.appendChild(title);
+      if (hooks.difficulty) panel.appendChild(make(doc, "p", "k-sub s-menu-difficulty", STORY_UI.menuDifficulty(hooks.difficulty)));
       const list = make(doc, "div", "s-menu-list");
       const add = (label: string, run: () => void, hint?: string): HTMLElement => {
         const b = make(doc, "button", "k-btn s-menu-btn", label);

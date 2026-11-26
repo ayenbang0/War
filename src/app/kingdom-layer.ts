@@ -736,6 +736,7 @@ export class KingdomLayer implements LayerKeys {
         }));
         return false;
       case "built":
+        cue("done"); // K11 (audit U2-10): a building standing has a sound
         this.storesDirty = true;
         this.hud.alert(day, E.built({ building: BUILDINGS[e.building as BuildingId].name, name: name(e.holding) }));
         return false;
@@ -757,6 +758,7 @@ export class KingdomLayer implements LayerKeys {
         return false;
       case "harvested":
         this.hud.alert(day, E.harvestDone({ name: name(e.holding), gains: amountsLine(e.gains) }));
+        cue("done"); // K11 (audit U2-10)
         return false;
       case "rallied": {
         // K11 (audit U2-09): one line per rally, its count kept up to date.

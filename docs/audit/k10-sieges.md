@@ -60,8 +60,8 @@
 | K10-02 | P1 | The HUD said "gates shut - G to open" while deploying and after the outcome, when G is ignored (`battle-layer.ts` drawHud) | fixed: the gates are offered only while G can swing them; the e2e checks both |
 | K10-03 | P2 | The HUD's walls figure walked the whole circuit every frame (polling, against the event-driven HUD rule) | fixed: read once per sim tick |
 | K10-04 | P1 | Shutting a gate with men in the gateway reported "gates shut" though the gate (rightly) stayed open | fixed: "men in the gateway - it stays open"; `siege-check` checks `gateHeldOpen` |
-| K10-05 | P2 | The gates have no pointer control (keyboard G only) | open, K11 (K10.15) |
-| K10-06 | P3 | The machine never sallies from its gates | open, later AI work |
+| K10-05 | P2 | The gates have no pointer control (keyboard G only) | **fixed K11**: a gate button on the ability bar for the defender, the same path as G (e2e `k10-keep-gates`) |
+| K10-06 | P3 | The machine never sallies from its gates | open: a sally is battle-AI work that would move the battle goldens; left for the AI pass (K11.10) |
 | K10-07 | P2 | Runtime pass at the five sizes not done (no browser here) | open, the next browser run |
 
 Gate (§C.6): no open P0/P1 on the surfaces K10 touches.

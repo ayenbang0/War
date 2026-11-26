@@ -20,9 +20,9 @@
  */
 
 /** The cues the game plays. */
-export type SoundCue = "click" | "stroke" | "refused" | "clash" | "march" | "letter" | "season";
+export type SoundCue = "click" | "stroke" | "refused" | "clash" | "march" | "letter" | "season" | "done";
 
-export const SOUND_CUES: readonly SoundCue[] = ["click", "stroke", "refused", "clash", "march", "letter", "season"];
+export const SOUND_CUES: readonly SoundCue[] = ["click", "stroke", "refused", "clash", "march", "letter", "season", "done"];
 
 /** What is remembered between visits. */
 export type SoundSettings = { readonly on: boolean; readonly volume: number };
@@ -35,7 +35,7 @@ export const VOLUME_STEP = 10;
 
 /** The least time between two plays of the same cue, in ms: a melee of a hundred blows is one clash, not a hundred. */
 export const CUE_GAP_MS: Readonly<Record<SoundCue, number>> = {
-  click: 40, stroke: 60, refused: 120, clash: 220, march: 300, letter: 600, season: 1500,
+  click: 40, stroke: 60, refused: 120, clash: 220, march: 300, letter: 600, season: 1500, done: 400,
 };
 
 type Store = { getItem(k: string): string | null; setItem(k: string, v: string): void };
@@ -107,6 +107,12 @@ export const CUE_VOICES: Readonly<Record<SoundCue, readonly Voice[]>> = {
     { wave: "noise", freq: 0, at: 0, dur: 0.05, gain: 0.3, band: 1400 },
     { wave: "sine", freq: 880, at: 0.06, dur: 0.5, gain: 0.3 },
     { wave: "sine", freq: 1320, at: 0.06, dur: 0.35, gain: 0.12 },
+  ],
+  // Work done (a building standing, a harvest in): a soft knock and a low chime.
+  done: [
+    { wave: "noise", freq: 0, at: 0, dur: 0.06, gain: 0.3, band: 600 },
+    { wave: "sine", freq: 330, at: 0.05, dur: 0.35, gain: 0.25 },
+    { wave: "sine", freq: 495, at: 0.05, dur: 0.3, gain: 0.12 },
   ],
   // The season turns: three slow, open notes.
   season: [

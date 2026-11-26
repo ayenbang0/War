@@ -55,7 +55,7 @@ import { STORY_UI } from "../content/story/strings.ts";
 import { signal } from "../ui/story/signals.ts";
 import type { TutorialStep } from "../content/story/tutorial.ts";
 import { lessonArmies, lessonLetter, lessonRealm, lessonTown } from "../sim/kingdom/tutorial.ts";
-import { NEW_GAME_DIFFICULTY, isKingdomDifficulty, type KingdomDifficultyId } from "../content/kingdom/difficulty.ts";
+import { NEW_GAME_DIFFICULTY, isKingdomDifficulty, type KingdomDifficultyId, KINGDOM_DIFFICULTIES } from "../content/kingdom/difficulty.ts";
 
 /** K11: where the new game's difficulty is remembered (beside the save, never in it). */
 export const DIFFICULTY_KEY = "war.newGameDifficulty";
@@ -464,6 +464,8 @@ export class App {
       },
       front: () => this.stack.popTo(this.home),
       canReplay: layer !== this.practice,
+      // K11: the realm's difficulty, said (it is chosen at a new exile and kept with the save).
+      difficulty: KINGDOM_DIFFICULTIES[layer.world.difficulty].name,
     });
     this.stack.push(menu);
   }

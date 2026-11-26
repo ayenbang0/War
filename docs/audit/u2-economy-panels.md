@@ -165,12 +165,12 @@ made with the realm moving underneath could be refused a tick later.
 | U2-02 | P1 | critical UI must not vanish on small windows | `kingdom.css` (K2) `@media (max-width: 700px) { .k-stores { display: none } }` — harmless for a placeholder, wrong for the stores | the bar stays, full width, wrapping | K3 | **fixed** |
 | U2-03 | P1 | focus ring / say why | a `disabled` option would drop out of Tab and give no reason | `aria-disabled="true"`, still focusable, "Not now: …" printed and repeated on press; never applied | K3 | **fixed** |
 | U2-04 | P1 | re-render restores focus | the panel rebuilds when the holding changes (a day's work) — focus would fall to `body` | `data-key` on every control; rebuild refocuses the same key (or the tax group / Build… for a vanished one); the card's first focus on return from a menu is the opener | K3 | **fixed** |
-| U2-05 | P2 | one check for button and sim | while paused, orders sit in the queue unapplied, so the menu checks the stores as they are; two builds queued while paused can both be offered and the second is refused when time runs (said in the feed) | show queued economy orders in the panel, or check against stores less queued costs | K11 | open |
+| U2-05 | P2 | one check for button and sim | while paused, orders sit in the queue unapplied, so the menu checks the stores as they are; two builds queued while paused can both be offered and the second is refused when time runs (said in the feed) | show queued economy orders in the panel, or check against stores less queued costs | K11 | **fixed K11** (`checkCountingQueued`; kingdom-economy) |
 | U2-06 | P2 | (runtime) layout | the region card with a full economy panel is long: at 1280×720 and on the ≤ 700 px bottom sheet it scrolls (the card is the one scroll region) | runtime check; consider collapsing Fields/Buildings | K11 | runtime: pending |
 | U2-07 | P2 | keyboard activation | Enter/Space on a focused menu option is the browser's own button activation; the e2e fake cannot synthesize it, so `k3-exile-economy` Tabs to "Granary" and clicks the focused button | confirm in a real browser run of `e2e.html?k3` | K11 | runtime: pending |
-| U2-08 | P3 | palette in one module | `icons.ts` literals `#3a3124`, `#c9b48a`, `#8f8a80` | move kingdom UI colours to a palette module read by CSS custom properties | K11 | open |
-| U2-09 | P3 | feed chattiness | a rally writes a line each day it brings someone | fold a rally into one line per rally | K11 | open |
-| U2-10 | P3 | game-feel | no sound or motion on a building standing or a harvest (text only) | K11 polish | K11 | open |
+| U2-08 | P3 | palette in one module | `icons.ts` literals `#3a3124`, `#c9b48a`, `#8f8a80` | move kingdom UI colours to a palette module read by CSS custom properties | K11 | open: three literal colours in icons.ts, cosmetic; left (K11.10) |
+| U2-09 | P3 | feed chattiness | a rally writes a line each day it brings someone | fold a rally into one line per rally | K11 | **fixed K11** (one feed line per rally; e2e `k3-exile-economy`) |
+| U2-10 | P3 | game-feel | no sound or motion on a building standing or a harvest (text only) | K11 polish | K11 | **fixed K11** (sound: a building standing and a harvest have a cue) |
 
 Count: P0 0 · P1 4 (all fixed) · P2 3 (1 open, 2 runtime pending) · P3 3 open. **No open P0/P1.**
 

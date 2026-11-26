@@ -1594,6 +1594,72 @@ the kingdom hash and the result hash only when non-zero.
   keep; the keep's dialog; its siege; the gate swung open and shut with the
   real G key; the keep held, in the report and the feed).
 
+## K11 — balance and polish
+
+PLAN.md §B.11's K11 row, and U4 (docs/audit/u4-whole-game.md). Every
+number is provisional (docs/PROVISIONAL.md K11.1–K11.12).
+
+**The real-browser failure.** `k9-tutorial-drill` failed in Chromium
+waiting on `drill-split`: at 1280×720 the split step's line starts at the
+field's left edge (screen 11, 441 at zoom 0.62), under the tutorial's coach,
+and the coach took the pointer. The fake DOM's `elementFromPoint` always
+answers the stage, so the fake run passed. The coach is now
+`pointer-events: none` except its buttons (K11.5; ui-check holds it).
+
+**Difficulty.** Gentle, Standard, Hard (`src/content/kingdom/difficulty.ts`),
+chosen on Home before a new exile, Gentle the default, kept with the save
+(v12; a v11 save is Standard). Read in the sim through `world.tuning`; the
+knobs touch only the king's economy and the realm's timing (K11.1). A world
+with no setting is Standard and hashes as before, so the kingdom golden did
+not move.
+
+```
+                         Gentle   Standard   Hard
+dole (share of need)       70%      100%     120%
+king's harvest            130%      100%      85%
+trained squads' wages      70%      100%     125%
+first holding's stores    150%      100%      70%
+forage                    +25        0       -15  points
+captains' grace           450       300      210  days
+invasion waves          +120 d,      0       -60  days
+                      3 holdings
+battle difficulty        -1 step     0      +1 step
+```
+
+**Balance sweeps** (`tools/kingdom-difficulty.ts`, in `npm test`, ~20 s;
+`quick` runs one seed). Four strategies (passive, careful, careless,
+builder) on three seeds per setting, two years each, and the story bot to
+the ending:
+
+```
+Gentle    every strategy keeps a holding 2 years; passive/careful hungry 0 days of 720
+          builder 50 people vs passive 26; passive grain at 2 years ~3,350 (Standard ~1,640)
+Standard  passive/careful fed through year 1 (day ~403-414 when the Hare's wave takes the hamlet)
+          builder holds more than passive at day 360 on every setting
+Hard      the passive king falls no later than on Standard (summed 1052 <= 1237 days)
+Story     Act IV within four years on Gentle and Standard; ending (restored king) on
+          Gentle day 661-778, Standard 812-826, Hard 890-935
+```
+
+At 1x a day is a second, so the story's running clock is 11-16 minutes;
+real playtime is the pauses, menus and battles on top.
+
+**The battle in the tutorial.** The drill already teaches every one of the
+recogniser's fourteen classes, all four glyphs, deployment, the camera,
+pause and step, abilities and Esc. The one battle control it cannot drill is
+the siege gate (the frozen field has no walls): it is taught where it is
+met, by the HUD line ("gates shut - G to open") and K11's gate button.
+
+**Sound.** `src/audio/sound.ts`, WebAudio made in code: click, stroke heard,
+stroke refused, clash, march, letter, season, work done. Played by the
+layers from what the sim already said (never from `src/sim`). On at 25%,
+mute and volume in the Menu, remembered in `war.sound`, independent of
+reduced motion (K11.6).
+
+**Polish.** U1-R1, U1-R2, U2-05, U2-09, U2-10, A-07, KD-02, KD-03, KD-05,
+K10-05, KA-06/07/08, M-09, U3-10/11/12 fixed (see each sheet); left with
+reasons: K10-06, U2-08, U4-05/06, and the browser-only rows (K11.10).
+
 ## K12 — netplay readiness: kingdom lockstep verification
 
 PLAN.md §B.11's K12 row ("kingdom lockstep verification | kingdom-lockstep.ts

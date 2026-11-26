@@ -126,6 +126,7 @@ export const STORY_UI = {
   menuHint: "Esc goes back to the realm.",
   // K11: sound, in the Menu (on by default, quiet; remembered on this device).
   menuSoundTitle: "Sound",
+  menuDifficulty: (name: string) => "Difficulty: " + name + " (chosen when the exile began).",
   menuSoundOn: "Sound: on",
   menuSoundOff: "Sound: off",
   menuQuieter: "Quieter",

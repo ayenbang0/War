@@ -229,6 +229,6 @@ To be done with screenshots once the surface exists (§C.6 U1, second half): the
 Run in a cloud browser against the published site (no local browser is available in the build container).
 - **E2E on the live site:** 28 of 29 scenarios passed with real pointer and keyboard events, including every K2 scenario (open, render, region card, march ghost and commit, meaningless stroke, pause, step a day, speed, continue, unreadable save, no storage, Esc order). The one failure was the text-floor check measuring the harness's own results panel; fixed in the check.
 - **Screenshots** at 1440x813 and 1024x640: HUD panels, date/weather, speed group and alert feed are legible at 16 px and above; the king's counter reads as a crowned disc distinct from holdings; owned ground reads by hatching as well as colour.
-- **U1-R1 (P2)** Province names can overlap where two provinces meet ("THE VALE OF THE HARE" over "THE LISLE BRIDGES" at the opening zoom). Batched into K11.
-- **U1-R2 (P2)** At 1024x640 the key-hint panel covers the holding labels beneath it (Harrowfield). Batched into K11 (collapse the hint after the first minutes, or move it into a help toggle).
+- **U1-R1 (P2)** Province names can overlap where two provinces meet ("THE VALE OF THE HARE" over "THE LISLE BRIDGES" at the opening zoom). **Fixed K11**: a name that would cross one already lettered moves a line, then shrinks, then is left off.
+- **U1-R2 (P2)** At 1024x640 the key-hint panel covers the holding labels beneath it (Harrowfield). **Fixed K11**: the hint is a fold ("Keys"), open only on a window at least 1280x760.
 - No P0 or P1 found on the kingdom map; the K2 gate holds.

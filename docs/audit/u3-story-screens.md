@@ -40,9 +40,9 @@
 | U3-07 | P1 | The group verbs (split, grid, cordon) need two companies held, and nothing in the pen held two | **fixed** in the pen (commander.ts): a loop round two whole companies holds them (K9.9; e2e `k9-tutorial-drill`) |
 | U3-08 | P3 | The lesson's enemy read "the the Boar's outriders" in the feed | **fixed**: named "Outriders" like every army |
 | U3-09 | P3 | End-screen buttons had no `type` | **fixed** |
-| U3-10 | P2 | Esc on the end screen goes straight to the front screen. Nothing is lost (saved; Continue reopens the ending) but the epilogue can be left by one key | open, K11 |
-| U3-11 | P2 | On a short window the coach (with a figure) can reach the bottom of the city panel | open, K11 |
-| U3-12 | P3 | The chronicle opened from the Menu closes to the map, not back to the Menu | open, K11 |
+| U3-10 | P2 | Esc on the end screen goes straight to the front screen. Nothing is lost (saved; Continue reopens the ending) but the epilogue can be left by one key | **fixed K11**: the first Esc focuses Home, the second goes (e2e `k9-ending`) |
+| U3-11 | P2 | On a short window the coach (with a figure) can reach the bottom of the city panel | **fixed K11**: the coached city panel is capped above the coach; under 680 px tall the figure folds away |
+| U3-12 | P3 | The chronicle opened from the Menu closes to the map, not back to the Menu | **fixed K11** (e2e `k9-letter-and-chronicle`) |
 | U3-13 | P2 | No real-browser pass: layout, the coach's height and the cutscene's drawing are proved in the fake DOM only | open (environment) |
 
 No P0 found. Every P1 is fixed.

@@ -49,9 +49,9 @@
 | KA-03 | P1 | A chase followed its target wherever it went, seen or not (`armies.ts` chase) | fixed: the chase ends when the chaser cannot see it (K8.18) |
 | KA-04 | P1 | A migrated v7 save did not hash as the realm it came from (the commons' ledger page dated by the save day, not the king's pages) | fixed in `migrate7to8`; the suite checks the same hash |
 | KA-05 | P2 | A host that came within warning during a day was checked against rumours raised only the next morning; the rumour rule was right, the check was wrong — but it showed the rule was not written down | rule stated (K8.7: once a morning); the suite checks it so |
-| KA-06 | P2 | While a city is open the rumour card waits until the map is back (the feed line comes at once) | open, K11 |
-| KA-07 | P2 | A rumour heard before a save is not put as a card again on load (it is in the sim and the feed history) | open, K11 |
-| KA-08 | P2 | The region card's Call the levy / Burn the fields say what they cost only on the rumour card, not on the region card itself | open, K11 |
+| KA-06 | P2 | While a city is open the rumour card waits until the map is back (the feed line comes at once) | **fixed K11**: the rumour card opens over the city view |
+| KA-07 | P2 | A rumour heard before a save is not put as a card again on load (it is in the sim and the feed history) | **fixed K11**: rumours still in the sim are put again on load |
+| KA-08 | P2 | The region card's Call the levy / Burn the fields say what they cost only on the rumour card, not on the region card itself | **fixed K11**: the region card says what levy and burn cost |
 | KA-09 | P2 | Runtime pass at the five sizes not done (no browser here) | open, the next browser run |
 
 Gate (§C.6): no open P0/P1 on the surfaces K8 touches.
