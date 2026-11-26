@@ -57,6 +57,20 @@ export type BattleConfig = {
   /** Who commands the machine's army. */
   readonly commander: Captain;
   readonly difficulty: DifficultyId;
+  /**
+   * K9: the first `companies` squads of the player's army are set out as
+   * companies rather than loose men. Only the drill uses it: its first step
+   * is a deployment drag, and a drag carries a company.
+   */
+  readonly companies?: number;
+  /**
+   * K9: the far side is set out this many tiles ahead of the player's own
+   * ground instead of in its own zone. Only the drill uses it: its last step
+   * is a stroke that ends on the enemy, and on the level's own ground the
+   * enemy stood three thousand paces off, out of sight, so a new player had
+   * to march across the field before the step could be done at all.
+   */
+  readonly enemyTilesAhead?: number;
   /** Abilities bought per side, copies included (a copy is a deeper magazine). */
   readonly abilities: readonly [readonly AbilityId[], readonly AbilityId[]];
   /**
@@ -167,8 +181,10 @@ export function battleWorld(
   world.armAbilities(0, config.abilities[0]);
   world.armAbilities(1, config.abilities[1]);
   const fielded: [FieldedSquad[], FieldedSquad[]] = [[], []];
+  const own = level.deployment.find((z) => z.player === 0);
   for (const zone of level.deployment) {
     const list = config.armies[zone.player];
+    const zoneX = zone.player === 1 && own && config.enemyTilesAhead !== undefined ? own.x + config.enemyTilesAhead : zone.x;
     const field = config.field;
     let n = 0;
     list.squads.forEach((type, j) => {
@@ -181,7 +197,7 @@ export function battleWorld(
         fielded[zone.player][j] = { first, count: 0 };
         return;
       }
-      const blockX = (zone.x + 3 + (n % 4) * 5) * TILE_SIZE;
+      const blockX = (zoneX + 3 + (n % 4) * 5) * TILE_SIZE;
       const blockY = (zone.y + 4 + ((n / 4) | 0) * 9) * TILE_SIZE;
       for (let i = 0; i < men; i++) {
         world.spawnSoldier(
@@ -192,12 +208,18 @@ export function battleWorld(
         );
       }
       fielded[zone.player][j] = { first, count: men };
+      if (zone.player === 0 && j < (config.companies ?? 0)) {
+        const ids: number[] = [];
+        for (let i = 0; i < men; i++) ids.push(first + i);
+        world.createGroup(0, ids);
+      }
       n++;
     });
   }
-  // The board is set out but the battle has not begun -- except in the
-  // lesson, which is about the pen, not about setting an army out.
-  world.deploying = !lesson;
+  // The board is set out but the battle has not begun. K9: the drill (the
+  // lesson) begins there too, because setting an army out and pressing Enter
+  // are controls it teaches.
+  world.deploying = true;
   return { world, fielded };
 }
 
@@ -258,12 +280,19 @@ export function battleFromSetup(setup: Setup): BattleConfig {
 }
 
 /**
- * The lesson's fixed setup: the smallest field, a plain mixed force, and no
- * abilities. The lesson is about the pen; abilities are a separate idea and
- * would be one more thing to drop on a first run.
+ * The drill on the frozen field below Rookstead (K9's tutorial, lesson
+ * "drill"): the smallest field, a plain mixed force -- two of its squads
+ * already companies, so there is something to carry while setting out --
+ * and two abilities on the bar, because readying and casting one are
+ * controls the tutorial teaches. Still a lesson (BattleMode): no clock, no
+ * enemy commander, nothing that can end it under the player.
  */
 export function lessonConfig(): BattleConfig {
-  const level = LEVELS.reduce((a, b) => (a.tilesWide * a.tilesHigh <= b.tilesWide * b.tilesHigh ? a : b));
+  // K9: the Proving Ground, not the smallest field. The drill's last step is
+  // a stroke onto the enemy, so the enemy has to be SEEN from the drill
+  // ground; on The Crossing (the smallest) the far bank's cover hid them at
+  // any distance short of a melee (docs/PROVISIONAL.md K9.15).
+  const level = levelById("proving-ground") ?? LEVELS[0];
   const army: ArmyList = { doctrine: "defensive", squads: ["line", "line", "archer", "skirmisher"] };
   return {
     mode: "lesson",
@@ -273,7 +302,11 @@ export function lessonConfig(): BattleConfig {
     // Named for the after-action report only: a lesson runs no enemy AI, so
     // nobody commands the far side (BS-05: an attack must not end the lesson).
     commander: COMMANDERS.badger,
-    abilities: [[], []],
+    companies: 2,
+    // In sight of the companies as set out (MAX_SIGHT is 1200), and far
+    // enough that no stroke of the drill's earlier steps ends on them.
+    enemyTilesAhead: 28,
+    abilities: [["barrage", "smoke"], []],
   };
 }
 

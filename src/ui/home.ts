@@ -8,9 +8,11 @@
  *
  * The game is the story only now (the owner's amendment to PLAN.md): the old
  * skirmish setup ("Play") and the Marchwarden chronicle ("Campaign") are gone,
- * and The Exile of Rimaros is the play button. Learn the gestures stays beside
- * it as the tutorial until K9 folds the lesson into the story's opening
- * (docs/PROVISIONAL.md).
+ * and The Exile of Rimaros is the play button. K9 folded the old lesson
+ * ("Learn the gestures") into the story's opening: a new exile plays the
+ * cutscene and then the tutorial, and the tutorial is replayed from Menu on
+ * the map -- so Home has no tutorial button of its own (docs/PROVISIONAL.md
+ * K9.12). Continue goes straight back to the saved realm.
  *
  * The figures shown here are COUNTED from the content, never typed in. A hand
  * written "ten unit types" becomes a lie the moment someone adds an eleventh,
@@ -35,7 +37,7 @@ import { K } from "../content/kingdom/ui-strings.ts";
 import { domScreen, el } from "./dom-screen.ts";
 import type { Screen } from "./screen-stack.ts";
 
-export type HomeChoice = "exile" | "exile-new" | "tutorial";
+export type HomeChoice = "exile" | "exile-new";
 
 /**
  * What the front screen says about the kingdom save (K2). Asked again every
@@ -117,18 +119,16 @@ export function homeScreen(
       const actions = el("div", "home-actions");
       play = el("button", "home-play", K.homeButton) as HTMLButtonElement;
       exileNew = el("button", "home-teach", K.homeNew);
-      const teach = el("button", "home-teach", "Learn the gestures") as HTMLButtonElement;
-      actions.append(play, exileNew, teach);
+      actions.append(play, exileNew);
       panel.appendChild(actions);
       exileLine = el("p", "home-note k-home-line");
       panel.appendChild(exileLine);
       play.onclick = () => choose("exile");
       exileNew.onclick = () => choose("exile-new");
-      teach.onclick = () => choose("tutorial");
       showExile();
 
       panel.appendChild(el("p", "home-note",
-        "New here? Learn the gestures first -- every order, on the map and on the field, is a stroke of the pen."));
+        "New here? A new exile opens with the story so far and then a tutorial of every control -- every order, on the map and on the field, is a stroke of the pen."));
 
       // -- what the game is ----------------------------------------------------
       panel.appendChild(el("h2", undefined, "How it plays"));

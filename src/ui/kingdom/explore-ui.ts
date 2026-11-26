@@ -13,6 +13,7 @@
  * realm and holds no clock; the letters in it reopen their card.
  */
 
+import { signal } from "../story/signals.ts";
 import type { Screen } from "../screen-stack.ts";
 import type { KingdomWorld } from "../../sim/kingdom/world.ts";
 import type { KingdomEvent } from "../../sim/kingdom/state.ts";
@@ -154,6 +155,8 @@ export class ExploreUi {
     this.toggle.setAttribute("aria-expanded", String(open));
     this.panel.style.display = open ? "block" : "none";
     if (open) this.refresh();
+    // K9: the tutorial's "open Finds" step (ui/story/coach.ts).
+    if (open) signal({ kind: "ui", action: "openFinds" });
   }
 
   /** Redraw the toggle's count and, if shown, the list. */

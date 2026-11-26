@@ -15,6 +15,7 @@
  */
 
 import type { KingdomCamera } from "../render/kingdom/camera.ts";
+import { signal } from "../ui/story/signals.ts";
 
 /** Screen pixels per second, at any zoom. */
 const KEY_PAN_SPEED = 820;
@@ -87,6 +88,8 @@ export class KingdomCameraControls {
   keyDown(code: string): boolean {
     if (!this.enabled || !(PAN_KEYS.has(code) || ZOOM_KEYS.has(code))) return false;
     this.keys.add(code);
+    // K9: the tutorial hears a camera key taken (ui/story/signals.ts).
+    signal({ kind: "camera", action: ZOOM_KEYS.has(code) ? "zoom" : "keys" });
     return true;
   }
 
@@ -122,6 +125,7 @@ export class KingdomCameraControls {
     const d = this.drag;
     if (!d || e.pointerId !== d.pointerId) return;
     this.cam.panByScreen(e.clientX - d.lastX, e.clientY - d.lastY);
+    if (e.clientX !== d.lastX || e.clientY !== d.lastY) signal({ kind: "camera", action: "drag" });
     d.lastX = e.clientX;
     d.lastY = e.clientY;
   };
@@ -158,6 +162,7 @@ export class KingdomCameraControls {
     const dy = e.deltaMode === 1 ? e.deltaY * LINE_PX : e.deltaMode === 2 ? e.deltaY * this.cam.viewH : e.deltaY;
     const r = this.canvas.getBoundingClientRect();
     this.cam.zoomAt(e.clientX - r.left, e.clientY - r.top, Math.pow(WHEEL_STEP, -dy));
+    signal({ kind: "camera", action: "zoom" });
   };
 
   /** Continuous pan, zoom and edge push. `dt` is real seconds. */

@@ -20,11 +20,20 @@ import type { CalendarDate } from "../../sim/kingdom/clock.ts";
 import type { WeatherId } from "../../content/kingdom/terrain.ts";
 import { KINGDOM_SPEEDS, type KingdomRun, type KingdomSpeed } from "../../app/kingdom-clock.ts";
 import { ResourcesBar } from "./resources.ts";
+import { STORY_UI } from "../../content/story/strings.ts";
 
 export type HudActions = {
   setSpeed(s: KingdomSpeed): void;
   pause(): void;
   leave(): void;
+  /**
+   * K9: the story's buttons -- the letters waiting, the chronicle, and the
+   * menu (replay the tutorial, the front screen). Absent in a realm without
+   * a story, whose HUD is K8's.
+   */
+  letters?(): void;
+  chronicle?(): void;
+  menu?(): void;
 };
 
 /** How many alerts the feed keeps on screen. */
@@ -69,6 +78,8 @@ export class KingdomHud {
   private shownRun = "";
   private readonly alertLines: string[] = [];
   private readonly doc: Document;
+  /** K9: "Letters (n)", shown while letters wait for an answer. */
+  private lettersButton: HTMLElement | null = null;
 
   constructor(doc: Document, actions: HudActions) {
     this.doc = doc;
@@ -104,6 +115,28 @@ export class KingdomHud {
     front.onclick = () => actions.leave();
     speed.appendChild(front);
     top.append(stores, when, speed);
+    // K9: the story's box -- letters, chronicle, menu -- after the clock's.
+    if (actions.letters || actions.chronicle || actions.menu) {
+      const story = make(doc, "div", "k-box k-story");
+      story.setAttribute("role", "group");
+      story.setAttribute("aria-label", STORY_UI.storyGroup);
+      const add = (label: string, key: string, run: () => void): HTMLElement => {
+        const b = make(doc, "button", "k-btn", label);
+        b.setAttribute("type", "button");
+        b.setAttribute("data-key", key);
+        b.onclick = (e) => { run(); pressed(b, e); };
+        story.appendChild(b);
+        return b;
+      };
+      const { letters, chronicle, menu } = actions;
+      if (letters) {
+        this.lettersButton = add(STORY_UI.lettersButton(0), "letters", () => letters());
+        this.lettersButton.style.display = "none";
+      }
+      if (chronicle) add(STORY_UI.chronicleButton, "chronicle", () => chronicle());
+      if (menu) add(STORY_UI.menuButton, "menu", () => menu());
+      top.appendChild(story);
+    }
 
     // -- banner, feed, result, hint -------------------------------------------
     this.banner = make(doc, "div", "k-paused", K.paused);
@@ -129,6 +162,14 @@ export class KingdomHud {
     this.menuRoot.style.display = "none";
 
     this.root.append(top, this.banner, this.cardRoot, foot, keys, this.menuRoot);
+  }
+
+  /** K9: how many letters wait; the button hides at none. */
+  setLetters(n: number): void {
+    const b = this.lettersButton;
+    if (!b) return;
+    b.textContent = STORY_UI.lettersButton(n);
+    b.style.display = n > 0 ? "" : "none";
   }
 
   /** Buttons are live exactly while the map's pen is (a card leaves them usable, a dialog does not). */

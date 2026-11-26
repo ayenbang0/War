@@ -70,3 +70,82 @@ export const STORY_REFUSAL = {
   notOffered: "That answer is not open to you now.",
   cannotPay: "The stores cannot pay for that answer.",
 } as const;
+
+/**
+ * K9: the story's own screens -- the letter card, the chronicle, the end
+ * screen, the in-game menu, the cutscene's controls and the tutorial's coach
+ * (ui/story/). Brother Aldous's voice where it is the chronicle speaking,
+ * plain where it is a control.
+ */
+export const STORY_UI = {
+  // the letter card
+  letterFrom: (from: string) => "From " + from,
+  letterHeld: "The realm waits while you read.",
+  letterLater: "Decide later",
+  letterLaterHint: "Esc lays the letter aside. It waits under Letters in the top bar.",
+  letterCosts: (what: string) => "Costs " + what + ".",
+  letterBattle: (place: string) => "A battle, at " + place + ".",
+  letterChance: (pct: number) => "A gamble: it goes this way about " + pct + " times in a hundred.",
+  letterNo: (why: string) => "Not now: " + why,
+  letterMore: (n: number) => n === 1 ? "One more letter waits." : n + " more letters wait.",
+  lettersButton: (n: number) => "Letters (" + n + ")",
+  lettersButtonLabel: (n: number) => n === 1 ? "One letter waits for an answer" : n + " letters wait for an answer",
+  answered: (title: string, text: string) => title + ": " + text,
+  letterCame: (title: string, from: string) => "A letter from " + from + ": " + title + ".",
+  actBegins: (n: number, title: string) => "Act " + ["I", "II", "III", "IV"][n - 1] + " begins: " + title + ".",
+  storyGroup: "The story",
+  // the chronicle
+  chronicleButton: "Chronicle",
+  chronicleTitle: "The Chronicle",
+  chronicleBy: "Kept by Brother Aldous, in the ledger",
+  chronicleAct: (n: number, title: string) => "Act " + ["I", "II", "III", "IV"][n - 1] + ": " + title,
+  chronicleGoals: "What this act asks",
+  goalDone: "done",
+  goalOpen: "not yet",
+  chronicleDay: (date: string) => date,
+  chronicleEmpty: "Nothing written yet.",
+  chronicleClose: "Close",
+  chronicleCloseHint: "Esc closes the chronicle; the realm waited while you read.",
+  chronicleCount: (n: number) => n === 1 ? "One entry." : n + " entries.",
+  // the end screen
+  endHeading: "Here the chronicle ends",
+  endFallen: "The chronicle stops here.",
+  endStats: (days: number, holdings: number, legitimacy: number, mercy: number) =>
+    days + " days of the exile, " + holdings + " holdings held, Legitimacy " + legitimacy + ", Mercy " + mercy + ".",
+  endRead: "Read the chronicle",
+  endHome: "Back to the front screen",
+  endNew: "Begin a new exile",
+  // the in-game menu
+  menuButton: "Menu",
+  menuTitle: "The realm, paused",
+  menuResume: "Back to the realm",
+  menuChronicle: "Read the chronicle",
+  menuTutorial: "Replay the tutorial",
+  menuTutorialHint: "The tutorial runs in a practice realm; this one is saved first and waits for you.",
+  menuFront: "Save and go to the front screen",
+  menuHint: "Esc goes back to the realm.",
+  // the cutscene
+  cutsceneLabel: "The opening of the story",
+  cutsceneNext: "Next",
+  // the tutorial's coach
+  coachLabel: "Tutorial",
+  coachStep: (n: number, of: number) => "Step " + n + " of " + of,
+  coachLesson: (title: string) => "Lesson: " + title,
+  coachDraw: "Draw this:",
+  coachSkipStep: "Skip this step",
+  coachSkipAll: "Skip the tutorial",
+  coachDone: "Well done.",
+  coachFinishedTitle: "The tutorial is done",
+  coachFinishedBody: "That is every control in the game. The practice realm is put away; your own exile begins at Cold Hearth, with nothing.",
+  coachFinishedReplay: "That is every control in the game. The practice realm is put away and your own realm is as you left it.",
+  coachBegin: "Begin the exile",
+  coachBack: "Back to my realm",
+  coachSkipTitle: "Skip the tutorial?",
+  coachSkipBody: "It can be replayed at any time from Menu on the map.",
+  coachSkipYes: "Skip it",
+  coachSkipNo: "Keep learning",
+  coachAway: (lesson: string) => "Next: " + lesson,
+  coachToTown: "Rookstead is the king's now: go down into it.",
+  coachToDrill: "Down to the frozen field below Rookstead, where the first followers drill.",
+  coachToArmies: "Back on the map: two armies of the king's stand at Rookstead, and an enemy rides on Greyshaw.",
+} as const;

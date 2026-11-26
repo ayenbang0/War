@@ -102,12 +102,17 @@ export class Driver {
     return this.current;
   }
 
-  /** Boot a fresh app, disposing of the last one. */
-  boot(opts: { storage?: () => StorageLike | null } = {}): TestHook {
+  /**
+   * Boot a fresh app, disposing of the last one. A new exile opens straight
+   * on the map -- K9's documented test path (AppEnv.skipOpening), which the
+   * K2-K8 scenarios were written against -- unless `opening` asks for the
+   * cutscene and the tutorial, as K9's own scenarios do.
+   */
+  boot(opts: { storage?: () => StorageLike | null; opening?: boolean } = {}): TestHook {
     this.live();
     this.dispose();
     const fresh = memoryStorage();
-    const app = startApp({ win: window, doc: document, storage: opts.storage ?? (() => fresh) });
+    const app = startApp({ win: window, doc: document, storage: opts.storage ?? (() => fresh), skipOpening: opts.opening !== true });
     this.current = testHook(app);
     return this.current;
   }

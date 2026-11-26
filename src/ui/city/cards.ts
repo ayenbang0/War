@@ -14,6 +14,7 @@
  * building it would not get.
  */
 
+import { signal } from "../story/signals.ts";
 import type { KingdomWorld } from "../../sim/kingdom/world.ts";
 import type { Holding } from "../../sim/kingdom/state.ts";
 import type { KingdomOrderBody } from "../../sim/kingdom/orders.ts";
@@ -180,6 +181,8 @@ export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, h
         return;
       }
       hooks.economy.openMenu(marketMenu(doc, world, h.id, hooks.economy));
+      // K9: the tutorial's tavern step (ui/story/coach.ts).
+      signal({ kind: "ui", action: "openTavern" });
     };
     market = mb;
     actions.appendChild(mb);

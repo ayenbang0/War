@@ -31,7 +31,7 @@ import { CameraControls } from "../input/camera-controls.ts";
 import { Commander } from "../input/commander.ts";
 import { Pen } from "../input/pen.ts";
 import { AbilityBar } from "../ui/ability-bar.ts";
-import { Tutorial } from "../ui/tutorial.ts";
+import { signal } from "../ui/story/signals.ts";
 import { abilitySlotForCode, type LayerKeys } from "../ui/keys.ts";
 import type { InputContext, KeyInput, KeyVerdict } from "../ui/screen-stack.ts";
 import { battleWorld, distinctAbilities, type BattleConfig } from "./battle-config.ts";
@@ -92,7 +92,6 @@ export class BattleLayer implements LayerKeys {
   readonly cam: Camera;
   readonly commander: Commander;
   readonly pen: Pen;
-  readonly tutorial: Tutorial | null;
   /** Distinct abilities, in slot order. */
   readonly abilityKeys: readonly AbilityId[];
   phase: BattlePhase = "built";
@@ -142,7 +141,6 @@ export class BattleLayer implements LayerKeys {
     this.env = env;
     this.hooks = hooks;
     const level = config.level;
-    const lesson = config.mode === "lesson";
 
     // The world and its men, set out from the config (battle-config.ts: the
     // headless suites build battles the same way).
@@ -194,8 +192,9 @@ export class BattleLayer implements LayerKeys {
       facing: new Float64Array(world.soldiers.capacity),
     };
     this.snapshotInto(this.prev);
-    this.abilityBar = new AbilityBar(env.abilityRoot, lesson ? [] : this.abilityKeys, this.commander);
-    this.tutorial = lesson ? new Tutorial(world, this.commander) : null;
+    // K9: the drill has abilities too (readying and casting one is taught).
+    this.abilityBar = new AbilityBar(env.abilityRoot, this.abilityKeys, this.commander);
+
     this.cachedHash = hashWorld(world);
   }
 
@@ -212,7 +211,7 @@ export class BattleLayer implements LayerKeys {
     if (DEV) {
       (this.env.win as unknown as { war: unknown }).war = {
         world: this.world, cam: this.cam, level: this.config.level, commander: this.commander,
-        pen: this.pen, hashWorld, UNIT_TYPES, tutorial: this.tutorial,
+        pen: this.pen, hashWorld, UNIT_TYPES,
       };
     }
     this.last = performance.now();
@@ -266,7 +265,10 @@ export class BattleLayer implements LayerKeys {
       // stroke in progress claims it first and nothing else sees the press;
       // then an armed ability is put away (GK-06); only then is it "leave",
       // which asks before it throws anything away.
-      if (pen && this.pen.cancelStroke()) return "handled";
+      if (pen && this.pen.cancelStroke()) {
+        signal({ kind: "ui", action: "cancelStroke" });
+        return "handled";
+      }
       if (this.commander.armed !== null) {
         this.commander.arm(this.commander.armed);
         this.pen.lastAction = "put away";
@@ -280,6 +282,7 @@ export class BattleLayer implements LayerKeys {
       if (k.repeat) return "handled";
       world.deploying = false;
       this.pen.lastAction = "battle begins";
+      signal({ kind: "ui", action: "beginBattle" });
       return "handled";
     }
 
@@ -288,8 +291,9 @@ export class BattleLayer implements LayerKeys {
       // Arm an ability; the next pen stroke says where it goes. The left
       // button stays the only thing that ever points at the world.
       if (!pen || world.deploying || k.repeat) return "handled";
-      if (slot < this.abilityKeys.length && this.config.mode === "battle") {
+      if (slot < this.abilityKeys.length) {
         this.pen.lastAction = this.commander.arm(this.abilityKeys[slot]);
+        if (this.commander.armed !== null) signal({ kind: "ui", action: "abilityArm" });
       }
       return "handled";
     }
@@ -303,12 +307,16 @@ export class BattleLayer implements LayerKeys {
       // Without preventDefault the page would scroll; without the repeat check
       // a held Space flickers the pause (GK-05).
       k.preventDefault();
-      if (!k.repeat) this.run = this.run === "paused" ? "running" : "paused";
+      if (!k.repeat) {
+        this.run = this.run === "paused" ? "running" : "paused";
+        if (this.run === "paused") signal({ kind: "time", action: "pause" });
+      }
       return "handled";
     }
     if (k.code === "Period" && this.run === "paused") {
       this.snapshotInto(this.prev);
       world.step();
+      signal({ kind: "time", action: "step" });
       return "handled";
     }
     if (contexts.includes("camera") && this.controls.keyDown(k.code)) return "handled";
@@ -486,7 +494,6 @@ export class BattleLayer implements LayerKeys {
     // throttled because there is no reason to re-stamp 160 discs every frame.
     if (world.deploying && this.deployFogTick++ % 6 === 0) world.lightGround();
 
-    this.tutorial?.update();
     this.abilityBar.update(world, PLAYER, commander, TICK_RATE);
 
     const alpha = held ? 1 : Math.min(this.accumulator / TICK_DT, 1);
@@ -591,8 +598,6 @@ export class BattleLayer implements LayerKeys {
       lines.push("", this.lastBreak);
     } else if (pen.lastAction) lines.push("", pen.lastAction);
 
-    // The lesson owns the panel while it is running.
-    if (this.tutorial) lines.push(...this.tutorial.lines());
 
     if (this.showDebug) {
       lines.push(

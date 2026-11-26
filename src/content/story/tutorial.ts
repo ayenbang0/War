@@ -61,13 +61,17 @@ export type TutorialUiAction =
   | "forage" | "rally" | "claim" | "eventChoose" | "openFinds"
   | "enterCity" | "leaveCity" | "build" | "sow" | "openPolitics"
   | "deployDrag" | "beginBattle" | "cancelStroke" | "abilityArm" | "abilityCast"
-  | "openArmyCard" | "fightContact";
+  | "openArmyCard" | "fightContact"
+  // K9 (the owner's list: "deploy", "zoom-through", "auto-resow", "tavern"),
+  // controls ECON and K7 added after this table was first written.
+  | "raiseArmy" | "zoomThrough" | "resowAll" | "openTavern";
 
 export const TUTORIAL_UI_ACTIONS: readonly TutorialUiAction[] = [
   "forage", "rally", "claim", "eventChoose", "openFinds",
   "enterCity", "leaveCity", "build", "sow", "openPolitics",
   "deployDrag", "beginBattle", "cancelStroke", "abilityArm", "abilityCast",
   "openArmyCard", "fightContact",
+  "raiseArmy", "zoomThrough", "resowAll", "openTavern",
 ];
 
 export type TutorialSuccess =
@@ -143,8 +147,8 @@ export const TUTORIAL: readonly TutorialStep[] = [
     "Letters set aside and special upgrades found are kept there."),
 
   // -- the town (city layer) --------------------------------------------------------
-  S("town-enter", "city", "town", "Double-tap Rookstead, or open its card and choose Enter the city.", { kind: "ui", action: "enterCity" },
-    "Rolling the wheel in past the closest zoom over a holding of yours goes in as well."),
+  S("town-enter", "city", "town", "Roll the wheel in over Rookstead, on past the closest zoom, to go down into the town.", { kind: "ui", action: "zoomThrough" },
+    "Keep rolling once the map stops getting closer. Only a holding of yours lets you in."),
   S("town-look", "city", "town", "Drag with the middle or right button to look round the town.", { kind: "camera", action: "drag" },
     "The map's camera keys work here too."),
   S("town-zoom", "city", "town", "Roll the wheel to look closer at the lots.", { kind: "camera", action: "zoom" },
@@ -157,6 +161,10 @@ export const TUTORIAL: readonly TutorialStep[] = [
     "Fields lie round the edge of the plan."),
   S("town-sow", "city", "town", "Sow the field with something that grows in this season.", { kind: "ui", action: "sow" },
     "Seed is paid when it goes in, and the harvest comes with the season."),
+  S("town-resow", "city", "town", "In the town's panel, turn on Resow all fields, so every field is sown again after its harvest.", { kind: "ui", action: "resowAll" },
+    "The realm's fields then sow themselves with the chosen crop, as long as there is seed."),
+  S("town-tavern", "city", "town", "Tap the tavern's lot and choose Free companies to see who is for hire.", { kind: "ui", action: "openTavern" },
+    "A tavern is where the free companies drink. Hiring one costs coin now and pay every season."),
   S("town-square", "city", "town", "Tap the square to open the town's politics.", { kind: "cityTap", target: "square" },
     "Tax is set here; P opens it too."),
   S("town-politics-key", "city", "town", "Close it, then press P to open politics again.", { kind: "ui", action: "openPolitics" },
@@ -165,6 +173,10 @@ export const TUTORIAL: readonly TutorialStep[] = [
     "F frames the town, as it finds the king on the map."),
   S("town-leave", "city", "town", "Press Esc, or zoom out past the widest view, to go back to the map.", { kind: "ui", action: "leaveCity" },
     "Holding - at the widest view leaves too."),
+  S("town-back", "city", "town", "Double-tap Rookstead on the map, or open its card and choose Enter the city.", { kind: "ui", action: "enterCity" },
+    "Both ways in lead to the same town. Then press Esc to come back out."),
+  S("town-out", "city", "town", "Press Esc to come back to the map.", { kind: "ui", action: "leaveCity" },
+    "The drill comes next, on the frozen field below the town."),
 
   // -- the frozen field (battle layer) ------------------------------------------------
   S("drill-deploy", "battle", "drill", "Before the drill begins, drag one of your companies inside your deployment ground.", { kind: "ui", action: "deployDrag" },
@@ -229,10 +241,10 @@ export const TUTORIAL: readonly TutorialStep[] = [
     "A stroke that ends on an enemy company is an attack, whatever its shape."),
 
   // -- armies on the map (kingdom layer, K4) ---------------------------------------
+  S("army-raise", "kingdom", "armies", "On the king's card, choose Raise followers and raise a company from the levy.", { kind: "ui", action: "raiseArmy" },
+    "Followers who are not in an army only eat. Raised, they march, fight and draw pay."),
   S("army-card", "kingdom", "armies", "Tap one of your armies to read its card.", { kind: "ui", action: "openArmyCard" },
     "The card shows its companies, its bread and its pay."),
-  S("army-intercept", "kingdom", "armies", "Draw a line from your army to an enemy army to intercept it.", { kind: "kingdomGesture", class: "intercept" },
-    "The army goes to meet the enemy on the road, wherever it has got to."),
   S("army-garrison", "kingdom", "armies", "Draw a small ring on a holding of yours where an army stands.", { kind: "kingdomGesture", class: "garrison" },
     "The army digs in and holds it."),
   S("army-patrol", "kingdom", "armies", "Draw a large ring round several holdings to patrol and screen them.", { kind: "kingdomGesture", class: "patrol" },
@@ -243,6 +255,8 @@ export const TUTORIAL: readonly TutorialStep[] = [
     "They must stand in the same place to join."),
   S("army-recover", "kingdom", "armies", "Draw a heart on an army to rest and mend it where it stands.", { kind: "kingdomGesture", class: "recover" },
     "The wounded mend faster in a town with a hall or healers."),
+  S("army-intercept", "kingdom", "armies", "Draw a line from your army to an enemy army to intercept it.", { kind: "kingdomGesture", class: "intercept" },
+    "The army goes to meet the enemy on the road, wherever it has got to."),
   S("army-fight", "kingdom", "armies", "When armies meet, choose Fight to go down to the battlefield.", { kind: "ui", action: "fightContact" },
     "Withdrawing costs a rearguard. Resolving it without you is quicker, and worse on average."),
 ];

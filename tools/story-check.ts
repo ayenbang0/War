@@ -32,6 +32,13 @@ import { COMMANDER_IDS } from "../src/content/commanders.ts";
 import { ENCOUNTER_HOSTS } from "../src/content/story/encounter-hosts.ts";
 import { UNIT_TYPE_IDS } from "../src/content/unit-types.ts";
 import { MAX_SQUADS } from "../src/content/army.ts";
+import { LESSON_ENEMY, LESSON_LETTER, LESSON_PLACES, lessonArmies, lessonLetter, lessonRealm, lessonTown } from "../src/sim/kingdom/tutorial.ts";
+import { kingdomHash } from "../src/sim/kingdom/hash.ts";
+import { armyVisible } from "../src/sim/kingdom/armies.ts";
+import { FACTION_IDS as KFACTIONS, KING_PLAYER } from "../src/content/kingdom/factions.ts";
+import { STORY_LETTERS as LETTERS_TABLE } from "../src/content/story/letters.ts";
+import { TUTORIAL as TUTORIAL_TABLE } from "../src/content/story/tutorial.ts";
+import { satisfies } from "../src/ui/story/coach.ts";
 
 let failures = 0;
 let checks = 0;
@@ -161,6 +168,54 @@ caught("a free company whose letter charges the wrong fee", (s) => { letter(s, "
 caught("a gendered pronoun", (s) => { s.letters[0].text = "The shepherd came, and he brought a dog."; });
 caught("a gendered title", (s) => { s.acts[1].intro.text = "My lord, the Marches."; });
 caught("a captain sworn who cannot swear", (s) => { letter(s, "stag-yields").choices[0].effects[0].faction = "usurper"; });
+
+// -- K9: the tutorial's practice realm (sim/kingdom/tutorial.ts) -----------------------
+
+{
+  const a = lessonRealm();
+  const b = lessonRealm();
+  check("the practice realm is the same realm every time", kingdomHash(a) === kingdomHash(b));
+  check("the practice realm has the story on", a.story !== null && a.story.act === 1);
+  check("and holds its letters until a lesson asks for one", a.story !== null && a.story.sent.every((x) => x) && a.story.pending.length === 0);
+  for (let i = 0; i < 8 * 40; i++) a.tick();
+  check("forty days alone send it no letter and arm no encounter", a.story !== null && a.story.pending.length === 0 &&
+    a.story.encounters.every((e) => e.host === 0) && a.story.ending === null);
+  const li = lessonLetter(a);
+  check("the map lesson's letter comes when asked", li >= 0 && LETTERS_TABLE[li].id === LESSON_LETTER && a.story?.pending[0] === li);
+  check("its places are on the map", Object.values(LESSON_PLACES).every((k) => a.holdingByKey(k) !== undefined));
+  const keep = lessonTown(a);
+  check("a skipped claim still leaves Rookstead the king's for the town lesson", keep.owner === "king");
+  check("with a tavern standing in it", keep.buildings.includes("tavern") && keep.buildings.some((x) => x === null));
+  lessonArmies(a, "raise");
+  check("the armies lesson finds followers to raise", a.kingStocks.stocks.levy >= 4);
+  lessonArmies(a, "armies");
+  const own = a.armies.filter((x) => x.owner === KING_PLAYER);
+  const foe = a.armies.filter((x) => x.owner === KFACTIONS.indexOf(LESSON_ENEMY));
+  check("and an army of two companies to split", own.some((x) => x.squads.length >= 2));
+  check("and an enemy to intercept, in the king's sight", foe.length === 1 && armyVisible(a, KING_PLAYER, foe[0]));
+  lessonArmies(a, "armies");
+  check("asked again, it raises nothing more", a.armies.filter((x) => x.owner === KING_PLAYER).length === own.length &&
+    a.armies.filter((x) => x.owner === KFACTIONS.indexOf(LESSON_ENEMY)).length === 1);
+  for (let i = 0; i < 8 * 10; i++) a.tick();
+  check("the practice realm runs on with them", a.story?.ending === null, a.story?.ending ?? "");
+}
+
+// The coach's matcher against its own table: every step is satisfied by
+// exactly what it names, and a near miss (another glyph, another tap) is not.
+{
+  let ok = 0;
+  const bad: string[] = [];
+  for (const t of TUTORIAL_TABLE) {
+    if (satisfies(t.success, t.success as never)) ok++;
+    else bad.push(t.id);
+  }
+  check("every tutorial step is satisfied by what it names", bad.length === 0, bad.join(", "));
+  check("a line glyph does not pass for a wedge", !satisfies({ kind: "gesture", class: "formation", shape: "wedge" }, { kind: "gesture", class: "formation", shape: "line" }));
+  check("a plain lasso does not pass for carving", !satisfies({ kind: "gesture", class: "lasso", detail: "carve" }, { kind: "gesture", class: "lasso" }));
+  check("a tap on a lot does not pass for the square", !satisfies({ kind: "cityTap", target: "square" }, { kind: "cityTap", target: "lot" }));
+  check("a march does not pass for an intercept", !satisfies({ kind: "kingdomGesture", class: "intercept" }, { kind: "kingdomGesture", class: "march" }));
+  check("the matcher saw " + ok + " steps", ok === TUTORIAL_TABLE.length);
+}
 
 // -- summary ------------------------------------------------------------------------
 

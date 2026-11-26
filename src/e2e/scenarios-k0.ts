@@ -176,47 +176,10 @@ scenario("second-battle-no-reload", "the report goes back to Home; a second batt
   t.expect((window as unknown as { __e2eMarker?: string }).__e2eMarker === marker, "the page was never reloaded");
 });
 
-scenario("tutorial-esc", "in the lesson Esc cancels a stroke first, then asks before leaving", async (t) => {
-  t.boot();
-  t.clickButton("Learn the gestures");
-  await t.waitFor(() => t.hook.top() === "battle", "the lesson");
-  const b = battleOf(t);
-  t.expect(b.config.mode === "lesson", "it is the lesson");
-  t.expect(b.world.ai.length === 0, "BS-05: no enemy commander can attack the lesson");
-  t.expect(b.world.duration >= 3600, "BS-05: no clock can end the lesson (" + b.world.duration + "s)");
-  await t.waitFor(() => t.hudText().startsWith("lesson"), () => "the HUD to show no countdown (" + t.hudText().split("\n")[0] + ")");
+// K9: "tutorial-esc" moved to scenarios-k9.ts as "k9-drill-esc": the lesson is
+// the tutorial's drill now, reached through the opening, not from Home.
 
-  const c = { x: innerWidth / 2, y: innerHeight / 2 };
-  t.stroke(t.line(c, { x: c.x + 80, y: c.y + 30 }), { release: false });
-  t.expect(b.pen.drawing, "a stroke is being drawn");
-  t.key("Escape");
-  t.expect(!b.pen.drawing, "Esc cancels the stroke");
-  t.expect(t.hook.top() === "battle", "and does not leave the lesson (PC-06/BS-04)");
-  t.expect(b.phase === "live", "the lesson is still running");
-
-  t.key("Escape");
-  t.expect(t.hook.top() === "confirm", "Esc with nothing to cancel asks before leaving");
-  t.expect(document.activeElement?.textContent === "Stay", "focus starts on the safe choice");
-  const tick = b.world.tick;
-  await t.frames(15);
-  t.expect(b.world.tick === tick, "the lesson is held while the question is up");
-  t.key("Tab");
-  t.expect(document.activeElement?.textContent === "Leave the lesson", "Tab moves within the dialog");
-  t.key("Tab");
-  t.expect(document.activeElement?.textContent === "Stay", "and stays trapped inside it");
-  t.key("Escape");
-  t.expect(t.hook.top() === "battle", "Esc on the question means stay");
-  await t.waitFor(() => b.world.tick > tick, "the lesson to run again");
-
-  t.key("Escape");
-  t.clickButton("Leave the lesson");
-  await t.waitFor(() => t.hook.top() === "home", "leaving to reach the front screen");
-  t.expect(t.hook.battle() === null && b.phase === "torn-down", "the lesson was torn down");
-  t.expect(display(t.byId("hud")) === "none", "the HUD is hidden on the front screen");
-  t.expect(document.activeElement?.textContent === "Learn the gestures", "focus is back where the player left it");
-});
-
-scenario("home-story-only", "Home offers the Exile first and the lesson, and no Play or Campaign", async (t) => {
+scenario("home-story-only", "Home offers the Exile and nothing else to play: no Play, no Campaign, no separate lesson", async (t) => {
   t.boot();
   t.expect(t.hook.top() === "home", "the app opens on the front screen");
   t.expect(!t.hasButton("Play"), "there is no Play button (the skirmish setup is gone)");
@@ -228,14 +191,12 @@ scenario("home-story-only", "Home offers the Exile first and the lesson, and no 
   t.expect(document.activeElement === exile, "and has focus when the game opens (" + (document.activeElement?.textContent ?? "none") + ")");
   const actions = Array.from(document.querySelectorAll<HTMLElement>("#home .home-actions button")).filter((b) => t.visible(b));
   t.expect(actions[0] === exile, "it comes first in the row");
-  t.expect(t.hasButton("Learn the gestures"), "Learn the gestures is still offered");
+  // K9: the gestures are taught by the opening's tutorial, replayable from the map's Menu.
+  t.expect(!t.hasButton("Learn the gestures"), "Learn the gestures is gone from Home");
   const text = t.byId("home").textContent ?? "";
   for (const stale of ["no economy", "the army you chose", "chronicle"]) {
     t.expect(!text.includes(stale), "the copy no longer says \"" + stale + "\"");
   }
-  t.clickButton("Learn the gestures");
-  await t.waitFor(() => t.hook.top() === "battle", "the lesson");
-  t.expect(t.hook.battle()?.config.mode === "lesson", "Learn the gestures launches the lesson");
 });
 
 scenario("home-figures-counted", "every figure on Home is the count its content gives", async (t) => {
@@ -363,16 +324,5 @@ scenario("leave-battle-returns-home", "Esc then Leave the field tears the battle
   t.expect(t.hook.screens().join(">") === "home", "nothing was left on the stack");
 });
 
-scenario("lesson-report-home", "a lesson ended by a rout reports, and its button leaves to Home", async (t) => {
-  t.boot();
-  t.clickButton("Learn the gestures");
-  await t.waitFor(() => t.hook.top() === "battle", "the lesson");
-  const b = battleOf(t);
-  t.hook.forceOutcome(0);
-  await t.waitFor(() => t.hook.top() === "after-action", "the report");
-  t.expect(document.activeElement?.textContent === "Leave the lesson", "AA-01: the report's button names where it goes");
-  t.clickButton("Leave the lesson");
-  await t.waitFor(() => t.hook.top() === "home", "the front screen");
-  t.expect(b.phase === "torn-down", "the lesson was torn down");
-  t.expect(document.activeElement?.textContent === "Learn the gestures", "focus is back where the player left it");
-});
+// K9: "lesson-report-home" is gone with the lesson's Home button: nothing ends
+// the drill but the coach (app.ts battleEnded), so it has no report to leave by.

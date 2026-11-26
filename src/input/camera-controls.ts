@@ -14,6 +14,7 @@
  */
 
 import type { Camera } from "../render/camera.ts";
+import { signal } from "../ui/story/signals.ts";
 
 const KEY_PAN_SPEED = 900; // world units per second at zoom 1
 const EDGE_MARGIN = 24; // px
@@ -82,6 +83,8 @@ export class CameraControls {
   keyDown(code: string): boolean {
     if (!this.enabled || !CAMERA_KEYS.has(code)) return false;
     this.keys.add(code);
+    // K9: the tutorial hears a camera key taken (ui/story/signals.ts).
+    signal({ kind: "camera", action: "keys" });
     return true;
   }
 
@@ -122,6 +125,7 @@ export class CameraControls {
     if (!d || e.pointerId !== d.pointerId) return;
     // Grab-the-paper: the ground under the cursor follows the cursor.
     this.cam.panByScreen(e.clientX - d.lastX, e.clientY - d.lastY);
+    if (e.clientX !== d.lastX || e.clientY !== d.lastY) signal({ kind: "camera", action: "drag" });
     d.lastX = e.clientX;
     d.lastY = e.clientY;
   };
@@ -156,6 +160,7 @@ export class CameraControls {
     if (!this.enabled) return;
     // Exponential in the raw delta so trackpads and notched wheels both feel right.
     this.cam.zoomAt(e.clientX, e.clientY, Math.pow(ZOOM_STEP, -e.deltaY));
+    signal({ kind: "camera", action: "zoom" });
   };
 
   /** Continuous panning. `dt` is real seconds; camera motion is not simulation. */

@@ -700,6 +700,11 @@ export function applyAnswer(world: KingdomWorld, order: KingdomOrder & AnswerLet
   return null;
 }
 
+/** K9: a letter put in the king's hand now, by its table index -- the tutorial's (sim/kingdom/tutorial.ts) and its triggers' one way in. */
+export function sendLetter(world: KingdomWorld, i: number): void {
+  send(world, i);
+}
+
 function send(world: KingdomWorld, i: number): void {
   const s = world.story as StoryState;
   if (s.pending.includes(i)) return;

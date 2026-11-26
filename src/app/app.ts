@@ -15,8 +15,14 @@
  *
  * The game is the story only (the owner's amendment to PLAN.md): the old
  * skirmish setup and the Marchwarden chronicle are gone as modes. A battle is
- * reached from the lesson today, from the story when armies meet (K5), and in
- * tests through `launch` with the "test" origin (test-hook.ts).
+ * reached from the story when armies meet (K5), from the tutorial's drill
+ * (K9), and in tests through `launch` with the "test" origin (test-hook.ts).
+ *
+ * K9, the opening: a new exile plays the cutscene (ui/story/cutscene.ts),
+ * then the tutorial (ui/story/coach.ts) in a practice realm of its own
+ * (sim/kingdom/tutorial.ts), and only then the king's own realm, from day
+ * one. Continue skips all of it. The tutorial is replayed from Menu on the
+ * map; the realm is saved first and comes back as it was left.
  *
  * Layers (plan §B.1) are a typed union: kingdom, city and battle.
  */
@@ -34,34 +40,57 @@ import { buildBattleSpec, contactPoint, resultFromBattle } from "../sim/kingdom/
 import { DESCENT } from "../content/kingdom/descent-strings.ts";
 import { consequenceLines } from "../ui/kingdom/consequences.ts";
 import type { Layer } from "./layers.ts";
-import { KingdomWorld } from "../sim/kingdom/world.ts";
+import { DEFAULT_KING_NAME, KingdomWorld } from "../sim/kingdom/world.ts";
 import { K, dateLine } from "../content/kingdom/ui-strings.ts";
 import { KingdomLayer, type KingdomOpening } from "./kingdom-layer.ts";
 import { CityLayer } from "./city-layer.ts";
 import type { MapPoint } from "../render/kingdom/layout.ts";
 import { clearKingdom, loadKingdom, type StorageLike } from "./kingdom-save.ts";
+import { cutsceneScreen } from "../ui/story/cutscene.ts";
+import { Coach } from "../ui/story/coach.ts";
+import { menuScreen } from "../ui/story/menu.ts";
+import { endScreen } from "../ui/story/end-screen.ts";
+import { STORY_UI } from "../content/story/strings.ts";
+import { signal } from "../ui/story/signals.ts";
+import type { TutorialStep } from "../content/story/tutorial.ts";
+import { lessonArmies, lessonLetter, lessonRealm, lessonTown } from "../sim/kingdom/tutorial.ts";
 
 export type AppEnv = {
   readonly win: Window;
   readonly doc: Document;
   /** Where the realm is saved. Defaults to the window's localStorage. */
   readonly storage?: () => StorageLike | null;
+  /**
+   * K9's documented test path: a new exile opens straight on the map, with
+   * no cutscene, no tutorial and no story -- the K8 realm that K2-K8's
+   * scenarios and ui-check were written against, where no letter comes up
+   * over a step and no encounter's host takes the field. The e2e Driver
+   * boots with it unless a scenario asks for the opening
+   * (src/e2e/harness.ts). Players never have it (docs/PROVISIONAL.md K9.13).
+   */
+  readonly skipOpening?: boolean;
 };
 
 /**
  * Where a battle was launched from, so its end knows where to go back to.
  *
- * "lesson" is Home's Learn the gestures (until K9 folds it into the story's
- * opening). "test" is the e2e and ui-check launch (TestHook.launchBattle): a
- * normal battle with no story behind it, which goes back to Home. "story"
- * (K5) is a contact on the kingdom map fought as a battle: its end applies
- * the result to the realm and goes back to the map, at the point the armies
- * met.
+ * "tutorial" (K9) is the drill on the frozen field, launched over the
+ * practice realm by the tutorial: it ends when the coach moves on, and goes
+ * back to that realm. "test" is the e2e and ui-check launch
+ * (TestHook.launchBattle): a normal battle with no story behind it, which
+ * goes back to Home. "story" (K5) is a contact on the kingdom map fought as a
+ * battle: its end applies the result to the realm and goes back to the map,
+ * at the point the armies met.
  */
 export type BattleOrigin =
-  | { readonly kind: "lesson" }
+  | { readonly kind: "tutorial"; readonly realm: KingdomLayer }
   | { readonly kind: "test" }
   | StoryOrigin;
+
+/** K9: where the tutorial goes when it ends -- the new exile it opened, or the realm it was replayed from. */
+type TutorialAfter =
+  | { readonly kind: "opening"; readonly storage: StorageLike | null; readonly notice: string | null }
+  | { readonly kind: "replay"; readonly world: KingdomWorld; readonly storage: StorageLike | null };
 
 /** K5: a battle descended into from the kingdom map. */
 export type StoryOrigin = {
@@ -132,6 +161,14 @@ export class App {
   origin: BattleOrigin | null = null;
   /** K5: the realm suspended under a story battle, or null. */
   descended: KingdomLayer | null = null;
+  /** K9: the tutorial's coach while it runs, and its practice realm. */
+  coach: Coach | null = null;
+  practice: KingdomLayer | null = null;
+  /** K9: the opening's cutscene, while it plays (for the tests). */
+  cutscene: (Screen & { readonly state: { beat: number; finished: boolean } }) | null = null;
+  /** K9: where the story's own full screens and the menu draw. */
+  private readonly storyEl: HTMLElement;
+  private readonly menuEl: HTMLElement;
 
   private readonly env: AppEnv;
   private readonly els: Elements;
@@ -185,23 +222,34 @@ export class App {
     this.detachKeys = attachKeyRouter(this.router, env.win, env.doc);
     // Whatever is on top decides which input contexts the live layer has.
     this.unwatchStack = this.stack.onChange(() => this.live?.setContexts(this.stack.activeInputs()));
+    this.storyEl = env.doc.createElement("div");
+    this.storyEl.id = "story";
+    this.storyEl.style.display = "none";
+    env.doc.body.appendChild(this.storyEl);
+    this.menuEl = env.doc.createElement("div");
+    this.menuEl.id = "story-menu";
+    this.menuEl.style.display = "none";
+    env.doc.body.appendChild(this.menuEl);
     this.home = homeScreen(this.els.home, (c) => this.choose(c), () => this.exileStatus());
     this.stack.push(this.home);
   }
 
   /** Tear the whole app down: every screen, the layer, the key listener. */
   dispose(): void {
+    this.coach?.dispose();
+    this.coach = null;
     this.stack.clear();
     this.unwatchStack();
     this.detachKeys();
+    this.storyEl.parentNode?.removeChild(this.storyEl);
+    this.menuEl.parentNode?.removeChild(this.menuEl);
   }
 
   // -- menus ------------------------------------------------------------------
 
   private choose(choice: HomeChoice): void {
     if (choice === "exile") this.openExile();
-    else if (choice === "exile-new") this.newExile();
-    else this.launch(lessonConfig(), { kind: "lesson" });
+    else this.newExile();
   }
 
   // -- the kingdom (K2) ---------------------------------------------------------
@@ -231,43 +279,205 @@ export class App {
     const storage = this.kingdomStorage();
     const r = loadKingdom(storage);
     if (r.ok) {
+      // K9: Continue goes straight back to the realm; only a new exile has the opening.
       if (r.world) this.enterRealm(r.world, "resumed", storage);
-      else this.enterRealm(freshRealm(), "begun", storage);
+      else this.beginExile(storage, null);
       return;
     }
     if (r.reason === "corrupt") {
       // U1-15 (P0): an unreadable save is never overwritten without asking.
       this.confirm({
         title: K.unreadableTitle, body: K.unreadableBody(r.detail), yes: K.unreadableYes, no: K.unreadableNo,
-      }, () => this.enterRealm(freshRealm(), "begun", storage));
+      }, () => this.beginExile(storage, null));
       return;
     }
     // Storage could not even be read: play in memory, and say so.
-    this.enterRealm(freshRealm(), "begun", null, K.notSaved(r.detail));
+    this.beginExile(null, K.notSaved(r.detail));
   }
+
+  // -- K9: the opening ----------------------------------------------------------------
+
+  /** A new exile: the cutscene, then the tutorial, then the king's own realm (or straight to it on the test path). */
+  private beginExile(storage: StorageLike | null, notice: string | null): void {
+    if (this.env.skipOpening) {
+      this.enterRealm(freshRealm(false), "begun", storage, notice);
+      return;
+    }
+    const king = freshKingName();
+    const scene = cutsceneScreen(this.storyEl, this.env.win, this.env.doc, king, {
+      done: () => {
+        if (this.stack.top === scene) this.stack.pop();
+        this.cutscene = null;
+        this.startTutorial({ kind: "opening", storage, notice });
+      },
+    });
+    this.cutscene = scene;
+    this.stack.push(scene);
+  }
+
+  /**
+   * The tutorial: a practice realm on the map, the coach over it, and the
+   * lessons in order. The player's own realm is not touched while it runs.
+   */
+  startTutorial(after: TutorialAfter): Coach | null {
+    if (this.live || this.coach) return null;
+    const world = lessonRealm();
+    const realm = this.enterRealm(world, "begun", null, null, true);
+    this.practice = realm;
+    const coach = new Coach(this.env.doc, this.env.win, {
+      layer: () => this.live?.kind ?? null,
+      // Deferred: a step is often finished from inside the handler of the
+      // very control it teaches, and a layer must not be torn down under it.
+      bring: (step) => queueMicrotask(() => { if (this.coach === coach) this.bring(step); }),
+      confirmSkip: (yes) => this.confirm({
+        title: STORY_UI.coachSkipTitle, body: STORY_UI.coachSkipBody, yes: STORY_UI.coachSkipYes, no: STORY_UI.coachSkipNo,
+      }, yes),
+      finished: (skipped) => queueMicrotask(() => this.endTutorial(after, skipped)),
+    });
+    this.coach = coach;
+    return coach;
+  }
+
+  /** Take the player to where the tutorial's step is played, and set the practice realm up for it. */
+  private bring(step: TutorialStep): void {
+    const realm = this.practice;
+    if (!realm || realm.phase !== "live") return;
+    const w = realm.world;
+    const sc = step.success;
+    const need = sc.kind === "ui" && (sc.action === "enterCity" || sc.action === "zoomThrough") ? "kingdom"
+      : sc.kind === "ui" && sc.action === "leaveCity" ? "city" : step.layer;
+    if (step.lesson === "town" || step.lesson === "drill") lessonTown(w);
+    if (step.id === "army-raise") lessonArmies(w, "raise");
+    else if (step.lesson === "armies") lessonArmies(w, "armies");
+    // A letter the coach brought up stays only for its own step: skipping
+    // that step must not leave the next one under an unanswered letter.
+    if (step.id !== "map-letter" && this.stack.top?.name === "story-letter") this.stack.popTo(this.realm);
+    // Up to the map first, from wherever the player is.
+    if (need !== "battle" && this.live?.kind === "battle") this.returnFromBattle();
+    if (need !== "city" && this.live?.kind === "city") this.stack.popTo(this.realm);
+    if (need === "city" && this.live === realm) {
+      const keep = lessonTown(w);
+      this.enterCity(realm, keep.id, { x: realm.cam.worldToScreenX(keep.x), y: realm.cam.worldToScreenY(keep.y) });
+    }
+    if (need === "battle" && this.live !== null && this.live.kind !== "battle") {
+      if (this.live.kind === "city") this.stack.popTo(this.realm);
+      if (this.live === realm) {
+        if (this.stack.top !== this.realm) this.stack.popTo(this.realm);
+        realm.suspend("battle");
+        this.live = null;
+        this.router.setLayer(null);
+        this.descended = realm;
+        this.launch(lessonConfig(), { kind: "tutorial", realm });
+      }
+    }
+    if (step.id === "map-letter" && this.live === realm) {
+      lessonLetter(w);
+      realm.hud.setLetters(w.story?.pending.length ?? 0);
+      realm.openLetter();
+    }
+  }
+
+  /** The tutorial is over: put the practice realm away and go where it was opened from. */
+  private endTutorial(after: TutorialAfter, skipped: boolean): void {
+    const coach = this.coach;
+    if (!coach) return;
+    coach.dispose();
+    this.coach = null;
+    // Down the stack from wherever the practice is (drill, town or map); it saves nothing.
+    this.stack.popTo(this.home);
+    this.practice = null;
+    const go = (): void => {
+      if (after.kind === "opening") this.enterRealm(freshRealm(), "begun", after.storage, after.notice);
+      else this.enterRealm(after.world, "resumed", after.storage);
+    };
+    if (skipped) {
+      go();
+      return;
+    }
+    this.confirm({
+      title: STORY_UI.coachFinishedTitle,
+      body: after.kind === "opening" ? STORY_UI.coachFinishedBody : STORY_UI.coachFinishedReplay,
+      yes: after.kind === "opening" ? STORY_UI.coachBegin : STORY_UI.coachBack,
+      no: STORY_UI.endHome,
+    }, go);
+  }
+
+  /** The map's Menu: the chronicle, the tutorial again, the front screen. */
+  private openMenu(layer: KingdomLayer, storage: StorageLike | null): void {
+    const menu: Screen = menuScreen(this.menuEl, this.env.doc, {
+      close: (sc) => { if (this.stack.top === sc) this.stack.pop(); },
+      chronicle: () => {
+        if (this.stack.top === menu) this.stack.pop();
+        layer.openChronicle();
+      },
+      tutorial: () => {
+        const world = layer.world;
+        // Leaving the map saves it; the tutorial brings it back as it was.
+        this.stack.popTo(this.home);
+        this.startTutorial({ kind: "replay", world, storage });
+      },
+      front: () => this.stack.popTo(this.home),
+      canReplay: layer !== this.practice,
+    });
+    this.stack.push(menu);
+  }
+
+  /** The story has ended in this realm: its end screen, over the map. */
+  private storyEnded(layer: KingdomLayer, ending: string, storage: StorageLike | null): void {
+    if (this.live !== layer || this.ending) return;
+    const end: Screen = endScreen(this.storyEl, this.env.doc, layer.world, ending, {
+      chronicle: () => layer.openChronicle(),
+      home: () => { this.ending = null; this.stack.popTo(this.home); },
+      // U3: behind the same confirm as Home's, because it throws this realm
+      // and its chronicle away; an ended realm is still read from Continue.
+      newExile: () => this.confirm({ title: K.newTitle, body: K.newBody, yes: K.newYes, no: K.newNo }, () => {
+        this.ending = null;
+        this.stack.popTo(this.home);
+        const cleared = clearKingdom(storage);
+        this.beginExile(storage, cleared.ok ? null : K.notSaved(cleared.detail));
+      }),
+    });
+    this.ending = end;
+    this.stack.push(end);
+  }
+
+  /** K9: the end screen, while it is up. */
+  ending: Screen | null = null;
 
   /** "Begin a new exile": always behind a confirm, because it throws a realm away. */
   private newExile(): void {
     this.confirm({ title: K.newTitle, body: K.newBody, yes: K.newYes, no: K.newNo }, () => {
       const storage = this.kingdomStorage();
       const cleared = clearKingdom(storage);
-      this.enterRealm(freshRealm(), "begun", storage, cleared.ok ? null : K.notSaved(cleared.detail));
+      this.beginExile(storage, cleared.ok ? null : K.notSaved(cleared.detail));
     });
   }
 
-  private enterRealm(world: KingdomWorld, opening: KingdomOpening, storage: StorageLike | null, notice: string | null = null): KingdomLayer {
+  private enterRealm(
+    world: KingdomWorld, opening: KingdomOpening, storage: StorageLike | null, notice: string | null = null, lesson = false,
+  ): KingdomLayer {
     if (this.live) throw new Error("a layer is already live");
-    const layer = new KingdomLayer(world, {
-      win: this.env.win, doc: this.env.doc, canvas: this.els.canvas, ctx: this.els.ctx, storage,
+    const layer: KingdomLayer = new KingdomLayer(world, {
+      win: this.env.win, doc: this.env.doc, canvas: this.els.canvas, ctx: this.els.ctx, storage, lesson,
     }, {
       // Leaving the map needs no confirm: it saves, and Continue brings it back
-      // exactly (docs/PROVISIONAL.md K2.3).
-      requestLeave: () => this.stack.popTo(this.home),
+      // exactly (docs/PROVISIONAL.md K2.3). K9: in the practice realm, Esc
+      // with nothing to cancel asks whether to skip the tutorial.
+      requestLeave: () => {
+        if (lesson) this.coach?.askSkip();
+        else this.stack.popTo(this.home);
+      },
       simHeld: () => this.stack.pausesSim(),
       pushScreen: (s) => this.stack.push(s),
       popScreen: (s) => { if (this.stack.top === s) this.stack.pop(); },
       enterCity: (holding, from) => this.enterCity(layer, holding, from),
-      descend: () => { this.descend(layer); },
+      // K9: in the practice realm Fight is the tutorial's last step, and the
+      // coach ends the tutorial there rather than going down to a battle.
+      descend: () => { if (!lesson) this.descend(layer); },
+      ...(world.story && !lesson ? {
+        menu: () => this.openMenu(layer, storage),
+        storyEnded: (ending: string) => this.storyEnded(layer, ending, storage),
+      } : {}),
     }, opening, notice);
     this.enterLayer(layer);
     return layer;
@@ -294,6 +504,7 @@ export class App {
     }, from);
     city.onUnmount = () => this.cityLeft(city);
     this.enterLayer(city);
+    signal({ kind: "ui", action: "enterCity" });
     return city;
   }
 
@@ -305,6 +516,7 @@ export class App {
     this.live = realm;
     this.router.setLayer(realm);
     realm.resume(city.holding, city.leftWith);
+    signal({ kind: "ui", action: "leaveCity" });
     // The stack's change (this pop) hands the realm its input contexts.
   }
 
@@ -420,6 +632,16 @@ export class App {
           this.router.setLayer(realm);
           realm.resumeAt(origin.at);
         }
+        // K9: from the drill back up to the practice realm, over Rookstead.
+        if (origin?.kind === "tutorial" && this.descended === origin.realm) {
+          const realm = origin.realm;
+          this.descended = null;
+          if (realm.phase !== "live") return;
+          this.live = realm;
+          this.router.setLayer(realm);
+          const keep = realm.world.holdingByKey("rookstead");
+          realm.resumeAt(keep ? { x: keep.x, y: keep.y } : null);
+        }
         return;
       case "kingdom":
         layer.teardown();
@@ -449,9 +671,12 @@ export class App {
       }));
       return;
     }
+    // K9: the drill has nothing that ends it (lessonConfig); were it to end,
+    // the coach still decides when the lesson is over.
+    if (origin.kind === "tutorial") return;
     // AA-01: the label names where the button goes, and it goes there. The
-    // lesson and the test launch go back to the front screen.
-    const again = origin.kind === "lesson" ? "Leave the lesson" : "Back to the front screen";
+    // test launch goes back to the front screen.
+    const again = "Back to the front screen";
     this.stack.push(afterActionScreen(this.els.report, battle.world, PLAYER, {
       again,
       onAgain: () => this.returnFromBattle(),
@@ -473,24 +698,23 @@ export class App {
       });
       return;
     }
-    const spec: ConfirmSpec = origin.kind === "lesson"
-      ? {
-        title: "Leave the lesson?",
-        body: "You go back to the front screen. The lesson starts from the beginning next time.",
-        yes: "Leave the lesson", no: "Stay",
-      }
-      : {
-        title: "Leave the battle?",
-        body: "The battle is abandoned and you go back to the front screen.",
-        yes: "Leave the field", no: "Stay",
-      };
+    // K9: Esc on the drill field with nothing to cancel asks whether to skip the tutorial.
+    if (origin.kind === "tutorial") {
+      this.coach?.askSkip();
+      return;
+    }
+    const spec: ConfirmSpec = {
+      title: "Leave the battle?",
+      body: "The battle is abandoned and you go back to the front screen.",
+      yes: "Leave the field", no: "Stay",
+    };
     this.confirm(spec, () => this.returnFromBattle());
   }
 
   /** Back down the stack from a battle, finished or left: to the front screen, or (K5) to the map. */
   private returnFromBattle(): void {
     if (!this.origin) return;
-    if (this.origin.kind === "story") this.stack.popTo(this.realm);
+    if (this.origin.kind === "story" || this.origin.kind === "tutorial") this.stack.popTo(this.realm);
     else this.stack.popTo(this.home);
   }
 }
@@ -500,11 +724,19 @@ export class App {
  * use both (only src/sim/ may not), and the seed is saved with the realm, so
  * a continued game is the same game (docs/PROVISIONAL.md K2.7).
  */
-function freshRealm(): KingdomWorld {
+function freshRealm(story = true): KingdomWorld {
   // K5: a new campaign opens with its first enemy in the field (content/kingdom/descent.ts OPENING_HOSTS).
   // K8: and the rival lords are captains, who play the realm as the king does (sim/kingdom/ai.ts).
   // ECON: and its fields resow themselves (owner: "the king can automatically make them sowed").
-  return new KingdomWorld({ seed: (Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) | 0, hosts: true, captains: true, autoFarm: true });
+  // K9: and the story runs: acts, letters, encounters, the chronicle and its endings (sim/kingdom/story.ts).
+  return new KingdomWorld({
+    seed: (Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) | 0, hosts: true, captains: true, autoFarm: true, story,
+  });
+}
+
+/** The king's name for the cutscene: the one every new realm gives him. */
+function freshKingName(): string {
+  return DEFAULT_KING_NAME;
 }
 
 /** Boot the game on a page. main.ts and the e2e harness both call this. */

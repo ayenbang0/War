@@ -22,6 +22,7 @@
  * Leave button.
  */
 
+import { signal } from "../ui/story/signals.ts";
 import type { InputContext, KeyInput, KeyVerdict, Screen } from "../ui/screen-stack.ts";
 import type { KingdomOrderBody } from "../sim/kingdom/orders.ts";
 import type { Holding } from "../sim/kingdom/state.ts";
@@ -280,12 +281,17 @@ export class CityLayer {
         if (!k.repeat) this.realm.setSpeed(4);
         return "handled";
       case "KeyP":
-        if (!k.repeat && pen) this.openPolitics();
+        if (!k.repeat && pen) {
+          this.openPolitics();
+          // K9: the tutorial's "P opens politics" step -- the key, not the tap on the square.
+          signal({ kind: "ui", action: "openPolitics" });
+        }
         return "handled";
       case "KeyF":
         if (!k.repeat) {
           this.frameTown(!this.reduced);
           this.realm.hud.result(C.framed);
+          signal({ kind: "key", code: "KeyF" });
         }
         return "handled";
     }
@@ -337,6 +343,7 @@ export class CityLayer {
     if (pick.kind === "lot") this.openLot(pick.index);
     else if (pick.kind === "field") this.openField(pick.index);
     else this.openPolitics();
+    signal({ kind: "cityTap", target: pick.kind === "lot" ? "lot" : pick.kind === "field" ? "field" : "square" });
     return pick;
   }
 

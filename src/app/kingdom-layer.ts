@@ -65,6 +65,13 @@ import { BAND_WORD, MORALE_FEED } from "../content/kingdom/morale-strings.ts";
 import { ARMY_MORALE } from "../content/kingdom/morale.ts";
 import { rumourCard, type RumourNews } from "../ui/kingdom/rumour-card.ts";
 import { INVASION_FEED } from "../content/kingdom/invasion-strings.ts";
+import { signal } from "../ui/story/signals.ts";
+import type { KingdomPenClass } from "../content/story/tutorial.ts";
+import { letterCard } from "../ui/story/letter-card.ts";
+import { chronicleScreen } from "../ui/story/chronicle-screen.ts";
+import { STORY_LETTERS } from "../content/story/letters.ts";
+import { ACTS } from "../content/story/acts.ts";
+import { STORY_UI } from "../content/story/strings.ts";
 
 /** Where the kingdom layer is in its life; mirrors BattlePhase. */
 export type KingdomPhase = "built" | "live" | "torn-down";
@@ -84,6 +91,12 @@ export type KingdomEnv = {
   readonly ctx: CanvasRenderingContext2D;
   /** Where the realm is saved. Null runs it in memory only (and says so). */
   readonly storage: StorageLike | null;
+  /**
+   * K9: the tutorial's practice realm (sim/kingdom/tutorial.ts): never saved
+   * and never said to be unsaved, its letters opened by the coach rather than
+   * on arrival, and its story never ending on screen.
+   */
+  readonly lesson?: boolean;
 };
 
 export type KingdomHooks = {
@@ -105,6 +118,10 @@ export type KingdomHooks = {
    * the meeting as "resolve for me" does.
    */
   descend?(contact: Contact): void;
+  /** K9: the top bar's Menu (replay the tutorial, the front screen). Absent: no Menu button. */
+  menu?(): void;
+  /** K9: the story has ended (an ending reached, or the realm loaded already ended). */
+  storyEnded?(ending: string): void;
 };
 
 /** How the realm was opened, for the first line in the feed. */
@@ -198,6 +215,9 @@ export class KingdomLayer implements LayerKeys {
   private rumourScreen: Screen | null = null;
   private readonly rumourRoot: HTMLElement;
   private rumoursWaiting: RumourNews[] = [];
+  /** K9: the letter card or the chronicle, while one is up; and the root they draw in. */
+  private storyScreen: Screen | null = null;
+  private readonly storyRoot: HTMLElement;
 
   constructor(world: KingdomWorld, env: KingdomEnv, hooks: KingdomHooks, opening: KingdomOpening, notice: string | null = null) {
     this.world = world;
@@ -212,6 +232,12 @@ export class KingdomLayer implements LayerKeys {
       setSpeed: (s) => this.setSpeed(s),
       pause: () => this.togglePause(),
       leave: () => this.hooks.requestLeave(),
+      // K9: a realm with a story has the story's buttons.
+      ...(world.story ? {
+        letters: () => this.openLetter(),
+        chronicle: () => this.openChronicle(),
+        ...(hooks.menu ? { menu: () => hooks.menu?.() } : {}),
+      } : {}),
     });
     this.hud.setShown(false);
     this.hud.setDate(world.date, world.weather);
@@ -219,6 +245,7 @@ export class KingdomLayer implements LayerKeys {
     this.hud.resources.update(world);
     this.hud.alert(world.date.day, opening === "begun" ? K.begun : K.resumed(dateLine(world.date)));
     if (notice) this.hud.setNotice(notice);
+    this.hud.setLetters(world.story?.pending.length ?? 0);
     this.explore = new ExploreUi(env.doc, world, {
       pushScreen: (sc) => this.hooks.pushScreen(sc),
       popScreen: (sc) => this.hooks.popScreen(sc),
@@ -230,6 +257,10 @@ export class KingdomLayer implements LayerKeys {
     this.contactRoot.className = "k-menu-backdrop k-event-backdrop";
     this.contactRoot.style.display = "none";
     this.hud.root.appendChild(this.contactRoot);
+    this.storyRoot = env.doc.createElement("div");
+    this.storyRoot.className = "k-menu-backdrop k-event-backdrop s-backdrop";
+    this.storyRoot.style.display = "none";
+    this.hud.root.appendChild(this.storyRoot);
     this.rumourRoot = env.doc.createElement("div");
     this.rumourRoot.className = "k-menu-backdrop k-event-backdrop";
     this.rumourRoot.style.display = "none";
@@ -256,7 +287,10 @@ export class KingdomLayer implements LayerKeys {
         if (!hv) return null;
         return this.world.holding(hv.id)?.owner === "king" ? hv.id : "refused";
       },
-      through: (id) => this.requestCity(id),
+      through: (id) => {
+        signal({ kind: "ui", action: "zoomThrough" });
+        this.requestCity(id);
+      },
       refused: (sx, sy) => {
         const hv = holdingAt(kingdomContext(this.world, this.kingDrawn(), this.cam.pxToWorld),
           { x: this.cam.screenToWorldX(sx), y: this.cam.screenToWorldY(sy) });
@@ -290,6 +324,10 @@ export class KingdomLayer implements LayerKeys {
     this.raf = win.requestAnimationFrame(this.frame);
     // K5: a meeting left undecided when the realm was saved asks again.
     if (this.world.contact) this.openContact();
+    // K9: a realm saved at its ending goes straight to its end screen; one
+    // saved with letters waiting puts the first to the king.
+    else if (this.world.story?.ending && !this.env.lesson) queueMicrotask(() => this.ended());
+    else this.openLetterSoon();
   }
 
   teardown(): KingdomReport {
@@ -372,7 +410,10 @@ export class KingdomLayer implements LayerKeys {
         if (!k.repeat) this.setSpeed(4);
         return "handled";
       case "KeyF":
-        if (!k.repeat) this.findKing();
+        if (!k.repeat) {
+          this.findKing();
+          signal({ kind: "key", code: "KeyF" });
+        }
         return "handled";
     }
     if (contexts.includes("camera") && this.controls.keyDown(k.code)) return "handled";
@@ -392,11 +433,13 @@ export class KingdomLayer implements LayerKeys {
   togglePause(): void {
     this.clock.togglePause();
     this.hud.setRun(this.clock.run, this.clock.speed);
+    if (this.clock.run === "paused") signal({ kind: "time", action: "pause" });
   }
 
   setSpeed(s: KingdomSpeed): void {
     this.clock.setSpeed(s);
     this.hud.setRun(this.clock.run, this.clock.speed);
+    signal({ kind: "time", action: "speed" });
   }
 
   /** `.`: one day, only while paused -- otherwise say how. */
@@ -408,6 +451,7 @@ export class KingdomLayer implements LayerKeys {
     }
     this.runTicks(n);
     this.hud.result(K.steppedDay);
+    signal({ kind: "time", action: "step" });
   }
 
   /**
@@ -451,6 +495,69 @@ export class KingdomLayer implements LayerKeys {
     if (this.world.contact && !this.contactScreen && !this.suspended && this.phase === "live") this.openContact();
     // K8: word of a host riding at the king's holdings: put it to him (a meeting first).
     else if (!this.world.contact) this.openRumour();
+    // K9: a letter come, once nothing else is being put to him.
+    if (!this.world.contact) this.openLetterSoon();
+  }
+
+  // -- K9: the story's letters, chronicle and ending ---------------------------------
+
+  /** Is a letter card or the chronicle up? */
+  get storyOpen(): boolean {
+    return this.storyScreen !== null;
+  }
+
+  /** Letters open by themselves as they come, except in the practice realm, where the coach opens them. */
+  private openLetterSoon(): void {
+    if (this.env.lesson || !this.world.story || this.world.story.pending.length === 0) return;
+    if (this.storyScreen || this.rumourScreen || this.contactScreen || this.explore.cardOpen) return;
+    if (this.suspended || this.phase !== "live") return;
+    // Not over a card the player has open, nor mid-stroke: it waits under Letters.
+    if (this.card || this.pen.drawing) return;
+    this.openLetter();
+  }
+
+  /**
+   * Put the first waiting letter to the king. The card holds the clock while
+   * it is read (it is a decision); Esc lays it aside under Letters.
+   */
+  openLetter(): void {
+    const s = this.world.story;
+    if (!s || this.storyScreen || this.contactScreen || this.phase !== "live" || this.suspended) return;
+    const letter = s.pending[0];
+    if (letter === undefined) return;
+    this.pen.cancelStroke();
+    this.intent = null;
+    this.stroke = null;
+    this.closeCard();
+    const view = letterCard(this.storyRoot, this.env.doc, this.world, letter, s.pending.length - 1, {
+      close: (sc) => this.hooks.popScreen(sc),
+      closed: () => { if (this.storyScreen === view) this.storyScreen = null; },
+      issue: (body, said) => this.issueFromUi(body, said),
+    });
+    this.storyScreen = view;
+    this.hooks.pushScreen(view);
+  }
+
+  /** The chronicle over the ledger: every line written so far, and what the act asks. */
+  openChronicle(): void {
+    if (!this.world.story || this.storyScreen || this.phase !== "live") return;
+    this.closeCard();
+    const view = chronicleScreen(this.storyRoot, this.env.doc, this.world, {
+      close: (sc) => this.hooks.popScreen(sc),
+    });
+    const unmount = view.unmount.bind(view);
+    view.unmount = () => { unmount(); if (this.storyScreen === view) this.storyScreen = null; };
+    this.storyScreen = view;
+    this.hooks.pushScreen(view);
+  }
+
+  /** The story is over: hold the realm and hand over to the end screen. */
+  private ended(): void {
+    const s = this.world.story;
+    if (!s || s.ending === null || this.env.lesson || this.phase !== "live") return;
+    if (this.clock.run !== "paused") this.togglePause();
+    this.save();
+    this.hooks.storyEnded?.(s.ending);
   }
 
   // -- K8: rumours ------------------------------------------------------------------
@@ -524,6 +631,8 @@ export class KingdomLayer implements LayerKeys {
     if (!c) return;
     if (choice === "fight" && this.hooks.descend) {
       this.hooks.descend(c);
+      // K9: the tutorial's last step (its descend is the coach's to finish).
+      signal({ kind: "ui", action: "fightContact" });
       return;
     }
     this.settle({ kind: "resolveContact", contact: c.id, choice: choice === "fight" ? "auto" : choice, result: null });
@@ -864,6 +973,39 @@ export class KingdomLayer implements LayerKeys {
         this.hud.alert(day, INVASION_FEED.wave(faction(e.faction)));
         return false;
       default:
+        return this.onStoryEvent(e);
+    }
+  }
+
+  /** K9: the story's news -- letters, acts, the ending. */
+  private onStoryEvent(e: KingdomEvent): boolean {
+    const w = this.world;
+    const day = w.date.day;
+    switch (e.kind) {
+      case "letterArrived": {
+        const l = STORY_LETTERS[e.letter];
+        this.hud.setLetters(w.story?.pending.length ?? 0);
+        if (l) this.hud.alert(day, STORY_UI.letterCame(l.title, l.from));
+        return false;
+      }
+      case "letterAnswered": {
+        const l = STORY_LETTERS[e.letter];
+        const c = l?.choices[e.choice];
+        this.storesDirty = true;
+        this.hud.setLetters(w.story?.pending.length ?? 0);
+        if (l && c) this.hud.alert(day, STORY_UI.answered(l.title, e.failed && c.chance ? c.chance.fail.result : c.result));
+        return false;
+      }
+      case "actBegan": {
+        const a = ACTS[e.act - 1];
+        if (a) this.hud.alert(day, STORY_UI.actBegins(e.act, a.title));
+        return false;
+      }
+      case "storyEnded":
+        this.hud.setLetters(0);
+        queueMicrotask(() => this.ended());
+        return false;
+      default:
         return false;
     }
   }
@@ -876,13 +1018,30 @@ export class KingdomLayer implements LayerKeys {
 
   /** An order from a card or menu button (K3): to the queue, and say so. */
   issueFromUi(body: KingdomOrderBody, said: string): void {
+    // K9: what the tutorial waits for is an order the world will take (checked
+    // before it is queued, as the tick will check it again).
+    const ok = this.world.check(body) === null;
     this.world.issue(body);
     this.hud.result(this.clock.run === "paused" ? E.queued(said) : said);
+    if (!ok) return;
+    switch (body.kind) {
+      case "forage": signal({ kind: "ui", action: "forage" }); break;
+      case "rally": signal({ kind: "ui", action: "rally" }); break;
+      case "claimHolding": signal({ kind: "ui", action: "claim" }); break;
+      case "resolveEvent": signal({ kind: "ui", action: "eventChoose" }); break;
+      case "build": signal({ kind: "ui", action: "build" }); break;
+      case "sow": signal({ kind: "ui", action: "sow" }); break;
+      case "setAutoSow": if (body.holding === 0 && body.crop !== null) signal({ kind: "ui", action: "resowAll" }); break;
+      case "recruit": if (body.levy) signal({ kind: "ui", action: "raiseArmy" }); break;
+      default: break;
+    }
   }
 
   // -- saving -----------------------------------------------------------------
 
   save(): SaveOutcome {
+    // K9: the practice realm is thrown away with the tutorial; it is never written over the king's own.
+    if (this.env.lesson) return { ok: true, bytes: 0 };
     const out = saveKingdom(this.world, this.env.storage);
     this.lastSave = out;
     this.saves++;
@@ -976,7 +1135,13 @@ export class KingdomLayer implements LayerKeys {
     if (style !== "tap") this.fades.push({ stroke: { points: points.slice(), style }, start: this.clockSeconds, duration: FADE_SECONDS });
 
     if (intent.order) {
+      const accepted = this.world.check(intent.order) === null;
       this.world.issue(intent.order);
+      // K9: the tutorial hears the map order the stroke gave, if the world took it.
+      const g = intent.gesture.kind;
+      if (accepted && g !== "join" && g !== "none" && g !== "tapToken" && g !== "tapHolding") {
+        signal({ kind: "kingdomGesture", class: g as KingdomPenClass });
+      }
       const m = intent.march;
       if (m && this.clock.run === "paused") this.hud.result(K.queuedOut({ name: m.name, eta: m.eta }));
       else this.hud.result(intent.message);
@@ -994,6 +1159,8 @@ export class KingdomLayer implements LayerKeys {
       }
       this.lastTap = c.kind === "region" ? { holding: c.holding, at: this.clockSeconds } : null;
       this.openCard(intent.card);
+      signal(c.kind === "region" ? { kind: "kingdomGesture", class: "tapHolding" }
+        : c.kind === "king" ? { kind: "kingdomGesture", class: "tapToken" } : { kind: "ui", action: "openArmyCard" });
     } else {
       this.hud.result(intent.message);
     }
@@ -1123,6 +1290,8 @@ export class KingdomLayer implements LayerKeys {
     this.raf = this.env.win.requestAnimationFrame(this.frame);
     // A meeting still waiting (the battle was left without a result) asks again.
     if (this.world.contact) this.openContact();
+    // K9: and a letter that came while the king was below is put to him now.
+    else this.openLetterSoon();
   }
 
   // -- camera -----------------------------------------------------------------

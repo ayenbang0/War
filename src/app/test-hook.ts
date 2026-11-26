@@ -24,6 +24,7 @@ import type { BattleLayer } from "./battle-layer.ts";
 import { battleFromSetup, type BattleConfig } from "./battle-config.ts";
 import type { CityLayer } from "./city-layer.ts";
 import type { KingdomLayer } from "./kingdom-layer.ts";
+import type { Coach } from "../ui/story/coach.ts";
 import type { AbilityId } from "../content/abilities.ts";
 import { adviseFor, suggestArmy } from "../content/army.ts";
 import { COMMANDERS, COMMANDER_IDS, type CommanderId } from "../content/commanders.ts";
@@ -95,6 +96,8 @@ export type TestHook = {
    * field button left it. See the header for why this exists.
    */
   launchBattle(spec?: TestBattle): BattleLayer;
+  /** K9: the tutorial's coach while it runs, or null (read only: steps are done with real input). */
+  coach(): Coach | null;
 };
 
 export function testHook(app: App): TestHook {
@@ -119,5 +122,6 @@ export function testHook(app: App): TestHook {
       b.world.outcome = { winner, reason: "rout", detail: "ended by the e2e harness" };
     },
     launchBattle: (spec) => app.launch(testBattleConfig(spec), { kind: "test" }),
+    coach: () => app.coach,
   };
 }

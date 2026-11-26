@@ -10,6 +10,7 @@
 import type { World } from "../sim/world.ts";
 import { anchorSquad, pathLength, pointInPolygon, recognize, gestureLabel, TAP_LENGTH, type GestureContext, type PendingLine, type Point, type Recognized, type SquadView } from "./gestures.ts";
 import { ABILITIES, type AbilityId } from "../content/abilities.ts";
+import { signal, type TutorialSignal } from "../ui/story/signals.ts";
 
 /**
  * Ticks between issuing an order and it taking effect. One tick keeps orders
@@ -96,6 +97,12 @@ export class Commander {
    * SEEN to mean nothing (audit PC-02).
    */
   rejected = false;
+  /**
+   * K9: what the last committed stroke did, in the tutorial's terms, or null
+   * when it did nothing. Sent to the tutorial (ui/story/signals.ts) only once
+   * the stroke has really been carried out, never for a refusal.
+   */
+  heard: TutorialSignal | null = null;
   /**
    * Where the player may set men down while deploying. Supplied by the battle,
    * which knows the level's zones; null means anywhere on the map.
@@ -246,6 +253,7 @@ export class Commander {
       this.player,
       this.world.tick + ORDER_DELAY,
     );
+    this.heard = { kind: "ui", action: "abilityCast" };
     return ABILITIES[id].name;
   }
 
@@ -456,7 +464,9 @@ export class Commander {
 
   /** Commit a finished stroke. Returns a short label for the HUD. */
   commit(points: readonly Point[]): string {
+    this.heard = null;
     const said = this.commitStroke(points);
+    if (this.heard && !this.rejected) signal(this.heard);
     this.grabbed = null;
     this.preview = null;
     this.ghost = null;
@@ -486,6 +496,7 @@ export class Commander {
       const tip = points[points.length - 1];
       if (!this.mayPlace(tip)) return this.refuse("outside your ground - set them down in your own zone");
       this.issuePlace(tip);
+      this.heard = { kind: "ui", action: "deployDrag" };
       return "placed";
     }
 
@@ -500,6 +511,7 @@ export class Commander {
     if (r.kind === "select") {
       this.clearPending();
       this.selected = r.squads.slice();
+      this.heard = { kind: "gesture", class: "select", detail: r.squads.length > 0 ? "picked" : "cleared" };
       return r.squads.length > 0 ? "selected" : "cleared";
     }
 
@@ -527,9 +539,23 @@ export class Commander {
           q.members.some((m) => taken.has(m)) &&
           q.members.some((m) => !taken.has(m)),
       );
+      // K9: a loop round two or more WHOLE companies, and nobody else, takes
+      // them as a group -- held together, each still its own company -- which
+      // is how a group is held at all with the pen alone (the group verbs
+      // below need two or more held; before this only a split's kept half
+      // could be). Gathering them into one company instead would throw away
+      // the very companies the group verbs act on.
+      const whole = this.world.groups.filter((q) => q.player === this.player && q.members.length > 0 && q.members.every((m) => taken.has(m)));
+      const inWhole = whole.reduce((n, q) => n + q.members.length, 0);
+      if (!carving && whole.length >= 2 && inWhole === gathered.length) {
+        this.selected = whole.map((q) => q.id);
+        this.heard = { kind: "gesture", class: "lasso", detail: "group" };
+        return "took " + whole.length + " companies";
+      }
       const g = this.world.createGroup(this.player, gathered);
       this.selected = g ? [g.id] : [];
       if (!g) return this.refuse("no men inside that loop");
+      this.heard = carving ? { kind: "gesture", class: "lasso", detail: "carve" } : { kind: "gesture", class: "lasso" };
       return (carving ? "split off " : "grouped ") + g.members.length;
     }
 
@@ -541,6 +567,7 @@ export class Commander {
       this.pendingLine = { a: { x: r.line[0], y: r.line[1] }, b: { x: r.line[2], y: r.line[3] } };
       this.pendingKeep = r.keep.slice();
       this.pendingDeadline = nowMs() + PAIR_WINDOW_MS;
+      this.heard = { kind: "gesture", class: "split" };
       // A line clear of the group cuts nothing; it is purely a rail awaiting a
       // partner, and saying "split 0/6" would read as a mistake.
       return r.keep.length === 0 || r.drop.length === 0
@@ -557,6 +584,7 @@ export class Commander {
         this.world.orders.issue({ kind: "ambush", squad: id }, this.player, tick);
         issued++;
       }
+      if (issued > 0) this.heard = { kind: "gesture", class: "ambush" };
       return issued > 0 ? "lie in wait" : this.refuse("locked (recovering)");
     }
 
@@ -571,6 +599,7 @@ export class Commander {
         );
         issued++;
       }
+      if (issued > 0) this.heard = { kind: "gesture", class: "feint" };
       return issued > 0 ? "feint - advance and withdraw" : this.refuse("locked (recovering)");
     }
 
@@ -587,6 +616,7 @@ export class Commander {
         );
         issued++;
       });
+      if (issued > 0) this.heard = { kind: "gesture", class: "grid" };
       return issued > 0 ? "rows and columns" : this.refuse("locked (recovering)");
     }
 
@@ -609,6 +639,7 @@ export class Commander {
         this.world.orders.issue({ kind: "patrol", squad: id, path }, this.player, tick);
         issued++;
       });
+      if (issued > 0) this.heard = { kind: "gesture", class: "patrolArea" };
       return issued > 0 ? "patrol area" : this.refuse("locked (recovering)");
     }
 
@@ -621,6 +652,7 @@ export class Commander {
         this.world.orders.issue({ kind: "recover", squad: id }, this.player, tick);
         issued++;
       }
+      if (issued > 0) this.heard = { kind: "gesture", class: "recover" };
       return issued > 0 ? "recover (30s, cannot act)" : this.refuse("already recovering");
     }
 
@@ -654,7 +686,11 @@ export class Commander {
         case "move":
           // Hold on to the route: retracing it inside the pair window is how a
           // feint is asked for, reusing the same window the grid gesture uses.
-          this.pendingRoute = r.path.slice();
+          // K9: from where the stroke began. An order's path leaves out its
+          // start (the men are already there), so a straight march held only
+          // its end point -- and a one-point route can never be retraced, which
+          // made the feint unreachable from the commonest march there is.
+          this.pendingRoute = points.length > 0 ? [points[0].x, points[0].y, ...r.path] : r.path.slice();
           this.pendingRouteDeadline = nowMs() + PAIR_WINDOW_MS;
           this.world.orders.issue(
             { kind: "move", squad: id, path: fanOut(r.path, lateral) },
@@ -713,6 +749,7 @@ export class Commander {
     });
 
     if (issued === 0) return this.refuse("locked (recovering)");
+    this.heard = r.kind === "formation" ? { kind: "gesture", class: "formation", shape: r.shape } : { kind: "gesture", class: r.kind };
     return gestureLabel(r);
   }
 }

@@ -12,7 +12,8 @@
 import { ScreenStack, type FocusHost, type Focusable, type InputContext, type KeyInput, type KeyVerdict, type Screen, type ScreenKind } from "../src/ui/screen-stack.ts";
 import { ABILITY_SLOT_KEYS, ABILITY_SLOT_LABELS, KeyRouter, abilitySlotForCode, attachKeyRouter, classifyFocus, type FocusKind, type LayerKeys, type RawKey } from "../src/ui/keys.ts";
 import type { StorageLike } from "../src/app/kingdom-save.ts";
-import { battleFromSetup, distinctAbilities, enemyArmy, lessonConfig, LESSON_DURATION_SECONDS } from "../src/app/battle-config.ts";
+import { beatSeconds, READING_WORDS_PER_SECOND } from "../src/ui/story/cutscene.ts";
+import { battleFromSetup, battleWorld, distinctAbilities, enemyArmy, lessonConfig, LESSON_DURATION_SECONDS } from "../src/app/battle-config.ts";
 import { ABILITY_IDS, type AbilityId } from "../src/content/abilities.ts";
 import { cost, validate } from "../src/content/army.ts";
 import { COMMANDERS } from "../src/content/commanders.ts";
@@ -301,10 +302,27 @@ begin("battle configs");
 {
   const lesson = lessonConfig();
   check("the lesson is a lesson", lesson.mode === "lesson");
-  check("the lesson has no abilities on either side", lesson.abilities[0].length === 0 && lesson.abilities[1].length === 0);
+  // K9: the lesson is the tutorial's drill, which teaches readying and casting an ability.
+  check("K9: the drill gives the player two abilities and the far side none", lesson.abilities[0].length === 2 && lesson.abilities[1].length === 0);
+  check("K9: the drill sets two companies out to carry", lesson.companies === 2);
   check("the lesson's clock is longer than any lesson", LESSON_DURATION_SECONDS >= 60 * 60);
-  const smallest = Math.min(...LEVELS.map((l) => l.tilesWide * l.tilesHigh));
-  check("the lesson uses the smallest field", lesson.level.tilesWide * lesson.level.tilesHigh === smallest);
+  check("K9: the drill is on the Proving Ground", lesson.level.id === "proving-ground");
+  {
+    // The drill's last step is a stroke onto the enemy: it must be seen from
+    // the drill ground, and stand far enough off that nobody fights unbidden.
+    const { world } = battleWorld(lesson);
+    world.deploying = false;
+    for (let k = 0; k < 120; k++) world.step();
+    const s = world.soldiers;
+    let seen = 0;
+    let dead = 0;
+    for (let i = 0; i < s.count; i++) {
+      if (s.player[i] === 1 && world.canSee(0, i)) seen++;
+      if (s.alive[i] !== 1) dead++;
+    }
+    check("K9: the drill's enemy is in sight of the companies as set out", seen > 0, seen + " seen");
+    check("K9: and nobody fights before an order", dead === 0, dead + " dead");
+  }
 
   const level = LEVELS[0];
   const army = { doctrine: "maneuver" as const, squads: ["line", "line", "archer", "horse"] as const };
@@ -430,7 +448,12 @@ begin("battle layer");
   check("start runs the frame loop", frames.length === 1 && lesson.phase === "live");
   check("BS-05: the lesson runs no enemy commander", lesson.world.ai.length === 0);
   check("BS-05: the lesson's clock cannot run out mid-lesson", lesson.world.duration === LESSON_DURATION_SECONDS);
-  check("the lesson starts straight into the battle", !lesson.world.deploying);
+  // K9: the drill begins deploying, because setting out and Enter are lessons too.
+  check("K9: the drill starts deploying", lesson.world.deploying);
+  check("K9: with its two companies made", lesson.world.groups.filter((g) => g.player === 0).length >= 2,
+    String(lesson.world.groups.filter((g) => g.player === 0).length));
+  press(lesson, "Enter");
+  check("K9: Enter begins the drill", !lesson.world.deploying);
   runFrames(40);
   check("frames advance the lesson's world", lesson.world.tick > 30, "tick " + lesson.world.tick);
   check("the HUD shows no clock in a lesson", String(hud.textContent).startsWith("lesson"), String(hud.textContent).split("\n")[0]);
@@ -511,7 +534,9 @@ begin("app: screens and layers");
     getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => { mem.set(k, v); }, removeItem: (k) => { mem.delete(k); },
   };
   const baseWin = win.listenerCount();
-  let app = startApp({ win: win as unknown as Window, doc: doc as unknown as Document, storage: () => okStore });
+  // K9's documented test path: a new exile opens on the map (AppEnv.skipOpening);
+  // the opening itself is checked in "app: the opening" below.
+  let app = startApp({ win: win as unknown as Window, doc: doc as unknown as Document, storage: () => okStore, skipOpening: true });
   let hook = testHook(app);
 
   const buttons = (): El[] => doc.querySelectorAll("button").filter((b) => b.shown && !b.closest("[inert]"));
@@ -615,20 +640,8 @@ begin("app: screens and layers");
   check("Leave the field goes back to the front screen", click("Leave the field") && hook.top() === "home" && hook.battle() === null);
   check("leaving left nothing on the stack", hook.screens().join(">") === "home");
 
-  // The lesson.
-  check("Learn the gestures launches the lesson", click("Learn the gestures") && hook.battle()?.config.mode === "lesson");
-  const lesson = hook.battle();
-  if (!lesson) throw new Error("no lesson");
-  win.runFrames(3);
-  check("BS-05: no AI and no clock in the lesson", lesson.world.ai.length === 0 && hud.textContent.startsWith("lesson"));
-  pointer("pointerdown", 640, 360, 0);
-  pointer("pointermove", 700, 380, 0);
-  press("Escape");
-  check("PC-06: Esc mid-stroke cancels the stroke and stays in the lesson", !lesson.pen.drawing && hook.top() === "battle");
-  press("Escape");
-  check("BS-04: leaving the lesson asks first", hook.top() === "confirm");
-  check("Leave the lesson returns to the front screen", click("Leave the lesson") && hook.top() === "home");
-  check("with focus where it was", focusedText() === "Learn the gestures");
+  // K9: the old lesson is the tutorial now, reached from a new exile's opening, not from Home.
+  check("K9: Home has no Learn the gestures button", btn("Learn the gestures") === null);
 
   // The kingdom map (K2): reached from Home, and torn down as cleanly as a battle.
   const docListeners = (): number => (doc as unknown as { count(): number }).count();
@@ -736,6 +749,80 @@ begin("app: screens and layers");
   check("the canvas has no listeners left", canvas.count() === 0);
 }
 
+// -- K9: the opening -- cutscene, tutorial, then the king's own realm --------------
+//
+// Headless, through the fake DOM: the flow and its teardown. The real strokes
+// of every step are driven in a browser by src/e2e/scenarios-k9.ts.
+begin("app: the opening (K9)");
+{
+  const { installFakeDom, FakeEvent, FakeElement } = await import("./fake-dom.ts");
+  const { win, doc } = installFakeDom();
+  const { startApp } = await import("../src/app/app.ts");
+  const { testHook } = await import("../src/app/test-hook.ts");
+  const { TUTORIAL } = await import("../src/content/story/tutorial.ts");
+  const { CUTSCENE } = await import("../src/content/story/cutscene.ts");
+  type El = InstanceType<typeof FakeElement>;
+  const mem = new Map<string, string>();
+  const store: StorageLike = {
+    getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => { mem.set(k, v); }, removeItem: (k) => { mem.delete(k); },
+  };
+  const app = startApp({ win: win as unknown as Window, doc: doc as unknown as Document, storage: () => store });
+  const hook = testHook(app);
+  const buttons = (): El[] => doc.querySelectorAll("button").filter((b) => b.shown && !b.closest("[inert]"));
+  const click = (text: string): boolean => {
+    const b = buttons().find((x) => x.textContent.trim() === text);
+    if (!b) return false;
+    b.focus();
+    b.click();
+    return true;
+  };
+  const press = (code: string): void => {
+    const target = doc.activeElement;
+    target.dispatchEvent(new FakeEvent("keydown", { code, repeat: false, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false }));
+    target.dispatchEvent(new FakeEvent("keyup", { code }));
+  };
+  const settle = async (): Promise<void> => { await Promise.resolve(); await Promise.resolve(); };
+
+  check("K9: a new exile opens on the cutscene", click("The Exile of Rimaros") && hook.top() === "story-cutscene");
+  check("K9: on its first beat, with Next focused", app.cutscene?.state.beat === 0 && doc.activeElement.textContent.trim() === "Next");
+  check("K9: Next goes on a beat", click("Next") && app.cutscene?.state.beat === 1);
+  press("Escape");
+  await settle();
+  check("K9: Esc skips the cutscene, into the tutorial", hook.top() === "kingdom" && app.coach !== null && app.cutscene === null);
+  const practice = hook.kingdom();
+  check("K9: the tutorial runs in a practice realm with the story on", practice !== null && practice.world.story !== null && practice === app.practice);
+  check("K9: the coach is on its first step", app.coach?.index === 0 && doc.querySelectorAll(".s-coach").length === 1);
+  check("K9: and teaches " + TUTORIAL.length + " steps", TUTORIAL.length >= 60);
+  check("K9: the cutscene has its beats", CUTSCENE.beats.length >= 8);
+  check("K9: Skip this step goes on", click("Skip this step") && app.coach?.index === 1);
+  win.runFrames(30);
+  check("K9: the practice realm is never saved", !mem.has("war.kingdom.v1"));
+  press("Escape");
+  check("K9: Esc with nothing to cancel asks whether to skip the tutorial", hook.top() === "confirm");
+  check("K9: Skip it ends the tutorial", click("Skip it"));
+  await settle();
+  const real = hook.kingdom();
+  check("K9: the king's own realm begins, not the practice one", real !== null && real !== practice && practice?.phase === "torn-down" && app.coach === null);
+  check("K9: on day one, with the story on", real?.world.now === 0 && real?.world.story?.act === 1);
+  check("K9: the coach panel is gone", doc.querySelectorAll(".s-coach").length === 0);
+  check("K9: the map has the story's buttons", buttons().some((b) => b.textContent.trim() === "Chronicle") && buttons().some((b) => b.textContent.trim() === "Menu"));
+  check("K9: Chronicle opens the chronicle", click("Chronicle") && hook.top() === "story-chronicle");
+  press("Escape");
+  check("K9: Esc closes it", hook.top() === "kingdom");
+  check("K9: Menu opens the menu", click("Menu") && hook.top() === "story-menu");
+  check("K9: Replay the tutorial goes back to the practice realm", click("Replay the tutorial") && hook.top() === "kingdom" && app.coach !== null && hook.kingdom() !== real);
+  check("K9: leaving for it saved the king's realm", (mem.get("war.kingdom.v1") ?? "").length > 0);
+  click("Skip the tutorial");
+  check("K9: Skip the tutorial asks first", hook.top() === "confirm");
+  click("Skip it");
+  await settle();
+  check("K9: and goes back to the king's own realm as it was", hook.kingdom()?.world === real?.world);
+  press("Escape");
+  check("K9: Continue skips the opening", hook.top() === "home" && click("The Exile of Rimaros") && hook.top() === "kingdom" && app.coach === null);
+  app.dispose();
+  check("K9: dispose leaves no story element behind", doc.getElementById("story") === null && doc.getElementById("story-menu") === null);
+}
+
 // -- the one scaling policy (docs/ui-policy.md) ------------------------------
 //
 // No browser runs here, so these read the stylesheet and pages as text. The
@@ -804,6 +891,31 @@ begin("ui policy (BS-06, BS-07, BS-10, BS-11, RT-02)");
     check("city.css: the panel heading has an authored focus ring", /\.c-title:focus-visible[^{]*\{[^}]*outline:\s*3px/.test(ccss));
     check("city.css: index.html and e2e.html load it", read("../index.html").includes("/src/ui/city/city.css") &&
       read("../e2e.html").includes("/src/ui/city/city.css"));
+  }
+  // K9: the story's screens (cutscene, coach, letters, chronicle, menu, ends).
+  {
+    const scss = read("../src/ui/story/story.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const bad: string[] = [];
+    for (const m of scss.matchAll(/font(?:-size)?\s*:\s*([^;}]+)/g)) {
+      const v = m[1];
+      for (const n of v.matchAll(/(\d*\.?\d+)(px|rem|em)\b/g)) {
+        if (v.slice(0, n.index ?? 0).trimEnd().endsWith("/")) continue;
+        if (n[2] === "px" || parseFloat(n[1]) < 1) bad.push(m[0].trim());
+      }
+    }
+    check("story.css: no font size in px or under 1rem", bad.length === 0, bad.join(" | "));
+    check("story.css: authored focus rings", /:focus-visible[^{]*\{[^}]*outline:\s*3px/.test(scss));
+    check("story.css: reduced motion is honoured", /@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(scss));
+    check("story.css: index.html and e2e.html load it", read("../index.html").includes("/src/ui/story/story.css") &&
+      read("../e2e.html").includes("/src/ui/story/story.css"));
+    // U3: the coach and the map's feed share the bottom-left corner.
+    check("U3: the feed and result line stand above the coach while it is up", /\.s-coached\s+\.k-foot\s*\{[^}]*bottom:\s*calc\(var\(--s-coach-h/.test(scss));
+  }
+  {
+    // U3: no beat of the cutscene moves on before its words can be read.
+    const { CUTSCENE: FILM } = await import("../src/content/story/cutscene.ts");
+    const fast = FILM.beats.filter((b) => b.text.split(/\s+/).length / beatSeconds(b) > READING_WORDS_PER_SECOND);
+    check("U3: every cutscene beat stays long enough to read (<= 3 words a second)", fast.length === 0, fast.map((b) => b.id).join(","));
   }
   const token = /--text:\s*(\d*\.?\d+)rem/.exec(css);
   check("the body text token is at least 1rem", token !== null && parseFloat(token[1]) >= 1, token ? token[0] : "missing");
