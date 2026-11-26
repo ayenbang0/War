@@ -27,6 +27,7 @@
  * Layers (plan §B.1) are a typed union: kingdom, city and battle.
  */
 
+import { cue } from "../audio/sound.ts";
 import { homeScreen, type ExileStatus, type HomeChoice } from "../ui/home.ts";
 import { afterActionScreen } from "../ui/after-action.ts";
 import { confirmScreen, type ConfirmSpec } from "../ui/dialog.ts";
@@ -180,6 +181,11 @@ export class App {
   /** K11: the difficulty picked on Home this visit (kept here too, for when there is no storage). */
   private chosenDifficulty: KingdomDifficultyId | null = null;
   private readonly detachKeys: () => void;
+  /** K11: the document listener that ticks for every button. */
+  private readonly onButtonClick = (e: Event): void => {
+    const t = e.target as { closest?: (s: string) => Element | null } | null;
+    if (t && typeof t.closest === "function" && (t.closest("button") || t.closest("summary"))) cue("click");
+  };
   private readonly unwatchStack: () => void;
 
   /**
@@ -226,6 +232,9 @@ export class App {
     this.stack = new ScreenStack(documentFocus(env.doc));
     this.router = new KeyRouter(this.stack, classifyFocus);
     this.detachKeys = attachKeyRouter(this.router, env.win, env.doc);
+    // K11: every button in the game ticks when pressed (src/audio/sound.ts).
+    // Captured at the document, so no screen needs to know about sound.
+    env.doc.addEventListener("click", this.onButtonClick, true);
     // Whatever is on top decides which input contexts the live layer has.
     this.unwatchStack = this.stack.onChange(() => this.live?.setContexts(this.stack.activeInputs()));
     this.storyEl = env.doc.createElement("div");
@@ -250,6 +259,7 @@ export class App {
     this.stack.clear();
     this.unwatchStack();
     this.detachKeys();
+    this.env.doc.removeEventListener("click", this.onButtonClick, true);
     this.storyEl.parentNode?.removeChild(this.storyEl);
     this.menuEl.parentNode?.removeChild(this.menuEl);
   }

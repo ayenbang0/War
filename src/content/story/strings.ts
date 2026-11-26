@@ -124,6 +124,14 @@ export const STORY_UI = {
   menuTutorialHint: "The tutorial runs in a practice realm; this one is saved first and waits for you.",
   menuFront: "Save and go to the front screen",
   menuHint: "Esc goes back to the realm.",
+  // K11: sound, in the Menu (on by default, quiet; remembered on this device).
+  menuSoundTitle: "Sound",
+  menuSoundOn: "Sound: on",
+  menuSoundOff: "Sound: off",
+  menuQuieter: "Quieter",
+  menuLouder: "Louder",
+  menuVolume: (v: number) => "Volume " + v + "%",
+  menuSoundHint: "Remembered on this device.",
   // the cutscene
   cutsceneLabel: "The opening of the story",
   cutsceneNext: "Next",

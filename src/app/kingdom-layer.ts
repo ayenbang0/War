@@ -62,6 +62,7 @@ import type { Contact } from "../sim/kingdom/state.ts";
 import type { BattleResult } from "../sim/layers.ts";
 import { CONTACT_FEED } from "../content/kingdom/descent-strings.ts";
 import { contactPoint } from "../sim/kingdom/descent.ts";
+import { cue } from "../audio/sound.ts";
 import { BAND_WORD, MORALE_FEED } from "../content/kingdom/morale-strings.ts";
 import { ARMY_MORALE } from "../content/kingdom/morale.ts";
 import { rumourCard, type RumourNews } from "../ui/kingdom/rumour-card.ts";
@@ -483,6 +484,7 @@ export class KingdomLayer implements LayerKeys {
   /** Run `n` ticks and react to what they did. The only caller of world.tick(). */
   private runTicks(n: number): void {
     let dayTurned = false;
+    const season0 = this.world.date.season;
     this.storesDirty = false;
     this.batchEvents = [];
     for (let i = 0; i < n; i++) {
@@ -497,6 +499,8 @@ export class KingdomLayer implements LayerKeys {
     // The resources bar is written once per batch of ticks, and only when an
     // event said the stocks (or what they mean) changed -- never per frame.
     if (this.storesDirty) this.hud.resources.update(this.world);
+    // K11: the season turning has a sound of its own.
+    if (n > 0 && this.world.date.season !== season0) cue("season");
     if (n > 0) {
       // The calendar turns when `now` crosses a day, one tick before that
       // day's dayBegan event fires (the event comes from the day's first
@@ -543,6 +547,7 @@ export class KingdomLayer implements LayerKeys {
     this.intent = null;
     this.stroke = null;
     this.closeCard();
+    cue("letter");
     const view = letterCard(this.storyRoot, this.env.doc, this.world, letter, s.pending.length - 1, {
       close: (sc) => this.hooks.popScreen(sc),
       closed: () => { if (this.storyScreen === view) this.storyScreen = null; },
@@ -1180,6 +1185,8 @@ export class KingdomLayer implements LayerKeys {
 
     if (intent.order) {
       const accepted = this.world.check(intent.order) === null;
+      // K11: an order heard (a march has its drum), or refused.
+      cue(!accepted ? "refused" : intent.gesture.kind === "march" ? "march" : "stroke");
       this.world.issue(intent.order);
       // K9: the tutorial hears the map order the stroke gave, if the world took it.
       const g = intent.gesture.kind;
@@ -1206,6 +1213,8 @@ export class KingdomLayer implements LayerKeys {
       signal(c.kind === "region" ? { kind: "kingdomGesture", class: "tapHolding" }
         : c.kind === "king" ? { kind: "kingdomGesture", class: "tapToken" } : { kind: "ui", action: "openArmyCard" });
     } else {
+      // A drawn line that meant nothing is a refusal; a tap on bare ground is not.
+      if (points.length > 2) cue("refused");
       this.hud.result(intent.message);
     }
   }

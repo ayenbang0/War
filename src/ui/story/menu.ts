@@ -9,11 +9,15 @@
  *
  * Modal and clock-holding; focus to the first button (there is nothing to
  * read first); Esc goes back to the realm.
+ *
+ * K11: the sound's mute and volume live here too (src/audio/sound.ts),
+ * changed in place so focus stays on the button pressed.
  */
 
 import { domScreen } from "../dom-screen.ts";
 import type { KeyVerdict, Screen } from "../screen-stack.ts";
 import { STORY_UI } from "../../content/story/strings.ts";
+import { VOLUME_STEP, sound } from "../../audio/sound.ts";
 
 export type MenuHooks = {
   close(screen: Screen): void;
@@ -71,6 +75,37 @@ export function menuScreen(root: HTMLElement, doc: Document, hooks: MenuHooks): 
       if (hooks.canReplay) add(STORY_UI.menuTutorial, () => hooks.tutorial(), STORY_UI.menuTutorialHint);
       add(STORY_UI.menuFront, () => hooks.front());
       panel.appendChild(list);
+
+      // -- sound --
+      const snd = sound();
+      const group = make(doc, "div", "s-menu-sound");
+      group.setAttribute("role", "group");
+      const head = make(doc, "h3", "s-menu-sound-title", STORY_UI.menuSoundTitle);
+      head.id = "s-menu-sound-title";
+      group.setAttribute("aria-labelledby", head.id);
+      const toggle = make(doc, "button", "k-btn s-sound-toggle");
+      toggle.setAttribute("type", "button");
+      const quieter = make(doc, "button", "k-btn s-sound-quieter", STORY_UI.menuQuieter);
+      quieter.setAttribute("type", "button");
+      const louder = make(doc, "button", "k-btn s-sound-louder", STORY_UI.menuLouder);
+      louder.setAttribute("type", "button");
+      const level = make(doc, "span", "s-sound-volume");
+      level.setAttribute("aria-live", "polite");
+      const show = (): void => {
+        toggle.textContent = snd.on ? STORY_UI.menuSoundOn : STORY_UI.menuSoundOff;
+        toggle.setAttribute("aria-pressed", snd.on ? "true" : "false");
+        level.textContent = STORY_UI.menuVolume(snd.volume);
+        quieter.setAttribute("aria-disabled", snd.volume <= 0 ? "true" : "false");
+        louder.setAttribute("aria-disabled", snd.volume >= 100 ? "true" : "false");
+      };
+      toggle.onclick = () => { snd.setOn(!snd.on); show(); };
+      quieter.onclick = () => { snd.setVolume(snd.volume - VOLUME_STEP); show(); };
+      louder.onclick = () => { snd.setVolume(snd.volume + VOLUME_STEP); show(); };
+      show();
+      const row = make(doc, "div", "s-menu-sound-row");
+      row.append(toggle, quieter, level, louder);
+      group.append(head, row, make(doc, "p", "k-hint", STORY_UI.menuSoundHint));
+      panel.appendChild(group);
       panel.appendChild(make(doc, "p", "k-hint", STORY_UI.menuHint));
       root.appendChild(panel);
     },

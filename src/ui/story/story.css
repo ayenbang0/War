@@ -119,3 +119,9 @@
 @media (prefers-reduced-motion: reduce) {
   .s-coach, .s-cutscene, .s-end { transition: none; animation: none; }
 }
+
+/* K11: the Menu's sound controls. */
+.s-menu-sound { margin-top: 0.75rem; border-top: 1px solid rgba(58, 49, 36, 0.25); padding-top: 0.5rem; }
+.s-menu-sound-title { margin: 0 0 0.35rem; font-size: 1rem; }
+.s-menu-sound-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.s-sound-volume { min-width: 6.5em; text-align: center; }

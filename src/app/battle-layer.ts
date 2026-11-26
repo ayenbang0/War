@@ -15,6 +15,7 @@
  * reproducible while the picture stays smooth.
  */
 
+import { cue } from "../audio/sound.ts";
 import { World, TICK_DT, TICK_RATE } from "../sim/world.ts";
 import type { Outcome } from "../sim/victory.ts";
 import { hashWorld } from "../sim/hash.ts";
@@ -470,6 +471,8 @@ export class BattleLayer implements LayerKeys {
         const sees = renderer.perception;
         sees.refresh(world, now);
         effects.ingest(world.events, now / 1000, (e) => sees.event(world, e));
+        // K11: steel meeting steel where the player can see it (throttled in the sound itself).
+        if (world.events.some((e) => e.kind === "melee" && sees.event(world, e))) cue("clash");
         renderer.fallen.ingest(world, world.events, PLAYER, world.tick / TICK_RATE);
         effects.ingestSpecials(
           world.specialEvents.filter((m) => m.player === PLAYER || sees.ground(m.x, m.y)),

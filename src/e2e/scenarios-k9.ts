@@ -16,6 +16,7 @@
  * is proven from where a player arrives at it.
  */
 
+import { VOLUME_STEP, sound } from "../audio/sound.ts";
 import type { KingdomLayer } from "../app/kingdom-layer.ts";
 import type { CityLayer } from "../app/city-layer.ts";
 import type { BattleLayer } from "../app/battle-layer.ts";
@@ -833,6 +834,30 @@ scenario("k9-letter-and-chronicle", "after the tutorial, in the king's own realm
   const menu = [...document.querySelectorAll(".k-story button")].find((b) => b.getAttribute("data-key") === "menu") as HTMLElement;
   t.click(menu);
   await t.waitFor(() => t.hook.top() === "story-menu", "the map's menu");
+  // K11: the sound's mute and volume, in place, focus kept; pressed twice each, so the setting is left as found.
+  const snd = sound();
+  const on0 = snd.on;
+  const vol0 = snd.volume;
+  const toggle = document.querySelector<HTMLElement>(".s-sound-toggle");
+  t.expect(t.visible(toggle) && toggle.textContent === (on0 ? STORY_UI.menuSoundOn : STORY_UI.menuSoundOff), "the Menu says whether sound is on");
+  t.click(toggle!);
+  t.expect(snd.on === !on0 && toggle!.textContent === (snd.on ? STORY_UI.menuSoundOn : STORY_UI.menuSoundOff) &&
+    toggle!.getAttribute("aria-pressed") === String(snd.on), "Sound toggles, and the button says so");
+  t.click(toggle!);
+  t.expect(snd.on === on0, "and back");
+  const louder = document.querySelector<HTMLElement>(".s-sound-louder")!;
+  const quieter = document.querySelector<HTMLElement>(".s-sound-quieter")!;
+  const level = (): string => document.querySelector(".s-sound-volume")?.textContent ?? "";
+  if (vol0 < 100) {
+    t.click(louder);
+    t.expect(snd.volume === Math.min(100, vol0 + VOLUME_STEP) && level() === STORY_UI.menuVolume(snd.volume), "Louder raises the volume (" + level() + ")");
+    t.click(quieter);
+  } else {
+    t.click(quieter);
+    t.expect(snd.volume === vol0 - VOLUME_STEP && level() === STORY_UI.menuVolume(snd.volume), "Quieter lowers the volume (" + level() + ")");
+    t.click(louder);
+  }
+  t.expect(snd.volume === vol0 && t.hook.top() === "story-menu", "and back, the Menu still up");
   t.clickButton(STORY_UI.menuChronicle);
   await t.waitFor(() => t.hook.top() === "story-chronicle", "the menu's Read the chronicle");
   t.key("Escape");

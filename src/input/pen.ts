@@ -17,6 +17,7 @@
  * key before anything else sees it.
  */
 
+import { cue } from "../audio/sound.ts";
 import type { Camera } from "../render/camera.ts";
 import type { Point } from "./gestures.ts";
 import type { Commander } from "./commander.ts";
@@ -120,6 +121,8 @@ export class Pen {
     this.rejected = this.commander.rejected && stroke.length > 1
       ? { points: stroke, why: this.lastAction, at: performance.now() }
       : null;
+    // K11: a stroke heard, or refused; a tap is a tick.
+    cue(this.rejected ? "refused" : stroke.length > 1 ? "stroke" : "click");
     this.points = [];
   };
 

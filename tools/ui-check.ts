@@ -18,7 +18,8 @@ import { ABILITY_IDS, type AbilityId } from "../src/content/abilities.ts";
 import { cost, validate } from "../src/content/army.ts";
 import { COMMANDERS } from "../src/content/commanders.ts";
 import { LEVELS } from "../src/content/levels/index.ts";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { CUE_GAP_MS, CUE_VOICES, SOUND_CUES, SOUND_DEFAULTS, SOUND_KEY, Sound, readSoundSettings } from "../src/audio/sound.ts";
 import { fileURLToPath } from "node:url";
 
 let failures = 0;
@@ -1023,6 +1024,43 @@ begin("city plans (K3b)");
     water.every((b) => b === "river" || b === "river-town" || b === "coast"), water.join(","));
   const hills = by((p) => p.contours.length > 0);
   check("hill country has its height lines", hills.every((b) => b === "highland" || b === "border-hills"), hills.join(","));
+}
+
+// -- K11: sound -----------------------------------------------------------------
+begin("sound (K11): settings remembered, cues throttled, mute obeyed, never the sim's");
+{
+  const mem = new Map<string, string>();
+  const store = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); } };
+  check("on by default, at a low volume", SOUND_DEFAULTS.on && SOUND_DEFAULTS.volume > 0 && SOUND_DEFAULTS.volume <= 30 &&
+    readSoundSettings(store).on && readSoundSettings(store).volume === SOUND_DEFAULTS.volume);
+  mem.set(SOUND_KEY, "{not json");
+  check("a spoiled setting falls back to the defaults", readSoundSettings(store).on === SOUND_DEFAULTS.on && readSoundSettings(store).volume === SOUND_DEFAULTS.volume);
+  mem.delete(SOUND_KEY);
+  const a = new Sound(store, null);
+  a.setOn(false);
+  a.setVolume(70);
+  const b = new Sound(store, null);
+  check("mute and volume are remembered", !b.on && b.volume === 70, mem.get(SOUND_KEY) ?? "");
+  b.setVolume(500);
+  check("the volume stays within 0..100", b.volume === 100 && new Sound(store, null).volume === 100);
+  b.play("click", 0);
+  check("muted, nothing plays", b.played.length === 0);
+  b.setOn(true);
+  b.play("clash", 1000);
+  b.play("clash", 1000 + CUE_GAP_MS.clash - 1);
+  b.play("clash", 1000 + CUE_GAP_MS.clash);
+  check("a cue rests between plays (a melee is a clash, not a hundred)", b.played.filter((c) => c === "clash").length === 2, b.played.join());
+  b.play("letter", 5000);
+  check("with no WebAudio a cue is a silent no-op", b.played.includes("letter"));
+  check("every cue has notes", SOUND_CUES.every((c) => CUE_VOICES[c].length > 0 && CUE_GAP_MS[c] > 0));
+  const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const code = read("../src/audio/sound.ts").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  check("sound never asks about reduced motion (it is independent of it)", !code.includes("matchMedia") && !code.includes("reduced"));
+  const simFiles = readdirSync(fileURLToPath(new URL("../src/sim/", import.meta.url)), { recursive: true }) as string[];
+  const touching = simFiles.filter((f) => f.endsWith(".ts") && /audio\//.test(read("../src/sim/" + f)));
+  check("no sim file touches the sound", touching.length === 0, touching.join(", "));
+  const menu = read("../src/ui/story/menu.ts");
+  check("the Menu holds the mute and the volume", menu.includes("s-sound-toggle") && menu.includes("s-sound-louder") && menu.includes("s-sound-quieter"));
 }
 
 console.log("");
