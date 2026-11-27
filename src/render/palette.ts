@@ -19,17 +19,76 @@ export const terrainFill: Record<number, string> = {
   7: "#8f9a72", // marsh: sickly green, close to the plain it deceives you into
   8: "#c9ae82", // road: a pale beaten track
   9: "#b4a893", // scree: grey-brown broken ground skirting the peaks
+  10: "#857a6a", // wall: dressed stone, darker and colder than any ground
+  11: "#7d6143", // gate: oak and iron, warm against the stone either side
+  12: "#9a7c55", // palisade: raw timber
+  13: "#c4b69a", // rubble: broken stone spilt over the plain, passable
+  14: "#cfc29f", // clearing: stumps and ash where a wood was
+  15: "#b8a07a", // open gate (K10): the paved arch with its leaves swung back
 };
 
-/** Player colours, chosen to stay distinguishable against parchment. */
+// -- palette roles (audit RF-01, RF-02) -----------------------------------------
+//
+// Every overlay is coloured by ROLE, never by a raw hex picked on the spot:
+// friend and foe are relative to whoever is looking (the viewer), so the
+// player's own men, orders, fields, workings, halos and held ground are always
+// the friend colour, whichever seat they took. Before this, counters used the
+// absolute player colour while halos hard-coded "own = blue", the shield field
+// was always player-0 blue whoever raised it, healing was green for either
+// side, and enemy magic was a purple of its own.
+//
+// The two sides are also pulled apart in LIGHTNESS (friend dark, foe lighter),
+// and the foe counter carries a pale keyline the friend one never has, so the
+// armies differ in greyscale and for low vision -- colour is the third channel,
+// not the only one. docs/ui-policy.md, "Identity".
+
+/** Which side a player is on, as the viewer sees it. */
+export type Side = "friend" | "foe";
+
+export function sideOf(player: number, viewer: number): Side {
+  return player === viewer ? "friend" : "foe";
+}
+
+/** Base colour per side, as [r, g, b]. */
+const SIDE_RGB: Record<Side, [number, number, number]> = {
+  friend: [48, 80, 124],
+  foe: [170, 72, 56],
+};
+
+/** The pale keyline every foe counter is wrapped in, and nothing friendly is. */
+export const foeKeyline = "rgba(247, 241, 226, 0.95)";
+
+/** A side's colour as a CSS string, optionally translucent. */
+export function sideColor(side: Side, alpha = 1): string {
+  return rgb(SIDE_RGB[side], alpha);
+}
+
+/** Shorthand: the colour of a player's things, as the viewer sees them. */
+export function colorFor(player: number, viewer: number, alpha = 1): string {
+  return sideColor(sideOf(player, viewer), alpha);
+}
+
+/**
+ * Status colours, kept off both side hues so a status is never mistaken for a
+ * side: recovery is violet (and dashed where it is a ring), a sworn last stand
+ * is a heavy dark ink, terror a deep plum.
+ */
+export const statusColor = {
+  recover: "#6a4c93",
+  lastStand: "#2f2418",
+  terror: "#5d2f6e",
+  /** A company whose nerve has gone: drawn as a struck pennant. */
+  broken: "#f4ecd8",
+} as const;
+
+/**
+ * Player colours by seat, kept for the few callers that have no viewer (the
+ * menu's unit icons are always drawn as the player's own). Seat 0 is the
+ * friend colour, seat 1 the foe colour.
+ */
 export const playerColor: Record<number, string> = {
-  0: "#3b5f8a", // blue
-  1: "#8c3a34", // red
-};
-
-export const playerColorSoft: Record<number, string> = {
-  0: "rgba(59, 95, 138, 0.22)",
-  1: "rgba(140, 58, 52, 0.22)",
+  0: sideColor("friend"),
+  1: sideColor("foe"),
 };
 
 // -- unit counters -------------------------------------------------------------
@@ -75,9 +134,10 @@ const DEEP: [number, number, number] = [34, 28, 21];
 /** Shared light endpoint: warm parchment light, never pure white. */
 const LIFT: [number, number, number] = [242, 233, 212];
 
+/** Counter base by colour seat: 0 is the friend colour, 1 the foe colour. */
 const BASE: Record<number, [number, number, number]> = {
-  0: [59, 95, 138],
-  1: [140, 58, 52],
+  0: SIDE_RGB.friend,
+  1: SIDE_RGB.foe,
 };
 
 function mix(a: readonly number[], b: readonly number[], t: number): [number, number, number] {
@@ -98,7 +158,10 @@ function toneOf(type: string): number {
   return TONE[type] ?? 0;
 }
 
-/** Body fill for one unit type of one army. */
+/**
+ * Body fill for one unit type. `seat` picks the colour: 0 the friend colour, 1
+ * the foe colour -- pass `player === viewer ? 0 : 1` from the battlefield.
+ */
 export function unitFill(player: number, type: string): string {
   const base = BASE[player] ?? BASE[0];
   const t = toneOf(type);

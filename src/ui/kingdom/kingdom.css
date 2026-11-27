@@ -1,0 +1,164 @@
+/*
+ * The kingdom map's HUD and cards (K2; docs/audit/u1-kingdom-map.md), the
+ * resources bar, economy panel and choice menus (K3; docs/audit/u2-economy-panels.md).
+ *
+ * Text sizes are rem, never px, and never under 1rem (docs/ui-policy.md; U2-01
+ * moved this file onto the policy: K2 had 12-15 px labels here, which
+ * tools/ui-check.ts now refuses for this file as for style.css).
+ *
+ * Its own file so the kingdom UI never edits the battle's style.css. Linked
+ * from index.html and e2e.html rather than imported from TypeScript, because
+ * the same modules run under Node (the e2e fake and the headless tools), where
+ * a CSS import does not resolve (docs/PROVISIONAL.md K2.5).
+ *
+ * Colours are the measured pairs from the U1 audit: body text #3a3124 on the
+ * panel #efe8d6 (10.4:1), secondary #5f5138 (6.3:1), focus #1f4f86 (6.8:1).
+ * Nothing here is lighter than #5f5138 on text.
+ */
+
+.kingdom-ui {
+  position: fixed; inset: 0; z-index: 8;
+  /* The map underneath takes the pointer; only the panels catch it. */
+  pointer-events: none;
+  font: 1rem/1.45 "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  color: #3a3124;
+}
+.kingdom-ui .k-top, .kingdom-ui .k-card, .kingdom-ui .k-foot > *, .kingdom-ui .k-paused { pointer-events: auto; }
+
+.k-top {
+  position: absolute; left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right));
+  top: max(10px, env(safe-area-inset-top));
+  display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap;
+}
+.k-box {
+  background: rgba(239, 232, 214, 0.95); border: 1px solid #a3906c; border-radius: 4px;
+  padding: 6px 12px; box-shadow: 0 2px 8px rgba(38, 32, 22, 0.18);
+}
+.k-stores { max-width: 40rem; display: flex; flex-direction: column; gap: 0.125rem; }
+.k-stocks { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.25rem 0.875rem; }
+.k-stock { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
+.k-icon { width: 1.25rem; height: 1.25rem; flex: none; }
+.k-stock-name { color: #5f5138; }
+.k-stock-value { font-weight: 700; font-variant-numeric: tabular-nums; }
+/* The sign is written ("+6", "−3"); the colour only repeats it. */
+.k-stock-delta { font-variant-numeric: tabular-nums; color: #5f5138; }
+.k-stock-delta.up { color: #2f5a2a; }
+.k-stock-delta.down { color: #8c3a34; }
+.k-stock-lines { margin: 0; color: #5f5138; }
+.k-trouble { margin: 0; font-weight: 700; color: #8c3a34; }
+.k-label { letter-spacing: 0.075rem; text-transform: uppercase; color: #5f5138; }
+.k-date { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 14em; }
+.k-date-line { font-weight: 600; }
+.k-weather { color: #5f5138; }
+.k-speed { display: flex; gap: 6px; align-items: center; }
+
+.k-btn {
+  font: inherit; font-size: 1rem; cursor: pointer; min-height: 2.25rem; min-width: 2.75rem;
+  padding: 4px 12px; border-radius: 3px;
+  background: #efe8d6; border: 1px solid #a3906c; color: #3a3124;
+}
+.k-btn:hover { background: #f6f0e0; }
+/* The pressed speed is filled AND bold, not only coloured (U1-11). */
+.k-btn.on { background: #3b5f8a; border-color: #2e4a6d; color: #f2ead6; font-weight: 700; }
+/* Focus is a two-tone ring, unlike hover (a fill): it holds on parchment and on the filled buttons. */
+.k-btn:focus-visible, .k-card-title:focus-visible, .k-menu-title:focus-visible {
+  outline: 3px solid #1f4f86; outline-offset: 2px; box-shadow: 0 0 0 5px #f6f0e0;
+}
+.k-front { margin-left: 8px; }
+
+.k-paused {
+  position: absolute; left: 50%; top: 92px; transform: translateX(-50%);
+  background: #3a3124; color: #f2ead6; padding: 6px 18px; border-radius: 3px;
+  font-weight: 700; letter-spacing: 1px;
+}
+
+.k-foot {
+  position: absolute; left: max(12px, env(safe-area-inset-left)); bottom: max(12px, env(safe-area-inset-bottom));
+  max-width: min(38em, calc(100vw - 24px)); display: flex; flex-direction: column; gap: 6px;
+}
+.k-alerts {
+  list-style: none; margin: 0; padding: 6px 12px;
+  background: rgba(239, 232, 214, 0.92); border: 1px solid #a3906c; border-radius: 4px;
+}
+.k-alerts:empty { display: none; }
+.k-alerts li + li { color: #5f5138; }
+.k-result {
+  margin: 0; padding: 6px 12px; background: rgba(239, 232, 214, 0.95);
+  border-left: 3px solid #2e4a6d; border-radius: 2px;
+}
+.k-result:empty { display: none; }
+.k-notice {
+  margin: 0; padding: 8px 12px; background: #f3e3c4; border-left: 3px solid #8c3a34; color: #5f3a2a;
+}
+.k-keys {
+  position: absolute; right: max(12px, env(safe-area-inset-right)); bottom: max(10px, env(safe-area-inset-bottom));
+  margin: 0; max-width: 30em; text-align: right; color: #3a3124;
+  background: rgba(239, 232, 214, 0.85); padding: 4px 10px; border-radius: 3px;
+}
+.k-keys-tab { cursor: pointer; font-weight: 600; }
+.k-keys[open] .k-keys-tab { display: inline; margin-right: 0.5em; }
+
+/* -- cards (non-modal: the map stays live beside them) ------------------- */
+.k-card {
+  position: absolute; right: max(12px, env(safe-area-inset-right)); top: 96px;
+  width: min(24rem, calc(100vw - 24px)); max-height: calc(100vh - 180px); overflow: auto;
+  background: #efe8d6; border: 1px solid #a3906c; border-radius: 4px;
+  padding: 14px 18px; box-shadow: 0 8px 28px rgba(38, 32, 22, 0.3);
+}
+.k-card-title { margin: 0; font-size: 1.3125rem; }
+.k-sub { margin: 2px 0 10px; color: #5f5138; }
+.k-rows { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+.k-rows dt { color: #5f5138; }
+.k-rows dd { margin: 0; }
+.k-card-actions { display: flex; gap: 10px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+.k-hint { color: #5f5138; }
+.k-why { margin: 0.5rem 0 0; color: #8c3a34; }
+.k-why:empty { display: none; }
+
+/* -- the economy panel (K3) ----------------------------------------------- */
+.k-economy { margin-top: 0.75rem; border-top: 1px solid #a3906c; padding-top: 0.5rem; }
+.k-section { margin: 0.625rem 0 0.25rem; font-size: 1.0625rem; }
+.k-toggles { display: flex; flex-wrap: wrap; gap: 0.375rem; margin: 0.5rem 0; }
+.k-list { margin: 0 0 0.375rem; padding-left: 1.25rem; }
+.k-fields { list-style: none; padding-left: 0; }
+.k-field { display: flex; flex-wrap: wrap; gap: 0.375rem; align-items: center; margin-bottom: 0.375rem; }
+.k-field > span { flex: 1 1 12rem; }
+.k-warn { color: #8c3a34; font-weight: 700; }
+.k-good { color: #2f5a2a; font-weight: 700; }
+
+/* -- choice menus: build and sow (modal) ----------------------------------- */
+.k-menu-backdrop {
+  position: absolute; inset: 0; pointer-events: auto; z-index: 2;
+  background: rgba(38, 32, 22, 0.35);
+  display: flex; align-items: center; justify-content: center; padding: 1rem;
+}
+.k-menu {
+  width: min(38rem, 100%); max-height: calc(100vh - 2rem); overflow: auto;
+  background: #efe8d6; border: 1px solid #a3906c; border-radius: 4px;
+  padding: 1rem 1.25rem; box-shadow: 0 8px 28px rgba(38, 32, 22, 0.35);
+}
+.k-menu-title { margin: 0; font-size: 1.3125rem; }
+.k-choices { list-style: none; margin: 0.5rem 0; padding: 0; display: grid; gap: 0.5rem; }
+.k-choice { display: grid; grid-template-columns: minmax(9rem, max-content) 1fr; gap: 0.25rem 0.75rem; align-items: start; }
+.k-choice-btn { text-align: left; font-weight: 700; }
+.k-choice-detail { display: flex; flex-direction: column; color: #3a3124; }
+.k-choice-detail .k-why { margin: 0; }
+/* Not on offer now: dashed, muted, AND it says so in words ("Not now: ..."). */
+.k-choice.unavailable .k-choice-btn { border-style: dashed; background: #e6dfcf; color: #5f5138; font-weight: 400; }
+.k-menu-status { margin: 0.25rem 0 0; min-height: 1.45em; color: #8c3a34; }
+
+/* The front screen's line about the save: darker than .home-note, which is decorative. */
+.k-home-line { color: #5f5138; }
+
+/* Small windows: the card becomes a bottom sheet so it never covers the king's corner. */
+@media (max-width: 700px) {
+  .k-card { left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: 55vh; border-radius: 8px 8px 0 0; }
+  .k-keys { display: none; }
+  /* The stores stay: they are what the realm runs on (K2 hid the placeholder here). */
+  .k-stores { max-width: none; flex: 1 1 100%; }
+  .k-choice { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kingdom-ui * { transition: none !important; animation: none !important; }
+}

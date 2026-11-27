@@ -1262,6 +1262,53 @@ section("ai");
   check("two AI matches from one seed never diverge", diverged < 0,
     diverged >= 0 ? "diverged at tick " + diverged : "identical throughout");
 
+  // RF-07 / RF-08: the AI's picture of the enemy is built only from what its
+  // men have seen. Two worlds, identical but for an extra player-0 company
+  // parked far out of the AI's sight, must give the AI the same estimate --
+  // and the estimate must count only the men it can actually see.
+  {
+    function fairWorld(extra: boolean): World {
+      const fw = new World({ seed: 0x5eed, tilesWide: 80, tilesHigh: 60, aiPlayers: [1], soldierCapacity: 512 });
+      unit(fw, 0, "line", 900, 900, 0);
+      if (extra) unit(fw, 0, "line", 400, 2600, 0);
+      unit(fw, 1, "line", 1150, 900, M.PI);
+      return fw;
+    }
+    const plain = fairWorld(false);
+    const padded = fairWorld(true);
+    for (let t = 0; t < TICK_RATE * 2; t++) {
+      plain.step();
+      padded.step();
+    }
+    const seenNow = (fw: World): number => {
+      let n = 0;
+      for (const g of fw.groups) {
+        if (g.player !== 0) continue;
+        for (const m of g.members) if (fw.soldiers.alive[m] === 1 && fw.canSee(1, m)) n++;
+      }
+      return n;
+    };
+    const ep = plain.ai[0].estimate;
+    const ex = padded.ai[0].estimate;
+    const farUnseen = padded.groups.filter((g) => g.player === 0).some((g) => !g.seenBy[1]);
+    check("the extra company really is out of the AI's sight", farUnseen);
+    check("the AI's strength estimate ignores unseen enemies",
+      ep.known && ex.strength === ep.strength && ex.morale === ep.morale,
+      ep.strength + " vs " + ex.strength);
+    check("and counts only the men it can see", ex.strength === seenNow(padded),
+      ex.strength + " estimated, " + seenNow(padded) + " in sight");
+    check("the AI's thinking does not depend on unseen enemies",
+      plain.ai[0].style === padded.ai[0].style, plain.ai[0].style + " vs " + padded.ai[0].style);
+
+    // With nothing seen at all, it assumes parity rather than reading the
+    // enemy's true size off the world.
+    const blind = new World({ seed: 0x5eed, tilesWide: 80, tilesHigh: 60, aiPlayers: [1], soldierCapacity: 512 });
+    unit(blind, 0, "line", 300, 2700, 0);
+    unit(blind, 1, "line", 2200, 400, M.PI);
+    for (let t = 0; t < TICK_RATE; t++) blind.step();
+    check("an AI that has seen nothing knows nothing", !blind.ai[0].estimate.known && blind.ai[0].estimate.strength === 0);
+  }
+
   console.log("");
   console.log("  ai match    " + (ticks / TICK_RATE).toFixed(0) + "s, " + (startMen - endMen) + " dead");
   console.log("  postures    " + [...stylesSeen].join(", "));
@@ -1989,10 +2036,117 @@ section("deployment");
     const glyph: { x: number; y: number }[] = [];
     for (let i = 0; i < 24; i++) glyph.push({ x: q.anchorX, y: q.anchorY - 60 + i * 5 });
     const said = cmd2.commit(glyph);
+    // A setup order lands at the next tick boundary, like any order, so it
+    // reaches the log and a replay (PC-05); the world steps while deploying
+    // without advancing its clock.
+    w2.step();
     check("a formation glyph works while setting out", q.shape === "line",
       "shape " + q.shape + ", said: " + said);
-    check("and it applies at once rather than queueing", w2.orders.size === 0,
-      w2.orders.size + " queued");
+    check("and it applies at the next step rather than waiting for the battle",
+      w2.orders.size === 0 && w2.tick === 0, w2.orders.size + " queued, tick " + w2.tick);
+  }
+
+  // PC-04 / PC-05: dragging a company you grabbed sets it down somewhere else
+  // -- a "place" order applied at a tick boundary, so lockstep peers and the
+  // replay log see it -- and is never read as a formation glyph.
+  {
+    const mk = (): { w: World; q: Group } => {
+      const w5 = new World({ seed: 25, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+      const men: number[] = [];
+      for (let i = 0; i < 20; i++) men.push(w5.spawnSoldier(0, "line", 900 + (i % 5) * 13, 900 + ((i / 5) | 0) * 13, 0));
+      for (let i = 0; i < 6; i++) w5.spawnSoldier(1, "line", 2400, 900, M.PI);
+      const q5 = w5.createGroup(0, men) as Group;
+      w5.deploying = true;
+      return { w: w5, q: q5 };
+    };
+    const { w: w5, q: q5 } = mk();
+    const cmd5 = new Commander(w5, 0);
+    cmd5.placeable = () => true;
+    const cx = q5.anchorX;
+    const cy = q5.anchorY;
+    const drag: { x: number; y: number }[] = [];
+    for (let i = 0; i <= 20; i++) drag.push({ x: cx + i * 8, y: cy + i * 2 });
+    // The pen feeds the stroke as it grows; the commander places on the way.
+    for (let i = 1; i <= drag.length; i++) cmd5.update(drag.slice(0, i));
+    const ghost = cmd5.ghost;
+    const said5 = cmd5.commit(drag);
+    w5.step();
+    check("dragging a grabbed company during deployment places it",
+      said5 === "placed" && q5.anchorX > cx + 120, "said " + said5 + ", moved " + (q5.anchorX - cx).toFixed(0));
+    check("and does not change its shape", q5.shape === "square", q5.shape);
+    check("the ink says what the drag will do", ghost?.mode === "place", ghost ? ghost.mode : "no ghost");
+    check("a place order is a logged order, not a direct write", w5.tick === 0);
+
+    // Replaying the same orders into a fresh world reproduces it exactly.
+    const replay = mk();
+    const placed: Order[] = [];
+    {
+      const again = mk();
+      const realIssue = again.w.orders.issue.bind(again.w.orders);
+      again.w.orders.issue = ((body, player, tick) => {
+        const o = realIssue(body, player, tick);
+        placed.push(o);
+        return o;
+      }) as typeof again.w.orders.issue;
+      const c = new Commander(again.w, 0);
+      c.placeable = () => true;
+      for (let i = 1; i <= drag.length; i++) c.update(drag.slice(0, i));
+      c.commit(drag);
+      again.w.step();
+      for (const o of placed) replay.w.orders.push(o);
+      replay.w.step();
+      check("a replayed placement lands the company in the same place",
+        placed.length > 0 && hashWorld(replay.w) === hashWorld(again.w),
+        placed.length + " place orders");
+    }
+
+    // Ground nobody can stand on refuses the whole move.
+    const { w: w6, q: q6 } = mk();
+    const before6 = q6.anchorX;
+    w6.orders.issue({ kind: "place", squad: q6.id, x: -500, y: 900 }, 0, 0);
+    w6.step();
+    check("a company is not set down off the map", q6.anchorX === before6);
+    // After the battle starts a place order is ignored.
+    w6.deploying = false;
+    w6.orders.issue({ kind: "place", squad: q6.id, x: 1500, y: 900 }, 0, w6.tick);
+    w6.step();
+    check("a place order is ignored once the battle has begun", M.abs(q6.anchorX - before6) < 40,
+      "moved " + (q6.anchorX - before6).toFixed(0));
+  }
+
+  // PC-02 / PC-03 / PC-07: what the ink tells you before and after you lift.
+  {
+    const w7 = new World({ seed: 26, tilesWide: 60, tilesHigh: 60, soldierCapacity: 256 });
+    const men: number[] = [];
+    for (let i = 0; i < 20; i++) men.push(w7.spawnSoldier(0, "line", 900 + (i % 5) * 13, 900 + ((i / 5) | 0) * 13, 0));
+    for (let i = 0; i < 6; i++) w7.spawnSoldier(1, "line", 2400, 900, M.PI);
+    w7.createGroup(0, men);
+    const cmd7 = new Commander(w7, 0);
+    // A scribble with nothing selected, out on open ground.
+    const scribble: { x: number; y: number }[] = [];
+    for (let i = 0; i < 30; i++) scribble.push({ x: 1600 + (i % 2) * 40, y: 1600 + i * 6 });
+    const saidNothing = cmd7.commit(scribble);
+    check("a stroke that does nothing is marked rejected", cmd7.rejected, "said " + saidNothing);
+    check("and says why", saidNothing.length > 8 && !/^\s*$/.test(saidNothing), saidNothing);
+
+    const loop: { x: number; y: number }[] = [];
+    for (let i = 0; i <= 36; i++) {
+      const t = (i / 36) * M.PI * 2;
+      loop.push({ x: 926 + M.cos(t) * 90, y: 920 + M.sin(t) * 90 });
+    }
+    cmd7.update(loop);
+    const lassoGhost = cmd7.ghost;
+    check("a lasso's ink counts the men it will take",
+      lassoGhost?.mode === "order" && /\d+ men/.test(lassoGhost.label), lassoGhost ? lassoGhost.label : "no ghost");
+    cmd7.commit(loop);
+    check("an accepted stroke is not marked rejected", !cmd7.rejected);
+
+    const ab = ABILITY_IDS[0];
+    w7.abilityState[0].set(ab, { left: 1, readyAt: 0 });
+    cmd7.arm(ab);
+    cmd7.update([{ x: 1500, y: 1500 }, { x: 1502, y: 1500 }]);
+    check("an armed ability's ink is the ability, not an order", cmd7.ghost?.mode === "ability",
+      cmd7.ghost ? cmd7.ghost.mode : "no ghost");
   }
 
   // Gathering men into a group must work: it is the whole point of deploying.

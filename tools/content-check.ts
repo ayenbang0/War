@@ -117,7 +117,7 @@ check("twelve abilities", ABILITY_IDS.length === 12, String(ABILITY_IDS.length))
 check("eight doctrines", DOCTRINE_IDS.length === 8, String(DOCTRINE_IDS.length));
 check("eight commanders", COMMANDER_IDS.length === 8, String(COMMANDER_IDS.length));
 check("six difficulties", DIFFICULTY_IDS.length === 6, String(DIFFICULTY_IDS.length));
-check("ten battlefields", LEVELS.length === 10, String(LEVELS.length));
+check("eleven battlefields", LEVELS.length === 11, String(LEVELS.length));
 {
   const ids = new Set(LEVELS.map((l) => l.id));
   check("battlefield ids are unique", ids.size === LEVELS.length);
@@ -469,7 +469,12 @@ section("campaign");
     }
   }
   check("every chapter points at real battles, captains and roads", bad.length === 0, bad.join("; "));
-  check("every battlefield appears in the chronicle", LEVELS.every((l) => CHAPTERS.some((c) => c.levelId === l.id)));
+  // The siege of the Last Wall is the Marchwarden's lost ending made playable
+  // in skirmish, and the kingdom's Act IV (K10) is where a siege enters the
+  // story; the old chronicle ends at the heights and is not re-written for it
+  // (PROVISIONAL P8.6). Every other battlefield must still be in it.
+  check("every battlefield appears in the chronicle",
+    LEVELS.every((l) => l.siege !== undefined || CHAPTERS.some((c) => c.levelId === l.id)));
 
   const walk = (road: number, winAll: boolean): Progress => {
     let p = freshProgress();

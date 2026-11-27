@@ -1,9 +1,14 @@
 /**
  * The commander's ability bar.
  *
- * Buttons you click, the way any game does it. Keys 1..n still work for anyone
- * who wants them, but an ability the player has to remember a number for is an
- * ability they will not use.
+ * Buttons you click, the way any game does it. Keys 1..9, 0, - and = still work
+ * for anyone who wants them, but an ability the player has to remember a number
+ * for is an ability they will not use.
+ *
+ * AB-01: there are twelve abilities and nothing caps how many distinct ones are
+ * bought, but keys used to stop at 9 and the bar was one row that never wrapped,
+ * so a tenth slot could be reached by neither key nor click. Every slot now has
+ * a key (ui/keys.ts ABILITY_SLOT_KEYS) and the bar wraps inside the window.
  *
  * These are the COMMANDER's, not a unit's: no company casts a barrage, and
  * nothing on the field has to be selected to spend one. Clicking a button arms
@@ -17,6 +22,7 @@
 import { ABILITIES, type AbilityId } from "../content/abilities.ts";
 import type { World } from "../sim/world.ts";
 import type { Commander } from "../input/commander.ts";
+import { ABILITY_SLOT_LABELS } from "./keys.ts";
 
 /** A one-glyph mark per ability, so a button reads before its label does. */
 const MARK: Record<AbilityId, string> = {
@@ -41,21 +47,37 @@ type Slot = {
   readonly cool: HTMLElement;
 };
 
+/**
+ * K11 (audit K10-05): the siege defender's gates, on a button as well as G,
+ * so a player with only a pointer can sally or shut the door. The press goes
+ * through the same path as the key (BattleLayer.toggleGates); the sim still
+ * refuses to shut a gate on men.
+ */
+export type GateControl = {
+  /** Swing the gates; the layer issues the order. */
+  readonly toggle: () => void;
+};
+
 export class AbilityBar {
   private readonly slots: Slot[] = [];
   private readonly root: HTMLElement;
+  private gate: HTMLButtonElement | null = null;
+  private gateShown: "open" | "shut" = "shut";
 
-  constructor(root: HTMLElement, ids: readonly AbilityId[], commander: Commander) {
+  constructor(root: HTMLElement, ids: readonly AbilityId[], commander: Commander, gates: GateControl | null = null) {
     this.root = root;
     root.textContent = "";
     root.className = "ability-bar";
-    if (ids.length === 0) {
+    if (ids.length === 0 && gates === null) {
       root.style.display = "none";
       return;
     }
     root.style.display = "flex";
 
-    ids.forEach((id, i) => {
+    // More distinct abilities than there are keys cannot be bought (there are
+    // exactly as many keys as abilities), but if one ever were, a slot with no
+    // key must not silently appear.
+    ids.slice(0, ABILITY_SLOT_LABELS.length).forEach((id, i) => {
       const a = ABILITIES[id];
       const b = document.createElement("button");
       b.className = "ability";
@@ -63,7 +85,7 @@ export class AbilityBar {
 
       const key = document.createElement("span");
       key.className = "ability-key";
-      key.textContent = String(i + 1);
+      key.textContent = ABILITY_SLOT_LABELS[i];
       const mark = document.createElement("span");
       mark.className = "ability-mark";
       mark.textContent = MARK[id];
@@ -85,10 +107,42 @@ export class AbilityBar {
       root.appendChild(b);
       this.slots.push({ id, root: b, count, cool });
     });
+
+    if (gates !== null) {
+      const g = document.createElement("button");
+      g.className = "ability ability-gates";
+      const key = document.createElement("span");
+      key.className = "ability-key";
+      key.textContent = "G";
+      const mark = document.createElement("span");
+      mark.className = "ability-mark";
+      mark.textContent = "⛩";
+      const name = document.createElement("span");
+      name.className = "ability-name";
+      name.textContent = "Open the gates";
+      g.append(key, mark, name);
+      g.onclick = () => {
+        gates.toggle();
+        g.blur();
+      };
+      root.appendChild(g);
+      this.gate = g;
+    }
   }
 
   /** Refresh counts, cooldowns and which one is armed. Called once a frame. */
   update(world: World, player: number, commander: Commander, tickRate: number): void {
+    if (this.gate !== null) {
+      const live = !world.deploying && !world.outcome && world.hasGates(player);
+      const open = world.gatesOpen(player);
+      const want = open ? "open" : "shut";
+      if (this.gateShown !== want) {
+        this.gateShown = want;
+        (this.gate.querySelector(".ability-name") as HTMLElement).textContent = open ? "Shut the gates" : "Open the gates";
+      }
+      this.gate.disabled = !live;
+      this.gate.classList.toggle("spent", !live);
+    }
     for (const s of this.slots) {
       const c = world.abilityState[player].get(s.id);
       const left = c ? c.left : 0;
@@ -100,11 +154,21 @@ export class AbilityBar {
       s.root.classList.toggle("armed", commander.armed === s.id);
       // Spent or cooling reads as unavailable rather than merely unhelpful.
       s.root.classList.toggle("spent", left <= 0 || cooling > 0);
+      // None left is struck through as well, so "gone" does not rest on a
+      // faded fill alone (the faded fill is shared with cooling).
+      s.root.classList.toggle("exhausted", left <= 0);
     }
   }
 
   /** Hide the bar, for the tutorial and once the match is over. */
   hide(): void {
     this.root.style.display = "none";
+  }
+
+  /** Empty and hide the bar, when its battle is torn down. */
+  dispose(): void {
+    this.hide();
+    this.root.textContent = "";
+    this.slots.length = 0;
   }
 }

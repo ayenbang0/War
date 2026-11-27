@@ -10,7 +10,11 @@
 
 import type { CombatEvent } from "../sim/world.ts";
 import type { Camera } from "./camera.ts";
-import { playerColor } from "./palette.ts";
+import { colorFor } from "./palette.ts";
+import { motion } from "./motion.ts";
+
+/** Who in a blow the viewer can see; see perception.ts. */
+export type BlowSight = (e: CombatEvent) => { attacker: boolean; victim: boolean };
 
 /** Seconds an arrow takes to cross, regardless of distance. */
 const SHOT_FLIGHT = 0.28;
@@ -44,6 +48,8 @@ type Dust = { x: number; y: number; born: number; r: number; group: number };
 type Flash = { x: number; y: number; born: number; kind: string; player: number };
 
 export class Effects {
+  /** Whose eyes these effects are drawn for: colours are friend/foe to them. */
+  private readonly viewer: number;
   private shots: Shot[] = [];
   private impacts: Impact[] = [];
   private sparks: Spark[] = [];
@@ -51,6 +57,21 @@ export class Effects {
   private flashes: Flash[] = [];
   /** Deterministic-enough jitter for the sprays. Presentation only. */
   private seed = 0x9e3779b9;
+
+  constructor(viewer = 0) {
+    this.viewer = viewer;
+  }
+
+  /**
+   * A company's nerve has just gone, where the viewer can see it (RF-09): a
+   * one-shot ring in its side colour over the men, the map's counterpart of
+   * the HUD line. The struck pennant the renderer then draws is the lasting
+   * sign; this is the moment.
+   */
+  ingestBreak(x: number, y: number, player: number, now: number): void {
+    if (this.flashes.length > MAX_EFFECTS) return;
+    this.flashes.push({ x, y, born: now, kind: "break", player });
+  }
 
   /** A small, cheap, repeatable random. Never touches the simulation. */
   private rand(): number {
@@ -105,17 +126,21 @@ export class Effects {
     });
   }
 
-  /** Take one tick's worth of blows. Call after every world.step(). */
-  ingest(
-    events: readonly CombatEvent[], now: number,
-    visible?: (x: number, y: number) => boolean,
-  ): void {
+  /**
+   * Take one tick's worth of blows. Call after every world.step().
+   *
+   * `see` is the renderer's perception (RF-04): effects are drawn above the
+   * fog, so a blow is drawn only if the viewer can see one of the two men in
+   * it -- the same test that decides whether their counters are drawn. A blow
+   * whose striker is hidden lands as an impact on its victim with no streak,
+   * so an arrow out of the fog does not draw a line back to the archer.
+   */
+  ingest(events: readonly CombatEvent[], now: number, see?: BlowSight): void {
     for (const e of events) {
       if (this.shots.length + this.impacts.length > MAX_EFFECTS) return;
-      // Effects are drawn above the fog, so a blow struck where you cannot see
-      // must not be drawn at all, or every enemy volley lights up its archers.
-      if (visible && !visible(e.x0, e.y0) && !visible(e.x1, e.y1)) continue;
-      if (e.kind === "shot") {
+      const seen = see ? see(e) : { attacker: true, victim: true };
+      if (!seen.attacker && !seen.victim) continue;
+      if (e.kind === "shot" && seen.attacker) {
         this.shots.push({
           x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1,
           born: now, player: e.player, lethal: e.lethal,
@@ -176,7 +201,7 @@ export class Effects {
       const lag = Math.max(0, t - 0.16);
       const tx = s.x0 + (s.x1 - s.x0) * lag;
       const ty = s.y0 + (s.y1 - s.y0) * lag;
-      ctx.strokeStyle = playerColor[s.player] ?? "#3f3527";
+      ctx.strokeStyle = colorFor(s.player, this.viewer);
       ctx.globalAlpha = 1 - t * 0.25;
       ctx.lineWidth = Math.max(1.4, 3 * cam.zoom);
       ctx.beginPath();
@@ -199,7 +224,7 @@ export class Effects {
       const sy = cam.worldToScreenY(im.y);
       const r = (im.lethal ? 13 : 7) * cam.zoom * (0.5 + t * 2.2);
       ctx.globalAlpha = (1 - t) * (im.lethal ? 1 : 0.8);
-      ctx.strokeStyle = im.lethal ? "#e0452f" : (playerColor[im.player] ?? "#3f3527");
+      ctx.strokeStyle = im.lethal ? "#e0452f" : colorFor(im.player, this.viewer);
       ctx.lineWidth = Math.max(1.4, (im.lethal ? 3.4 : 2.2) * cam.zoom);
       if (im.lethal) {
         // A fallen soldier gets a cross, which reads at a glance as a loss.
@@ -239,23 +264,28 @@ export class Effects {
       // at the full length the rings stacked into a wall that buried the
       // counters underneath -- you could not see the fight for the effects.
       const life = f.kind === "kill" ? KILL_FLASH_LIFE : FLASH_LIFE;
-      const t = (now - f.born) / life;
-      if (t >= 1) continue;
+      const age = (now - f.born) / life;
+      if (age >= 1) continue;
+      // Reduced motion: the mark stands at a fixed size and simply fades,
+      // rather than popping outward -- a flash, not a strobe (ui-policy.md).
+      const t = motion.reduced ? 0.35 : age;
       const sx = cam.worldToScreenX(f.x);
       const sy = cam.worldToScreenY(f.y);
       const colour = f.kind === "blink" ? "#a86fd0"
         : f.kind === "kill" ? "#e0452f"
           : f.kind === "breakBow" ? "#e8a33a"
-            : "#f4d76a";
+            : f.kind === "break" ? colorFor(f.player, this.viewer)
+              : "#f4d76a";
       const grow = f.kind === "kill" ? 46 : 150;
       const rr = Math.max(5, (14 + t * grow) * cam.zoom);
       // A filled core that dies fast, under a ring that keeps going: the pop.
-      ctx.globalAlpha = (1 - t) * (1 - t) * (f.kind === "kill" ? 0.42 : 0.7);
+      const fade = motion.reduced ? 1 - age : 1;
+      ctx.globalAlpha = fade * (1 - t) * (1 - t) * (f.kind === "kill" ? 0.42 : 0.7);
       ctx.fillStyle = colour;
       ctx.beginPath();
       ctx.arc(sx, sy, rr * 0.55, 0, Math.PI * 2);
       ctx.fill();
-      ctx.globalAlpha = (1 - t) * (f.kind === "kill" ? 0.8 : 1);
+      ctx.globalAlpha = fade * (1 - t) * (f.kind === "kill" ? 0.8 : 1);
       ctx.strokeStyle = colour;
       ctx.lineWidth = Math.max(1.5, (1 - t) * (f.kind === "kill" ? 4.5 : 9) * cam.zoom);
       ctx.beginPath();

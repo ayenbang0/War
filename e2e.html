@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8" />
+<title>E2E</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!--
+  The browser end-to-end harness. The same page elements as index.html, so the
+  real app boots on it; src/e2e/ then drives it with real pointer and keyboard
+  events. ?list lists the scenarios, ?only=name runs one. The verdict is in
+  #e2e-results and in the tab title. See src/e2e/harness.ts.
+-->
+<link rel="stylesheet" href="/src/style.css" />
+<link rel="stylesheet" href="/src/ui/kingdom/kingdom.css" />
+<link rel="stylesheet" href="/src/ui/kingdom/explore.css" />
+<link rel="stylesheet" href="/src/ui/city/city.css" />
+<link rel="stylesheet" href="/src/ui/story/story.css" />
+<style>
+  #e2e-results {
+    position: fixed; right: 8px; bottom: 8px; z-index: 100; margin: 0;
+    max-width: 46vw; max-height: 60vh; overflow: auto; pointer-events: none;
+    font: 11px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap;
+    background: rgba(20, 18, 14, 0.82); color: #e8e0cc; padding: 6px 8px; border-radius: 3px;
+  }
+</style>
+<canvas id="stage"></canvas>
+<div id="home"></div>
+<div id="report"></div>
+<div id="hud" class="panel"></div>
+<div id="abilities"></div>
+<div id="dialog"></div>
+<pre id="e2e-results">loading</pre>
+<script type="module" src="/src/e2e/main.ts"></script>

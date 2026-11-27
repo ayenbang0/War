@@ -31,7 +31,8 @@ const BANNED_GLOBALS = [
   ["getContext", "no rendering in sim/"],
 ];
 
-const FORBIDDEN_LAYERS = /(^|\/)(render|input|net)\//;
+// ui/ and app/ are browser-side too (app/ holds the localStorage wrapper).
+const FORBIDDEN_LAYERS = /(^|\/)(render|input|net|ui|app)\//;
 
 function walk(dir) {
   const out = [];
@@ -88,7 +89,14 @@ for (const file of files) {
     }
   }
 
-  for (const m of decommented.matchAll(/\bfrom\s*["']([^"'\n]+)["']/g)) {
+  // `from "x"` covers every named import and re-export; a bare side-effect
+  // `import "x"` and a dynamic `import("x")` carry no `from`, so they are
+  // matched separately -- otherwise either would slip a renderer into sim/.
+  const specifiers = [
+    ...decommented.matchAll(/\bfrom\s*["']([^"'\n]+)["']/g),
+    ...decommented.matchAll(/\bimport\s*\(?\s*["']([^"'\n]+)["']/g),
+  ];
+  for (const m of specifiers) {
     const spec = m[1];
     if (FORBIDDEN_LAYERS.test(spec)) {
       violations.push(rel + ": imports " + spec + " -- sim/ must not depend on that layer");

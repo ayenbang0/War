@@ -6,99 +6,191 @@
  * before they knew what the game was. A title, a play button and a way into the
  * tutorial is what every game does, and for good reason.
  *
+ * The game is the story only now (the owner's amendment to PLAN.md): the old
+ * skirmish setup ("Play") and the Marchwarden chronicle ("Campaign") are gone,
+ * and The Exile of Rimaros is the play button. K9 folded the old lesson
+ * ("Learn the gestures") into the story's opening: a new exile plays the
+ * cutscene and then the tutorial, and the tutorial is replayed from Menu on
+ * the map -- so Home has no tutorial button of its own (docs/PROVISIONAL.md
+ * K9.14). Continue goes straight back to the saved realm.
+ *
  * The figures shown here are COUNTED from the content, never typed in. A hand
  * written "ten unit types" becomes a lie the moment someone adds an eleventh,
- * and this screen is the first thing a player reads.
+ * and this screen is the first thing a player reads. Only what the story game
+ * really has is counted: nothing that belonged to the removed modes.
  */
 
 import { UNIT_TYPE_IDS } from "../content/unit-types.ts";
-import { LEVELS } from "../content/levels/index.ts";
-import { COMMANDER_IDS } from "../content/commanders.ts";
 import { DOCTRINE_IDS } from "../content/doctrines.ts";
 import { TERRAIN_INFO } from "../sim/terrain.ts";
 import { ABILITY_IDS } from "../content/abilities.ts";
-import { CHAPTERS } from "../content/campaign.ts";
+import { RIMAROS } from "../content/kingdom/map.ts";
+import { BUILDING_IDS } from "../content/kingdom/buildings.ts";
+import { CROP_IDS } from "../content/kingdom/crops.ts";
+import { FACTION_IDS } from "../content/kingdom/factions.ts";
+import { STORY_EVENTS } from "../content/story/events.ts";
+import { UPGRADE_IDS } from "../content/story/upgrades.ts";
+import { BATTLE_GESTURE_CLASSES, KINGDOM_PEN_CLASSES } from "../content/story/tutorial.ts";
 
-export type HomeChoice = "play" | "tutorial" | "campaign";
+import { K } from "../content/kingdom/ui-strings.ts";
 
-const el = (tag: string, cls?: string, text?: string): HTMLElement => {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text !== undefined) n.textContent = text;
-  return n;
+import { KINGDOM_DIFFICULTIES, KINGDOM_DIFFICULTY_IDS, type KingdomDifficultyId } from "../content/kingdom/difficulty.ts";
+import { domScreen, el } from "./dom-screen.ts";
+import type { Screen } from "./screen-stack.ts";
+
+export type HomeChoice = "exile" | "exile-new";
+
+/**
+ * What the front screen says about the kingdom save (K2). Asked again every
+ * time Home comes back to the top, because leaving the kingdom saves it.
+ */
+export type ExileStatus =
+  | { readonly kind: "none" }
+  | { readonly kind: "saved"; readonly when: string }
+  /** A save is there but cannot be read; the Exile button asks before replacing it. */
+  | { readonly kind: "unreadable" };
+
+/**
+ * K11: the new game's difficulty, as Home reads and sets it. The app keeps it
+ * (in the same storage as the save, so it is remembered); Home only shows it.
+ */
+export type NewGameDifficulty = {
+  get(): KingdomDifficultyId;
+  set(id: KingdomDifficultyId): void;
 };
 
 /** One counted figure with its label. */
-function figure(value: string, label: string): HTMLElement {
+function figure(value: number, label: string): HTMLElement {
   const box = el("div", "home-figure");
-  box.appendChild(el("div", "home-figure-value", value));
+  box.appendChild(el("div", "home-figure-value", String(value)));
   box.appendChild(el("div", "home-figure-label", label));
   return box;
 }
 
-/** Show the front screen and resolve with what the player chose to do. */
-export function openHome(root: HTMLElement): Promise<HomeChoice> {
-  return new Promise((resolve) => {
-    root.textContent = "";
-    root.className = "home";
-    const panel = el("div", "home-panel");
+/**
+ * The counted figures, in the order they are shown. Exported so the checks
+ * can hold each one to its source.
+ */
+export function homeFigures(): readonly { readonly value: number; readonly label: string }[] {
+  return [
+    { value: RIMAROS.holdings.length, label: "holdings on the map" },
+    { value: RIMAROS.provinces.length, label: "provinces" },
+    { value: FACTION_IDS.length, label: "powers in the realm" },
+    { value: STORY_EVENTS.length, label: "things to find exploring" },
+    { value: UPGRADE_IDS.length, label: "special upgrades" },
+    { value: BUILDING_IDS.length, label: "buildings to raise" },
+    { value: CROP_IDS.length, label: "crops to sow" },
+    { value: UNIT_TYPE_IDS.length, label: "kinds of soldier" },
+    { value: DOCTRINE_IDS.length, label: "doctrines" },
+    { value: ABILITY_IDS.length, label: "reserves to call on" },
+    { value: Object.keys(TERRAIN_INFO).length, label: "kinds of ground" },
+    // Taps select; the rest are orders (content/story/tutorial.ts names them).
+    { value: KINGDOM_PEN_CLASSES.filter((c) => !c.startsWith("tap")).length, label: "orders you can draw on the map" },
+    { value: BATTLE_GESTURE_CLASSES.length, label: "orders you can draw in battle" },
+  ];
+}
 
-    panel.appendChild(el("h1", "home-title", "WAR"));
-    panel.appendChild(el("p", "home-tagline", "A slow, deliberate battle. You command by drawing."));
+/**
+ * The front screen, as the bottom of the screen stack. It is never popped:
+ * every other screen comes back here in the end.
+ */
+export function homeScreen(
+  root: HTMLElement, choose: (choice: HomeChoice) => void, exile: () => ExileStatus = () => ({ kind: "none" }),
+  newGame: NewGameDifficulty | null = null,
+): Screen {
+  let play: HTMLButtonElement | null = null;
+  let exileNew: HTMLElement | null = null;
+  let exileLine: HTMLElement | null = null;
+  // Updated in place, never rebuilt: rebuilding would drop the focus the
+  // stack restores to the button the player left Home by.
+  const showExile = (): void => {
+    if (!exileNew || !exileLine) return;
+    const s = exile();
+    exileLine.textContent = s.kind === "saved" ? K.homeContinue(s.when)
+      : s.kind === "unreadable" ? K.homeUnreadable : K.homeFresh;
+    exileNew.style.display = s.kind === "saved" ? "inline-block" : "none";
+  };
+  return domScreen({
+    name: "home",
+    kind: "full",
+    root,
+    // The bottom screen has nothing to trap focus away from.
+    trapsFocus: false,
+    firstFocus: () => play,
+    build: () => {
+      root.textContent = "";
+      root.className = "home";
+      const panel = el("div", "home-panel");
 
-    const actions = el("div", "home-actions");
-    const play = el("button", "home-play", "Play") as HTMLButtonElement;
-    const chronicle = el("button", "home-teach", "Campaign") as HTMLButtonElement;
-    const teach = el("button", "home-teach", "Learn the gestures") as HTMLButtonElement;
-    actions.append(play, chronicle, teach);
-    panel.appendChild(actions);
+      panel.appendChild(el("h1", "home-title", "WAR"));
+      panel.appendChild(el("p", "home-tagline", "A fallen king, a realm to win back, and a pen to command it with."));
 
-    panel.appendChild(el("p", "home-note",
-      "New here? Learn the gestures first -- every order in this game is a stroke of the pen."));
+      // The Exile is the game: it is the play button, and the first focus.
+      // "Begin a new exile" shows only while there is a realm to replace.
+      const actions = el("div", "home-actions");
+      play = el("button", "home-play", K.homeButton) as HTMLButtonElement;
+      exileNew = el("button", "home-teach", K.homeNew);
+      actions.append(play, exileNew);
+      panel.appendChild(actions);
+      exileLine = el("p", "home-note k-home-line");
+      panel.appendChild(exileLine);
+      play.onclick = () => choose("exile");
+      exileNew.onclick = () => choose("exile-new");
+      showExile();
+      // K11: how hard a NEW exile is (a game under way keeps the difficulty it
+      // began with -- the save carries it). Three toggle buttons in a labelled
+      // group, the choice in words beside them; Gentle until the player picks.
+      if (newGame) {
+        const box = el("div", "home-difficulty");
+        box.setAttribute("role", "group");
+        const label = el("p", "home-note home-difficulty-label", K.homeDifficulty);
+        label.id = "home-difficulty-label";
+        box.setAttribute("aria-labelledby", label.id);
+        const row = el("div", "home-difficulty-row");
+        const blurb = el("p", "home-note home-difficulty-blurb");
+        const buttons: HTMLElement[] = [];
+        const show = (): void => {
+          const cur = newGame.get();
+          KINGDOM_DIFFICULTY_IDS.forEach((id, i) => buttons[i].setAttribute("aria-pressed", String(id === cur)));
+          blurb.textContent = KINGDOM_DIFFICULTIES[cur].name + ": " + KINGDOM_DIFFICULTIES[cur].blurb;
+        };
+        for (const id of KINGDOM_DIFFICULTY_IDS) {
+          const b = el("button", "home-teach home-difficulty-choice", KINGDOM_DIFFICULTIES[id].name);
+          b.setAttribute("data-difficulty", id);
+          b.onclick = () => { newGame.set(id); show(); };
+          buttons.push(b);
+          row.appendChild(b);
+        }
+        box.append(label, row, blurb);
+        panel.appendChild(box);
+        show();
+      }
 
-    // -- what the game is ------------------------------------------------------
-    panel.appendChild(el("h2", undefined, "How it plays"));
-    const about = el("div", "home-about");
-    for (const line of [
-      "You command with the left mouse button and nothing else. A loop gathers men into a company, a line marches them, a glyph drawn over them changes their formation, and a stroke onto an enemy commits them to a fight.",
-      "There is no build order and no economy. You bring the army you chose, and what happens to it is decided by ground, formation, nerve and where you are looking -- neither side sees the whole field.",
-      "Nerve decides battles more often than numbers. A company taken in the flank breaks; a company that keeps its ranks holds far longer than the same men in a crowd.",
-    ]) about.appendChild(el("p", undefined, line));
-    panel.appendChild(about);
+      panel.appendChild(el("p", "home-note",
+        "New here? A new exile opens with the story so far and then a tutorial of every control -- every order, on the map and on the field, is a stroke of the pen."));
 
-    // -- counted figures -------------------------------------------------------
-    panel.appendChild(el("h2", undefined, "In the box"));
-    const grid = el("div", "home-figures");
-    grid.appendChild(figure(String(UNIT_TYPE_IDS.length), "kinds of soldier"));
-    grid.appendChild(figure(String(LEVELS.length), "battlefields"));
-    grid.appendChild(figure(String(Object.keys(TERRAIN_INFO).length), "kinds of ground"));
-    grid.appendChild(figure(String(COMMANDER_IDS.length), "enemy commanders"));
-    grid.appendChild(figure(String(DOCTRINE_IDS.length), "doctrines"));
-    grid.appendChild(figure("14", "orders you can draw"));
-    grid.appendChild(figure(String(ABILITY_IDS.length), "reserves to call on"));
-    grid.appendChild(figure(String(new Set(LEVELS.map((l) => l.victory.mode)).size), "ways to win"));
-    grid.appendChild(figure(String(CHAPTERS.length), "chapters of the chronicle"));
-    panel.appendChild(grid);
+      // -- what the game is ----------------------------------------------------
+      panel.appendChild(el("h2", undefined, "How it plays"));
+      const about = el("div", "home-about");
+      for (const line of [
+        "You are the fallen king of Rimaros, exiled to the farthest reach with one companion and nothing else: no holding, no army, no coin. Rally followers from the hamlets, claim an empty keep, and take the realm back a holding at a time.",
+        "The realm runs in real time, and you can pause it. Every holding of yours has a town to go down into, with lots to build on, fields to sow and people to carry through the winter. Beyond what you know lie ruins, shrines and old forts, and what you find there can turn the war.",
+        "You command with the left mouse button and nothing else. On the map a line marches an army and a ring sets it to guard; on the field a loop gathers men into a company, a line marches them, a glyph changes their formation, and a stroke onto an enemy commits them to a fight. There, nerve decides more often than numbers.",
+      ]) about.appendChild(el("p", undefined, line));
+      panel.appendChild(about);
 
-    panel.appendChild(el("p", "home-foot",
-      "Middle-drag or WASD to move the map, wheel or up/down arrows to zoom, " +
-      "space to pause, F2 for the debug read-out."));
+      // -- counted figures -----------------------------------------------------
+      panel.appendChild(el("h2", undefined, "In the box"));
+      const grid = el("div", "home-figures");
+      for (const f of homeFigures()) grid.appendChild(figure(f.value, f.label));
+      panel.appendChild(grid);
 
-    play.onclick = () => {
-      root.style.display = "none";
-      resolve("play");
-    };
-    chronicle.onclick = () => {
-      root.style.display = "none";
-      resolve("campaign");
-    };
-    teach.onclick = () => {
-      root.style.display = "none";
-      resolve("tutorial");
-    };
+      panel.appendChild(el("p", "home-foot",
+        "Middle- or right-drag or WASD to move the map, the wheel to zoom, " +
+        "space to pause, Esc to cancel a stroke or leave."));
 
-    root.appendChild(panel);
-    root.style.display = "flex";
-    play.focus();
+      root.appendChild(panel);
+    },
+    revealed: () => showExile(),
   });
 }

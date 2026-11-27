@@ -17,13 +17,8 @@
 
 import type { World } from "../sim/world.ts";
 import type { Group } from "../sim/entities.ts";
-
-const el = (tag: string, cls?: string, text?: string): HTMLElement => {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text !== undefined) n.textContent = text;
-  return n;
-};
+import { domScreen, el } from "./dom-screen.ts";
+import type { Screen } from "./screen-stack.ts";
 
 const CAUSE_LABEL = ["hand to hand", "shot", "flanked"];
 
@@ -44,14 +39,16 @@ function stat(label: string, value: string): HTMLElement {
  * Render the report for a finished match.
  *
  * `onAgain` is wired to a button rather than reloading here, so the caller
- * decides what "again" means.
+ * decides what "again" means, and `again` is the label naming where it goes.
+ * Returns the button, which takes focus when the report opens.
  */
 export function showAfterAction(
   root: HTMLElement, world: World, viewer: number, onAgain: () => void,
-  chronicle?: { entry: string; again: string },
-): void {
+  again: string, chronicle?: { entry: string; note?: string },
+  realm?: { heading: string; lines: readonly string[] },
+): HTMLButtonElement | null {
   const outcome = world.outcome;
-  if (!outcome) return;
+  if (!outcome) return null;
   const foe = 1 - viewer;
 
   root.textContent = "";
@@ -65,9 +62,19 @@ export function showAfterAction(
   const foeAi = world.ai.find((a) => a.player === foe);
   panel.appendChild(el("p", "aa-detail",
     (foeAi ? "Against the " + foeAi.who.name + ", " + foeAi.who.epithet + ".  " : "") + outcome.detail));
+  // K5: a story battle says first what it meant for the kingdom -- that is
+  // what the player decides the next march by.
+  if (realm && realm.lines.length > 0) {
+    panel.appendChild(el("h2", undefined, realm.heading));
+    const list = el("ul", "aa-realm");
+    for (const line of realm.lines) list.appendChild(el("li", undefined, line));
+    panel.appendChild(list);
+  }
   if (chronicle) {
     panel.appendChild(el("h2", undefined, "From the chronicle"));
     panel.appendChild(el("p", "aa-chronicle", chronicle.entry));
+    // BS-01: when storage is refused, say so where the result is written down.
+    if (chronicle.note) panel.appendChild(el("p", "storage-notice", chronicle.note));
   }
 
   // -- what killed your men, and theirs ---------------------------------------
@@ -134,10 +141,39 @@ export function showAfterAction(
     panel.appendChild(log);
   }
 
-  const again = el("button", "aa-again", chronicle ? chronicle.again : "Fight again") as HTMLButtonElement;
-  again.onclick = onAgain;
-  panel.appendChild(again);
+  const button = el("button", "aa-again", again) as HTMLButtonElement;
+  button.onclick = onAgain;
+  panel.appendChild(button);
 
   root.appendChild(panel);
-  root.style.display = "flex";
+  return button;
+}
+
+/**
+ * The report as an overlay on the screen stack. The battlefield stays drawn
+ * behind it but takes no input: the overlay allows only the UI context, so
+ * WASD no longer pans and digits no longer arm abilities under it (GK-03).
+ */
+export function afterActionScreen(
+  root: HTMLElement, world: World, viewer: number,
+  opts: {
+    again: string; onAgain: () => void; chronicle?: { entry: string; note?: string };
+    realm?: { heading: string; lines: readonly string[] };
+  },
+): Screen {
+  let button: HTMLButtonElement | null = null;
+  return domScreen({
+    name: "after-action",
+    kind: "overlay",
+    root,
+    pausesSim: true,
+    firstFocus: () => button,
+    build: () => {
+      root.className = "after-action";
+      button = showAfterAction(root, world, viewer, opts.onAgain, opts.again, opts.chronicle, opts.realm);
+    },
+    // Esc does not dismiss the report: the button names where it goes, and an
+    // Esc meant for the battle a moment ago should not skip the account of it.
+    onKey: (k) => (k.code === "Escape" ? "handled" : "pass"),
+  });
 }

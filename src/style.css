@@ -1,0 +1,238 @@
+/*
+ * The game's one stylesheet, shared by index.html (the game) and e2e.html (the
+ * browser test harness), so both pages lay the same screens out identically.
+ *
+ * It follows ONE scaling policy, written down in docs/ui-policy.md (audit
+ * BS-06, BS-07, BS-08, RT-02): sizes in rem off the browser's own root size,
+ * so the player's text-size and zoom settings are honoured; no body or HUD
+ * text below 1rem (16 px at the default); every text colour at 4.5:1 or
+ * better against the panel it sits on (3:1 for large text and UI glyphs);
+ * an authored focus ring; one scroll region per screen; motion reduced when
+ * the player asks. The kingdom screens use the same tokens.
+ */
+:root {
+  /* Inks. --ink-2 is the darkest the old secondary ink could go and still read
+     as secondary: 4.7:1 or better on every panel colour below. */
+  --ink: #3a3124;
+  --ink-1: #5f5138;
+  --ink-2: #6d5c40;
+  --friend: #30507c;
+  --foe: #7a3029;
+  --panel: #e7dfcb;
+  --panel-2: #efe8d6;
+  --focus: #1f3f66;
+  --focus-halo: #f7f1e2;
+  --mono: ui-monospace, "Cascadia Mono", Menlo, monospace;
+  /* The body text floor. Nothing a player reads is smaller. */
+  --text: 1rem;
+  --text-lg: 1.125rem;
+}
+html { font-size: 100%; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #d9cbb0; }
+/*
+ * An authored focus ring (BS-10), unlike hover in kind, not just in degree:
+ * hover changes a button's fill, focus draws a two-tone ring outside it -- a
+ * pale halo under a dark ring -- so it holds 3:1 on parchment, on the blue
+ * primary buttons and over the map alike.
+ */
+:focus { outline: none; }
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--focus-halo);
+}
+/* Motion, reduced when asked (docs/ui-policy.md "Motion"). The battlefield
+   reads the same preference in src/render/motion.ts. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+  }
+}
+canvas { display: block; touch-action: none; cursor: crosshair; }
+canvas.panning { cursor: grabbing; }
+.panel {
+  position: fixed;
+  font: var(--text)/1.45 var(--mono);
+  color: #4a3f30;
+  /* Near-opaque: the panel sits over forest and water as well as parchment,
+     and its text must hold 4.5:1 over the darkest of them. */
+  background: rgba(235, 227, 209, 0.92);
+  border: 1px solid rgba(120, 102, 74, 0.4);
+  padding: 0.45rem 0.6rem;
+  border-radius: 3px;
+  pointer-events: none;
+  /* Line breaks are kept, but long lines WRAP to the window (BS-08): at 200%
+     zoom the lesson text reflows instead of running off the edge. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#hud {
+  left: max(12px, env(safe-area-inset-left)); top: max(12px, env(safe-area-inset-top));
+  line-height: 1.5; letter-spacing: 0.01em;
+  max-width: min(34rem, calc(100vw - 24px));
+  max-height: calc(100vh - 24px); overflow: hidden;
+}
+/* RT-01: the HUD is emptied whenever no battle is live, and an empty panel
+   must not show as a dark box behind the menu screens. */
+#hud:empty { display: none; }
+/* -- after-action report ------------------------------------------------- */
+.after-action {
+  position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+  background: rgba(38, 32, 22, 0.86); z-index: 12; overflow: auto; padding: 24px;
+  font: var(--text)/1.5 var(--mono); color: var(--ink);
+  /* One scroll region per screen (RT-02): the overlay scrolls, the panel does
+     not, and `margin: auto` centres it without cutting off its top. */
+  align-items: flex-start;
+}
+.aa-panel {
+  background: var(--panel); border: 1px solid #a3906c; border-radius: 4px;
+  padding: 1.4rem 1.6rem; max-width: 44rem; width: 100%; margin: auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.35); box-sizing: border-box;
+}
+.aa-verdict { margin: 0 0 2px; font-size: 1.5rem; letter-spacing: 1px; }
+.aa-won { color: var(--friend); }
+.aa-lost { color: var(--foe); }
+.aa-drew { color: var(--ink-2); }
+.aa-detail { margin: 0 0 16px; color: var(--ink-2); }
+.aa-panel h2 {
+  font-size: var(--text); letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-2); margin: 18px 0 6px; font-weight: 600;
+}
+.aa-panel h3 { font-size: var(--text); margin: 0 0 6px; font-weight: 600; }
+.aa-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 18px; }
+.aa-col {
+  border: 1px solid #cbbc9c; border-radius: 3px; padding: 8px 10px; background: var(--panel-2);
+}
+.aa-stat { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.aa-label { color: var(--ink-1); }
+.aa-value { font-weight: 600; }
+.aa-lesson {
+  margin: 12px 0 0; padding: 8px 10px; background: var(--panel-2);
+  border-left: 3px solid var(--foe); color: var(--ink-1);
+}
+.aa-companies { display: grid; gap: 3px; }
+.aa-company {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 2px 10px;
+  padding: 4px 8px; background: var(--panel-2); border: 1px solid #ded2b6; border-radius: 2px;
+}
+.aa-name { font-weight: 600; }
+.aa-record { color: var(--ink-2); }
+.aa-fate { color: var(--ink-2); }
+.aa-log { display: grid; gap: 2px; }
+.aa-log-line { color: var(--ink-1); }
+/* K5: what a story battle meant for the realm, first under the verdict. */
+.aa-realm {
+  margin: 0; padding: 8px 10px 8px 1.6rem; background: var(--panel-2);
+  border-left: 3px solid var(--friend); color: var(--ink-1); line-height: 1.5;
+}
+.aa-again { margin-top: 20px; padding: 8px 18px; font: inherit; cursor: pointer; }
+/* -- home screen --------------------------------------------------------- */
+.home {
+  position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+  background: rgba(38, 32, 22, 0.9); z-index: 14; overflow: auto; padding: 24px;
+  font: var(--text)/1.6 var(--mono); color: var(--ink);
+  align-items: flex-start;
+}
+.home-panel {
+  background: var(--panel); border: 1px solid #a3906c; border-radius: 4px;
+  padding: 2rem 2.4rem 1.75rem; max-width: 46rem; width: 100%; margin: auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.35); text-align: center; box-sizing: border-box;
+}
+.home-title {
+  margin: 0; font-size: 3.6rem; letter-spacing: 0.28em; font-weight: 600;
+  color: #3b3227; text-indent: 0.28em;
+}
+.home-tagline { margin: 2px 0 26px; color: var(--ink-2); }
+.home-actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-bottom: 10px; }
+.home-play, .home-teach { font: inherit; cursor: pointer; padding: 0.8rem 2.1rem; border-radius: 3px; }
+.home-play {
+  background: var(--friend); color: #f4efe2; border: 1px solid #24406a;
+  font-size: var(--text-lg); font-weight: 600; letter-spacing: 2px; padding: 0.8rem 3.2rem;
+}
+.home-play:hover { background: #3c6293; }
+.home-teach { background: var(--panel-2); border: 1px solid #b9a880; color: var(--ink); }
+.home-teach:hover { background: #f6f0e0; }
+.home-note { margin: 6px 0 4px; color: var(--ink-2); }
+/* K11: the new game's difficulty. Pressed is said by a heavier border and bold, not by colour alone. */
+.home-difficulty { margin: 8px 0 6px; }
+.home-difficulty-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.home-difficulty-choice { padding: 0.5rem 1.2rem; }
+.home-difficulty-choice[aria-pressed="true"] { font-weight: 700; border: 2px solid var(--ink); background: #f6f0e0; }
+.home-panel h2 {
+  font-size: var(--text); letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-2); margin: 24px 0 8px; font-weight: 600; text-align: left;
+}
+.home-about { text-align: left; color: var(--ink-1); }
+.home-about p { margin: 0 0 9px; }
+.home-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 8px; }
+.home-figure {
+  background: var(--panel-2); border: 1px solid #ded2b6; border-radius: 3px; padding: 9px 6px;
+}
+.home-figure-value { font-size: 1.4rem; font-weight: 600; color: var(--friend); }
+.home-figure-label { color: var(--ink-2); }
+.home-foot { margin: 20px 0 0; color: var(--ink-2); text-align: left; }
+.aa-chronicle {
+  margin: 0; padding: 10px 14px; background: #f1e9d4; border-left: 3px solid #a3906c;
+  font-family: Georgia, "Iowan Old Style", serif; font-size: var(--text-lg); line-height: 1.6; color: #3f3527;
+}
+/* -- ability bar --------------------------------------------------------- */
+/* AB-01: the bar spans the window and wraps, so ten to twelve slots stay on
+   screen (two rows at 1280 px) instead of overflowing both edges. The strip
+   itself lets the pointer through to the map; only the buttons catch it. */
+/* The bar is compact -- key, mark, name and count on ONE line, the cooldown
+   on a second only while there is one -- so even at the 16 px floor ten slots
+   take two short rows at 1280 px, and the battle opens with the army framed
+   above it (RT-04, BattleLayer.frameOpening). */
+.ability-bar {
+  position: fixed; left: 14px; right: 14px; bottom: max(10px, env(safe-area-inset-bottom));
+  display: none; flex-wrap: wrap; justify-content: center; gap: 5px 6px; z-index: 6;
+  pointer-events: none;
+  font: var(--text)/1.25 var(--mono);
+}
+.ability {
+  display: grid; grid-template-columns: auto auto auto auto; grid-auto-rows: auto;
+  align-items: center; gap: 0 0.4rem; cursor: pointer;
+  background: rgba(231, 223, 203, 0.96); color: var(--ink);
+  border: 1px solid #a3906c; border-radius: 3px; padding: 0.3rem 0.55rem;
+  box-shadow: 0 3px 12px rgba(0,0,0,0.28); font: inherit; text-align: left;
+}
+.ability { pointer-events: auto; }
+.ability:hover { background: #f2ecdb; }
+.ability.armed { border-color: var(--friend); background: #dce6f1; box-shadow: 0 0 0 2px var(--friend); }
+/* Spent or cooling fades; none left (.exhausted) also strikes the name through,
+   so it does not rely on contrast alone. */
+.ability.spent { opacity: 0.6; }
+.ability.exhausted .ability-name { text-decoration: line-through; }
+.ability-key {
+  font-weight: 600; color: var(--ink-2);
+  border-right: 1px solid #cbbc9c; padding-right: 0.4rem; align-self: stretch;
+  display: flex; align-items: center;
+}
+.ability-mark { font-size: var(--text); }
+.ability-name { font-weight: 600; }
+.ability-count { color: var(--ink-2); }
+.ability-cool { grid-column: 1 / -1; color: var(--foe); text-align: right; }
+.ability-cool:empty { display: none; }
+/* -- confirm dialog ------------------------------------------------------ */
+.dialog {
+  position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+  background: rgba(38, 32, 22, 0.62); z-index: 30; padding: 24px; overflow: auto;
+  font: var(--text)/1.5 var(--mono); color: var(--ink);
+  align-items: flex-start;
+}
+.dialog-panel {
+  background: var(--panel); border: 1px solid #a3906c; border-radius: 4px;
+  padding: 1.4rem 1.6rem; max-width: 32rem; width: 100%; margin: auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.35); box-sizing: border-box;
+}
+.dialog-title { margin: 0 0 8px; font-size: var(--text-lg); font-weight: 600; }
+.dialog-body { margin: 0; color: var(--ink-1); }
+.dialog-actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: flex-end; margin-top: 18px; }
+.dialog-actions .home-play { font-size: var(--text); letter-spacing: 0.5px; padding: 0.6rem 1.4rem; }
+.dialog-actions .home-teach { padding: 0.6rem 1.4rem; }
+/* -- storage refused (BS-01) --------------------------------------------- */
+.storage-notice {
+  margin: 0 0 14px; padding: 8px 12px; text-align: left;
+  background: #f3e3c4; border-left: 3px solid var(--foe); color: #5f3a2a;
+}

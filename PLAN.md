@@ -13,6 +13,18 @@ Open questions for the user are collected in **§A.7 / §B.12**. Everything mark
 
 ---
 
+> **Amendments from the user, 2026-11-25 (these override the plan where they differ):**
+> 1. **Start from nothing** — see §A.5.
+> 2. **Story only.** "The game should ONLY be the storyline now, with the battles in between. All previous content should be used but not as a sandbox battler, it is a full on game." The standalone Play/setup battler, the old Marchwarden Campaign mode and skirmish point-buy are removed as modes. Every unit, battlefield, captain, doctrine and reserve is reused inside the story. This overrides §B.4/§B.12.3's "skirmish keeps point-buy".
+>    **Removed now, not at K5** (owner, 2026-11-25: "There should be no more battle/campaign. ONLY the storyline gameplay."). Home offers The Exile of Rimaros as its play button and Learn the gestures beside it (the lesson stays until K9 folds it into the story's opening -- done: see item 3); the setup and chronicle screens are deleted. Until K5 launches battles from the story, tests reach the battle layer through the test hook's `launchBattle` (docs/PROVISIONAL.md).
+> 3. **Opening cutscene, then a tutorial of every control.** The game opens with a story cutscene, then a tutorial that teaches all gestures and controls (battle pen vocabulary, kingdom map, city view, camera, time, keys).
+>    **Built in K9** (2026-11-26): a new exile plays the cutscene, then the tutorial in a practice realm (the map, the town, the drill, armies on the map); "Learn the gestures" is gone from Home, the map's Menu replays the tutorial, and Continue skips the opening (docs/kingdom.md K9, docs/PROVISIONAL.md K9.11–K9.20). The capital siege is fought as an assault on fixed walls, the named scope cut (K9.8).
+> 4. **Twice the map.** Twice the plan's region count (72 holdings instead of 36): twice the cities and areas to explore, with exploration events and special upgrades found there.
+> 5. **Armies on the map.** The fallen king's armies are visible on the kingdom map (K4).
+> 6. **A city level.** Each city can be zoomed into, one level down, to build buildings, manage politics, farms and so on. Layers become Kingdom → City → Battle (army) → Troop.
+> 7. **A real year and easier farming** (owner, 2026-11-26): "the years in the game should be actual 12 month years rather than the fake 4 month ones"; "The granary should actually store food that the king can access. The fields sowed with plants shouldn't just randomly die without reason."; "The fields should be auto harvested and the king can automatically make them sowed"; "The game needs to be a lot easier with managing resources." Built as ECON (docs/kingdom.md, docs/PROVISIONAL.md ECON.n).
+> How these fold into the phases is in §B.11a.
+
 # Part A — Storyline: The Exile of Rimaros
 
 ## A.1 Premise (user-supplied, fixed)
@@ -64,6 +76,8 @@ Rimaros: a river kingdom of **eight provinces around a crown seat**, ruled for g
 | II | **The Marches** | 3–6 holdings | Take a border governor's seat (a captain) | multiple armies, mercenaries, supply, invasions to defend |
 | III | **The Heartland** | ~40% of map | Legitimacy threshold + hold a held region through a season of counter-invasion | morale/unrest, garrison management, two-front war |
 | IV | **The Crown** | ≥ N regions incl. a road to Rimaros | Siege and retake Rimaros; coronation | siege layer (needs Phase 8), final defence, endings |
+
+> **Amendment (2026-11-25, from the user): start from nothing.** "It really should be a from the scratch kind of game, where the character has nothing, to ruling." Act I therefore no longer opens with a village, a remnant army and coin. The exiled king begins in the Farthest Reach with **no holding, no army and no coin** — only the king and Brother Aldous. Act I becomes: forage to eat, rally the first followers from unclaimed hamlets, claim a first empty holding, survive the winter, win the first skirmish, then claim two neighbouring holdings. Everything after Act I is unchanged. See `docs/PROVISIONAL.md` for how this is built.
 
 Progress is **earned by territory**, not by a chapter counter: act transitions are triggered by the kingdom state (regions held, legitimacy), narrated by a chronicle entry. Defeat does not end the game (existing design principle): losing an army or a region is written into the chronicle and the war continues; only losing the king (see B.9) or the capital-of-exile ends a run.
 
@@ -203,6 +217,15 @@ BattleResult = { winner, per-squad survivors (hp fraction & dead), morale out, c
 | **K12 Netplay readiness** | kingdom lockstep verification | `kingdom-lockstep.ts` green |
 
 **Dependencies / risks:** (1) Phase 8 is unfinished and Act IV needs it — scope-cut option: capital siege as an *assault with fixed walls* if Phase 8 slips; (2) `main.ts` monolith (512 lines) must be split before K2; (3) World currently assumes point-buy armies and fresh-hp squads — the additive config in B.9 is the only intrusion; (4) economy balance is the long pole — build headless sweeps early; (5) scope: 40-node map × 8 factions in a pen-only UI risks clutter — hard caps on armies.
+
+## B.11a Phases after the 2026-11-25 amendments
+| Phase | Adds to the plan's phase | Runnable proof |
+|---|---|---|
+| **K3a Twice the map, exploration** | 72 holdings; unexplored holdings hidden until scouted; exploration events and special upgrades (data-driven) | headless: content valid, 10-year hash deterministic; e2e explores a holding and receives its event |
+| **K3b City view** | a city layer zoomed into from any owned holding: building plots laid out, farms, politics panel (unrest/loyalty hooks for K6); economy panels move there from the region card | e2e zooms into a city, builds, sows, zooms back out |
+| **K4** | armies drawn on the kingdom map (the plan's tokens), as asked | as planned |
+| **K5** | story-only cutover: Play/setup, skirmish and the old Campaign mode removed; every battle comes from the story | as planned + no sandbox entry point remains |
+| **K9** | opening cutscene; tutorial of every control (battle, kingdom, city) | as planned + e2e walks the cutscene and the tutorial |
 
 ## B.12 Open design questions
 1. Kingdom time: **real-time pausable** (recommended: matches "real-time only" spec and lockstep) vs. turn-based.
@@ -393,8 +416,45 @@ Three workings — ward (soaks damage, steadies nerve), hex (amplifies damage, s
 
 A first attempt to test wards through a duel "showed" them costing lives: the control swapped the adepts for a skirmisher, whose fighting swamped the effect being measured. Wards and hexes are now measured directly on damage and morale.
 
-### Phase 8 — Destructible terrain
+### Phase 8 — Destructible terrain — **DONE**
 Damageable fortifications, burnable/clearable forest, destructible bridges, with pathing and vision invalidation on change.
+
+**What was built.**
+- Stone walls, gates and timber palisades have strength stored in the sim (`TerrainGrid.wear`, an owner per tile).
+  - Engines, sappers and barrages wear them down, and fire burns the timber ones.
+  - When one falls it becomes passable rubble with less cover.
+- Woods burn by a hashed, order-free rule (`sim/fire.ts`) and burn out to clearing. Sappers can also fell them.
+- Bridges fall into the river.
+
+**One path for every change.** Every change goes through `TerrainGrid.mutate`. It bumps `revision`, stamps the tile, and records whether the change opened ground, closed it, or changed sight.
+- Companies whose road was walled off wait at the wall and re-plan the tick a breach opens. A closure re-plans only the routes it actually cuts.
+- Sight is re-swept at once.
+- The renderer re-bakes only the chunks that hold a changed tile.
+
+**Nobody ends a tick on water or inside a wall.**
+- Ground that turns impassable under men is settled in the same tick: they are moved to the nearest standing ground and shaken (PROVISIONAL P8.2).
+- Walls are only raised before anyone deploys.
+
+**Siege level.** The siege hook is `WorldConfig.siege` / `LevelDef.siege`, and "The Siege of the Last Wall" is the playable level. Gates are closed to both sides, which is the plan's scope cut for that part (P8.1).
+
+**Verified:** `tools/siege-check.ts` (65 checks, in `npm test`):
+- walls wear and fall, and gates before the curtain
+- an assault waits at the wall and goes in through a breach
+- sight opens through a breach and through a burnt wood
+- fire is repeatable, order-free, and stops at firebreaks
+- a broken bridge blocks a crossing
+- a company on a falling span is put ashore identically on two peers
+- no man is on water or inside a wall at the end of any tick of a destruction-heavy battle
+
+`tools/lockstep.ts` adds a five-minute AI-vs-AI siege with firepots and a barrage on the log. Its two peers and its replay stay hash-identical through 200+ tile changes.
+
+`tools/render-check.ts` proves:
+- a breach re-bakes one chunk of forty
+- wear re-bakes none
+- cracks and flames draw
+- flames are still under reduced motion
+
+**Goldens.** The `stable` golden did not move. `world` moved once, for a movement fix: a mover blocked mid-leg used to drop its route, and now re-plans that leg exactly (P8.9).
 
 ### Phase 9 — Levels and win conditions — **DONE**
 Level config format (terrain, objectives, AI doctrine, magic intensity, point budget), alternate win conditions as selectable modes, minimal HUD (unit status, global morale bar, doctrine, timer), audio, tutorial.

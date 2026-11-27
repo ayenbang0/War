@@ -1,0 +1,635 @@
+/**
+ * Kingdom state: plain records, mutated only by KingdomWorld.tick().
+ *
+ * Every entity -- holding, road, field plot, the king's retinue, and from K4
+ * every army -- takes its id from the world's single monotonic counter, and
+ * every list here is kept in id order, so "for each holding" means the same
+ * sequence on every machine without anyone having to remember to sort.
+ *
+ * Fields that later phases fill are present now as empty placeholders, so the
+ * save format and the hash already cover them and K3/K4 change their
+ * contents, not their shape.
+ */
+
+import type { FactionId } from "../../content/kingdom/factions.ts";
+import type { BiomeId, HoldingKind, RoadTerrainId } from "../../content/kingdom/terrain.ts";
+import type { ProvinceId } from "../../content/kingdom/map.ts";
+import type { StockId, TaxRateId } from "../../content/kingdom/economy.ts";
+import type { Knowledge } from "../../content/kingdom/exploration.ts";
+import type { JusticeId, UnrestBand } from "../../content/kingdom/morale.ts";
+import type { CompanyLeaving, CompanyState } from "../../content/kingdom/mercenaries.ts";
+import type { UpgradeId } from "../../content/story/upgrades.ts";
+import type { UnitTypeId } from "../../content/unit-types.ts";
+import type { DoctrineId } from "../../content/doctrines.ts";
+import type { AbilityId } from "../../content/abilities.ts";
+
+/** The life of a field plot (PLAN.md §B.3; the transitions are in content/kingdom/crops.ts). */
+export type PlotStage = "empty" | "sown" | "growing" | "ripe" | "harvested" | "spoiled";
+/** Hash code of a stage is its index. Append only. */
+export const PLOT_STAGES: readonly PlotStage[] = ["empty", "sown", "growing", "ripe", "harvested", "spoiled"];
+
+export type FieldPlot = {
+  readonly id: number;
+  /** Crop id from content/kingdom/crops.ts; null while empty. Kept through harvested/spoiled, for the record. */
+  crop: string | null;
+  stage: PlotStage;
+  /**
+   * 0..1 through the growing stage. DERIVED from `days` (days / growDays) and
+   * written whenever `days` changes, never accumulated, so it is exact.
+   */
+  progress: number;
+  /**
+   * Days counted in the current stage: sown -> germination days, growing ->
+   * growing-season days, ripe -> days standing ripe.
+   */
+  days: number;
+  /**
+   * 0..100: what is left of the crop. The yield is scaled by it; 0 spoils it.
+   * ECON: no weather harms a crop any more (no draw decides a field's fate);
+   * only an army foraging it does (armies.ts), which the field card says.
+   */
+  health: number;
+  /**
+   * ECON: the crop this field resows by itself when its sowing season comes
+   * (economy.ts autoSow), paying the seed from the stores; null = by hand
+   * only. Ripe fields are reaped by themselves whatever this says.
+   */
+  auto: string | null;
+  /** ECON: why the crop in it was last lost (winter, foraged, burned, overripe), until it is sown again; null if never. */
+  lost: PlotCause | null;
+};
+
+export type Holding = {
+  readonly id: number;
+  /** The content key; what a save and the story refer to. */
+  readonly key: string;
+  readonly name: string;
+  readonly province: ProvinceId;
+  readonly kind: HoldingKind;
+  readonly biome: BiomeId;
+  readonly x: number;
+  readonly y: number;
+  /** A battle here generates its ground from this (with the biome's level). */
+  readonly seed: number;
+  /** Null while unclaimed. */
+  owner: FactionId | null;
+  population: number;
+  /** How many armies may stand garrison. */
+  readonly garrisonSlots: number;
+  /** Ids of armies standing garrison (K4). Never longer than garrisonSlots. */
+  garrison: number[];
+  /** One entry per building slot: a building id (content/kingdom/buildings.ts), or null for empty. */
+  buildings: (string | null)[];
+  /** Per slot: days of work left on the building there; 0 = standing (or empty). */
+  works: number[];
+  /** Per slot: its upkeep went unpaid today, so it did nothing. Rewritten every day. */
+  idle: boolean[];
+  plots: FieldPlot[];
+  /** Tax rate, for an owned holding (content TAX_RATES). */
+  tax: TaxRateId;
+  /** Pennies of tax owed but not yet a whole coin, x100 (see content/kingdom/economy.ts UNITS). */
+  taxCarry: number;
+  /** Grain of dole drawn but not yet a whole grain, x100. */
+  doleCarry: number;
+  /**
+   * Consecutive days this holding has gone short of bread. 0 = fed. THE famine
+   * signal: K6 turns it into unrest, K4 into desertion of a garrison.
+   */
+  famine: number;
+  /**
+   * Days an army has lived off this holding's land this season (K4), reset at
+   * each season's turn. THE foraging signal: K6 turns it into unrest -- an
+   * army that strips the fields is supply bought with goodwill.
+   */
+  foraged: number;
+  /**
+   * K6: unrest, in permille (0..UNREST_MAX; content/kingdom/morale.ts). Its
+   * complement is the town's loyalty. Reckoned every day for a holding whose
+   * lord's economy runs; at RESTLESS_AT it pays half its taxes, at REVOLT_AT
+   * it revolts. 0 while nobody's, or a lord's whose stewards do not run yet.
+   */
+  unrest: number;
+  /** K6: how the holding's quarrels are judged (a lever of the politics card). */
+  justice: JusticeId;
+  /** K6: days left of a festival held here; 0 = none running. */
+  festival: number;
+  /** K6: 1 + the absolute season (morale.ts seasonIndex) of the last pardon here; 0 = never. One a season. */
+  pardoned: number;
+  /**
+   * K10: damage to the holding's walls, per mille of their strength
+   * (0..WALLS_DOWN). Written by a siege battle's result (BattleResult
+   * `damage.walls`); a siege here raises its works already that battered.
+   * At WALLS_DOWN the walls are down: the holding counts as unwalled until
+   * they are mended. Mended in the city view (`repairWalls`).
+   */
+  walls: number;
+  /** K10: per mille of `walls` already paid for and being mended, at WALL_REPAIR.perDay a day. */
+  mend: number;
+};
+
+/**
+ * One faction's stores and soft stats (PLAN.md §B.3). Kept for every faction
+ * in FACTION_IDS order. Only factions whose economy runs (economy.ts
+ * ECONOMY_FACTIONS) see them move in K3; the captains' stores wait for K8's
+ * stewards.
+ */
+export type FactionEconomy = {
+  readonly stocks: Record<StockId, number>;
+  /** Soft stat, 0..LEGITIMACY_MAX. K6 writes its rules; the ledger already records it. */
+  legitimacy: number;
+  /**
+   * Consecutive days the faction's own party (for the king: the king, the
+   * companions and the levy following him) has gone short. 0 = fed. The
+   * party's famine signal, beside each holding's own; K4 turns it into
+   * desertion and attrition.
+   */
+  hunger: number;
+  /** The rate a holding this faction claims starts at; setTax on the realm sets it. */
+  defaultTax: TaxRateId;
+  /**
+   * K6: Mercy/Terror (PLAN.md §A.4), MERCY_MIN..MERCY_MAX, 0 = neither yet;
+   * above 0 mercy, below 0 terror. A soft stat beside legitimacy, but not a
+   * ledger stock: nothing is spent from it, it is a reputation. Moved only by
+   * morale.ts `changeMercy` (the levers, and K9's story choices).
+   */
+  mercy: number;
+  /**
+   * ECON: the crop a holding this faction comes to hold is set to resow on
+   * every field (FieldPlot.auto), or null for none. The realm-wide switch
+   * (setAutoSow on holding 0) sets it.
+   */
+  autoSow: string | null;
+};
+
+/** What the king's party is doing where it stands (the from-nothing start, §A.5). */
+export type KingTask = "none" | "forage" | "rally";
+/** Hash code is the index. Append only. */
+export const KING_TASKS: readonly KingTask[] = ["none", "forage", "rally"];
+
+export type Road = {
+  readonly id: number;
+  /** Holding ids of the two ends, a < b. */
+  readonly a: number;
+  readonly b: number;
+  readonly terrain: RoadTerrainId;
+  /** Miles, end to end. */
+  readonly length: number;
+  /** Effort per mile (content ROAD_TERRAIN). Travel effort = length x cost. */
+  readonly cost: number;
+};
+
+/**
+ * Something that travels the road graph: the king's retinue now, armies from
+ * K4. Flat fields rather than a union so the hash and the save read the same
+ * shape whatever the mover is doing.
+ *
+ * Exactly one of `node` and `road` is non-zero (ids start at 1):
+ *  - at a holding: node = its id, road = 0;
+ *  - on a road:    road = its id, travelling from `from` toward `to`,
+ *                  `along` miles from `from` -- continuous, so two movers can
+ *                  meet halfway between towns (K5 contact).
+ */
+export type Mover = {
+  node: number;
+  road: number;
+  from: number;
+  to: number;
+  along: number;
+  /**
+   * Holdings still to reach, in order. When on a road, route[0] is `to`.
+   * Empty when standing still -- including standing halfway along a road
+   * after a halt.
+   */
+  route: number[];
+};
+
+/**
+ * The exiled king and whoever is with him (PLAN.md §A.5, "start from
+ * nothing"): no holding, no army, no coin -- just the king and Brother Aldous
+ * at a node of the map. K4 lets this retinue rally followers into an army.
+ */
+export type KingToken = {
+  readonly id: number;
+  /** Chosen at the start (docs/PROVISIONAL.md A.7.3). */
+  readonly name: string;
+  /** Named people travelling with the king. */
+  companions: string[];
+  mover: Mover;
+  /** Foraging or rallying at the holding he stands in; cleared by marching or halting. */
+  task: KingTask;
+  /** Whole days spent on the task so far. */
+  taskDays: number;
+  /**
+   * The army the king rides with (K4), or 0 when he travels alone. While he
+   * rides with one, his mover is a copy of the army's and his marches are its
+   * marches (docs/PROVISIONAL.md K4.1).
+   */
+  army: number;
+};
+
+/** What an army is doing where it stands (K4). Hash code is the index. Append only. */
+export type ArmyPosture = "none" | "hold" | "patrol" | "recover" | "ambush";
+/** Append only (the hash and the save use the index). K8 appends `ambush`: lying in wait, hidden, at a holding. */
+export const ARMY_POSTURES: readonly ArmyPosture[] = ["none", "hold", "patrol", "recover", "ambush"];
+
+/**
+ * One squad of a campaign army: a battle squad (content/unit-types.ts) that
+ * remembers what has happened to it. Its strength persists from day to day
+ * and, from K5, from battle to battle: `men` are alive and with the colours
+ * (never more than the type's `soldiers`), and `wounded` of them cannot fight
+ * yet (sick from hunger, hurt in battle) until they mend.
+ */
+export type ArmySquad = {
+  readonly id: number;
+  readonly unit: UnitTypeId;
+  men: number;
+  /** 0..men. */
+  wounded: number;
+  /** Raised from the king's followers without a barracks: serves for bread, takes no wage. */
+  readonly levy: boolean;
+};
+
+/**
+ * An army on the kingdom map (PLAN.md §B.4): a battle army list -- doctrine,
+ * squads, abilities -- wrapped in what the kingdom knows of it. Kept in
+ * world.armies in id order; ids from the world's one counter.
+ */
+export type Army = {
+  readonly id: number;
+  /**
+   * Faction index (FACTION_IDS). Mutable since K7: a free company that turns
+   * its coat (or is poached) goes over to the crown, men, arms and all.
+   */
+  owner: number;
+  /**
+   * K7: 1 + the index in MERCENARIES of the free company this army is, or 0
+   * for an army of the faction's own men. A company army is named for the
+   * company and keeps its own ranks (no merge, split, recruits or barracks
+   * replacements; content/kingdom/mercenaries.ts).
+   */
+  company: number;
+  /** "First Army": the lowest ordinal free when it was raised. */
+  name: string;
+  doctrine: DoctrineId;
+  /** In id order. Never empty while the army is on the map. */
+  squads: ArmySquad[];
+  /** Battle abilities earned by the kingdom for this army (§B.4), at most MAX_OF_ONE_ABILITY of each. */
+  abilities: AbilityId[];
+  /** Where it is, and the destination queue (route) it is working through. */
+  mover: Mover;
+  /** Grain carried in packs and wagons, in person-days. */
+  supply: number;
+  /** 0..100. A placeholder until K6 writes the rules that move it (§B.6); saved and hashed now. */
+  morale: number;
+  /** Who commands it when the king does not ride with it: a captain's name, "" for a sergeant. */
+  captain: string;
+  /** Consecutive days it went short of bread. 0 = fed. K6 reads it as a morale input. */
+  hunger: number;
+  /** Consecutive days it has had wages owed. 0 = paid up. "Late wages" is unpaid > 0. */
+  unpaid: number;
+  /** Coin owed in wages and not yet paid; paid first out of the next coin. */
+  arrears: number;
+  posture: ArmyPosture;
+  /** Whole days in the current posture (a hold counts as dug in from HOLD_DIG_IN_DAYS). */
+  postureDays: number;
+  /** Holdings a patrol walks between, in order (empty unless patrolling). */
+  patrol: number[];
+  /** The patrol stop it is walking to next. */
+  patrolIndex: number;
+  /** An army it is marching to meet (intercept or merge), or 0. */
+  target: number;
+  /** True when `target` is an own army to join on meeting, false for an intercept. */
+  mergeInto: boolean;
+  /** Per-mille remainders of the daily losses, so they are exact integers with no random draw. */
+  desertCarry: number;
+  dieCarry: number;
+  sickCarry: number;
+};
+
+/** Why an army left the map. */
+export type ArmyGoneReason = "starved" | "deserted" | "disbanded" | "fell" | "captured" | "expired";
+
+/**
+ * K7: one free company of the story's table (content/story/mercenaries.ts
+ * MERCENARIES) and where it is in its life with the king (content/kingdom/
+ * mercenaries.ts CompanyState). world.companies holds one per company, in
+ * the table's order.
+ */
+export type Company = {
+  /** Index in MERCENARIES. */
+  readonly index: number;
+  state: CompanyState;
+  /** offered: the tavern's holding. 0 otherwise. */
+  at: number;
+  /** offered: days the offer stands; hired: days left on the contract; away: days before it may come back. */
+  days: number;
+  /** 0..100; hired only (set from the table when hired). */
+  loyalty: number;
+  /** hired: its army's id. 0 otherwise. */
+  army: number;
+  /** hired: the crown's standing bid for it, in coin, or 0. */
+  bid: number;
+  /** Days left to match the bid. */
+  bidDays: number;
+};
+
+/**
+ * K5: two hostile armies have met (or an army has come to the walls of a
+ * hostile holding), and a battle, a withdrawal or an auto-resolve has to
+ * settle it (PLAN.md §B.9; sim/kingdom/descent.ts).
+ *
+ * `sides[0]` is the king's side whenever the king's side is in it, so the
+ * battle's player 0 -- the seat a person takes -- is always sides[0]. An
+ * assault has no army on the defending side: `sides[1].army` is 0 and the
+ * holding's townsmen man its walls.
+ */
+export type ContactKind = "field" | "assault";
+/** How a contact was settled. K8 adds the defender's `yield` (gates opened) and `keep` (the siege of the keep). */
+export type ContactHow = "fight" | "withdraw" | "auto" | "yield" | "keep";
+export const CONTACT_KINDS: readonly ContactKind[] = ["field", "assault"];
+export type ContactSide = {
+  /** Faction index. */
+  readonly faction: number;
+  /** Army id, or 0 for a holding's townsmen behind its walls. */
+  readonly army: number;
+};
+export type Contact = {
+  /** From the world's one counter. */
+  readonly id: number;
+  readonly kind: ContactKind;
+  readonly sides: readonly [ContactSide, ContactSide];
+  /** Which side moved into the other: 0 or 1. */
+  readonly attacker: number;
+  /** The holding the battle is fought at (the nearer end of the road, for a meeting on one). */
+  readonly holding: number;
+  /** The road it happened on, or 0 at a holding. */
+  readonly road: number;
+  /** Kingdom tick it happened on. */
+  readonly tick: number;
+  /**
+   * K10: the townsmen have given up the town and hold the keep (the
+   * `keep` choice). The contact still waits: the siege of the keep is then a
+   * real battle, fought or resolved like any other. Absent for every other
+   * contact (and for every contact of a save before v11).
+   */
+  readonly keep?: true;
+};
+
+/** One army's day, for the feed and the tests. */
+export type ArmyDayReport = {
+  readonly army: number;
+  readonly owner: number;
+  /** Coin owed today, and what was paid (arrears first). */
+  readonly wage: number;
+  readonly paid: number;
+  readonly arrears: number;
+  /** Grain it needed, and where it came from. */
+  readonly ration: number;
+  readonly fromWagons: number;
+  readonly fromStores: number;
+  readonly foraged: number;
+  /** Grain it went short. */
+  readonly short: number;
+  /** Grain loaded into its packs and wagons from the stores. */
+  readonly loaded: number;
+  readonly deserted: number;
+  readonly died: number;
+  readonly sickened: number;
+  readonly healed: number;
+  readonly replaced: number;
+  readonly iron: number;
+};
+
+/**
+ * What a faction found at an exploration site (K3a): the event drawn for it,
+ * and what was chosen. One per site per faction, ever -- that is what makes
+ * "the first visit triggers its event" exact.
+ */
+export type Find = {
+  /** Holding id of the site. */
+  readonly site: number;
+  /** Index in content/story STORY_EVENTS; -1 if every fitting event was already drawn. */
+  readonly event: number;
+  /** Calendar day it was found. */
+  readonly day: number;
+  /** Index of the choice made; -1 while the letter waits. */
+  choice: number;
+  /** A gamble's roll went against it (false when there was no gamble). */
+  failed: boolean;
+};
+
+/**
+ * One faction's map knowledge and finds (K3a; content/kingdom/exploration.ts).
+ * `holdings[i]` is the knowledge of world.holdings[i], `roads[i]` of
+ * world.roads[i]: both are in id order, so the index IS the canonical order.
+ */
+export type FactionExploration = {
+  readonly holdings: Knowledge[];
+  readonly roads: Knowledge[];
+  /** In the order found. */
+  readonly finds: Find[];
+  /** Special upgrades held, in the order gained (content/story/upgrades.ts). */
+  readonly upgrades: UpgradeId[];
+};
+
+/**
+ * Something that happened during a tick, for the UI and the chronicle.
+ * Transient: rebuilt every tick, never saved, never hashed -- everything it
+ * reports is already in the state.
+ */
+export type KingdomEvent =
+  | { kind: "dayBegan"; day: number; weather: string }
+  | { kind: "kingDeparted"; from: number; to: number }
+  | { kind: "kingArrived"; at: number; destination: boolean }
+  | { kind: "orderRejected"; order: { kind: string; player: number; seq: number }; reason: string }
+  // -- K3: the economy -----------------------------------------------------------
+  /** A faction's stocks changed this tick (the resources bar listens for this). */
+  | { kind: "stocksChanged"; faction: number }
+  /** Drought, frost or flood today (kingdom-wide; flood only harms flood country). */
+  // ECON: the crop a field (or a holding's fields, plot 0; or the realm's, holding 0) resows by itself.
+  | { kind: "autoSowSet"; holding: number; plot: number; crop: string | null }
+  | { kind: "plotStage"; holding: number; plot: number; stage: PlotStage; cause: PlotCause }
+  | { kind: "built"; holding: number; slot: number; building: string }
+  | { kind: "buildingStarted"; holding: number; slot: number; building: string }
+  | { kind: "upkeepUnpaid"; holding: number; slot: number; building: string }
+  /** Famine began (days === 1) or ended (days === 0) at a holding, or for the party (holding 0). */
+  | { kind: "famine"; faction: number; holding: number; days: number }
+  | { kind: "foraged"; grain: number; timber: number }
+  | { kind: "rallied"; holding: number; followers: number }
+  /** A rally at a hamlet that has no more to give. */
+  | { kind: "rallyDone"; holding: number }
+  | { kind: "claimed"; holding: number; faction: number }
+  | { kind: "harvested"; holding: number; plot: number; gains: Partial<Record<StockId, number>> }
+  | { kind: "taxSet"; holding: number; rate: TaxRateId }
+  | { kind: "taskSet"; task: KingTask; holding: number }
+  // -- K3a: exploration ------------------------------------------------------------
+  /** Holdings a faction knew nothing of came into sight or were told of (ids, ascending). */
+  | { kind: "sighted"; faction: number; holdings: number[] }
+  /** The party set foot in a site for the first time: its letter is waiting (event -1: nothing left to find). */
+  | { kind: "siteDiscovered"; faction: number; site: number; event: number }
+  | { kind: "eventResolved"; faction: number; site: number; event: number; choice: number; failed: boolean }
+  | { kind: "upgradeGained"; faction: number; upgrade: UpgradeId; site: number }
+  /** An event's reveal marked these many holdings known. */
+  | { kind: "revealed"; faction: number; site: number; holdings: number[] }
+  // -- K4: armies ------------------------------------------------------------------
+  | { kind: "armyRaised"; army: number; owner: number; at: number }
+  | { kind: "recruited"; army: number; squad: number; unit: UnitTypeId; men: number; levy: boolean }
+  | { kind: "armyDeparted"; army: number; from: number; to: number }
+  | { kind: "armyArrived"; army: number; at: number; destination: boolean }
+  | { kind: "armySplit"; army: number; into: number; squads: number[] }
+  | { kind: "armiesMerged"; army: number; into: number; owner: number; name: string }
+  | { kind: "armyGone"; army: number; owner: number; name: string; reason: ArmyGoneReason }
+  | { kind: "armyPosture"; army: number; posture: ArmyPosture }
+  /** The king now rides with this army (0: alone). */
+  | { kind: "kingJoined"; army: number }
+  | { kind: "doctrineSet"; army: number; doctrine: DoctrineId }
+  | { kind: "abilityUnlocked"; army: number; ability: AbilityId }
+  /** A chasing army reached the one it was sent to meet (K5 turns this into contact). */
+  | { kind: "intercepted"; army: number; target: number }
+  | ({ kind: "armyDay" } & ArmyDayReport)
+  /** Wages fell behind (days === 1) or were paid up (days === 0). */
+  | { kind: "wagesLate"; army: number; days: number }
+  /** The king's unformed followers walked home from a hungry party. */
+  | { kind: "followersDeserted"; faction: number; n: number }
+  // -- K5: the descent ---------------------------------------------------------------
+  /** Two hostile armies met, or an army came to hostile walls. A contact of the king's side holds the realm until settled. */
+  | { kind: "contact"; contact: number; player: boolean }
+  /** A contact was settled: by a battle fought (or auto-resolved), or by a withdrawal. */
+  | { kind: "contactResolved"; contact: number; how: ContactHow; winner: number }
+  /** An army fell back from a contact or a lost battle, toward `to` (0: it stands where it is). */
+  | { kind: "fellBack"; army: number; to: number }
+  /** A holding changed hands by assault. */
+  | { kind: "stormed"; holding: number; faction: number }
+  // -- K6: morale, unrest, legitimacy ---------------------------------------------------
+  /** A holding's unrest crossed into another band (content/kingdom/morale.ts UNREST_BANDS). */
+  | { kind: "unrestBand"; holding: number; band: UnrestBand; rising: boolean }
+  /** A holding threw off its lord; `army` is the rebel host raised there, or 0. */
+  | { kind: "revolt"; holding: number; from: number; rebels: number; army: number }
+  | { kind: "justiceSet"; holding: number; justice: JusticeId }
+  | { kind: "festivalHeld"; holding: number; days: number }
+  | { kind: "festivalOver"; holding: number }
+  | { kind: "pardoned"; holding: number }
+  /** A faction's Mercy/Terror moved. */
+  | { kind: "mercyChanged"; faction: number; mercy: number; delta: number }
+  /** Men left an army whose morale fell too low. */
+  | { kind: "moraleDesertion"; army: number; n: number }
+  // -- K7: free companies ----------------------------------------------------------------
+  /** A company came to drink in a king's tavern and will sign (or moved on: `withdrawn`). */
+  | { kind: "companyOffered"; company: number; at: number }
+  | { kind: "companyMovedOn"; company: number; at: number }
+  | { kind: "companyHired"; company: number; army: number; fee: number }
+  /** A contract came into its renewal window. */
+  | { kind: "contractEnding"; company: number; days: number }
+  | { kind: "contractRenewed"; company: number; fee: number }
+  | { kind: "companyBid"; company: number; bid: number }
+  | { kind: "bidMatched"; company: number; bid: number }
+  /** A company left the king's service; `army` is its army (gone, or gone over to the crown). */
+  | { kind: "companyLeft"; company: number; army: number; how: CompanyLeaving }
+  // -- K8: the captains' AI and invasions ------------------------------------------------
+  /** The king hears of a host riding at one of his holdings, `days` out (the rumour card). */
+  | { kind: "rumour"; army: number; owner: number; target: number; from: number; days: number }
+  /** A story wave rode out: this faction's goal is the king. */
+  | { kind: "waveRode"; faction: number; wave: number }
+  /** A holding with no one to hold it was taken by an army standing in it. */
+  | { kind: "seized"; holding: number; faction: number; from: number }
+  /** The townsmen opened the gates (the defender's "yield"). */
+  | { kind: "yielded"; holding: number; faction: number }
+  /** A retreat to the keep was besieged (a real siege from K10): did the keep hold? */
+  | { kind: "siege"; holding: number; held: boolean }
+  // -- K10: sieges ------------------------------------------------------------------------
+  /** The townsmen gave up the town and went into the keep; the siege is still to be fought. */
+  | { kind: "keepRetreat"; holding: number }
+  /** A battle battered a holding's walls: per mille added, and where they stand now. */
+  | { kind: "wallsDamaged"; holding: number; by: number; walls: number }
+  /** A lord paid to mend a holding's walls. */
+  | { kind: "wallsRepairing"; holding: number; faction: number }
+  /** A holding's walls are whole again. */
+  | { kind: "wallsMended"; holding: number }
+  | { kind: "levyCalled"; holding: number; army: number; men: number }
+  | { kind: "fieldsBurned"; holding: number }
+  /** Commons standing in a holding the king came to claim go home to it. */
+  | { kind: "commonsDispersed"; army: number; holding: number }
+  // -- K9: the story (sim/kingdom/story.ts) ----------------------------------------------
+  /** A story letter is waiting for the king (index in STORY_LETTERS). */
+  | { kind: "letterArrived"; letter: number }
+  | { kind: "letterAnswered"; letter: number; choice: number; failed: boolean }
+  /** A new act of the story has begun. */
+  | { kind: "actBegan"; act: number }
+  /** A scripted encounter's host stands waiting at its holding (index in ENCOUNTERS). */
+  | { kind: "encounterArmed"; encounter: number }
+  | { kind: "encounterFought"; encounter: number; won: boolean }
+  /** The story taught the king's armies a battle ability. */
+  | { kind: "storyAbility"; ability: AbilityId }
+  /** A line was written into the chronicle (index in world.story.chronicle). */
+  | { kind: "chronicled"; index: number }
+  /** The story is over: an ending (ENDINGS id) has been reached. */
+  | { kind: "storyEnded"; ending: string };
+
+/** Why a plot changed stage, for the feed. */
+export type PlotCause = "sown" | "sprouted" | "ripened" | "harvested" | "overripe" | "weather" | "winter" | "regrew" | "foraged" | "burned"
+  // ECON: a field sown or reaped by itself (economy.ts autoSow, autoHarvest).
+  | "autoSown" | "autoReaped"
+  // ECON: a battle fought over the fields (K5's crop damage; it said "weather" before).
+  | "trampled";
+/** Hash and save order of the causes (FieldPlot.lost). Append only. */
+export const PLOT_CAUSES: readonly PlotCause[] = [
+  "sown", "sprouted", "ripened", "harvested", "overripe", "weather", "winter", "regrew", "foraged", "burned", "autoSown", "autoReaped", "trampled",
+];
+
+// -- K8: the captains' AI and invasions (sim/kingdom/ai.ts, invasions.ts) ------------------
+
+/** A captain's goal (PLAN §B.8): raid, besiege, consolidate or snipe the weakest; and exploring. */
+export type AiGoal = "consolidate" | "raid" | "besiege" | "snipe" | "explore";
+/** Append only (hash and save use the index). */
+export const AI_GOALS: readonly AiGoal[] = ["consolidate", "raid", "besiege", "snipe", "explore"];
+
+/** What one faction's strategic AI has in mind. Saved and hashed: it is sim state. */
+export type AiMind = {
+  goal: AiGoal;
+  /** A holding (raid, besiege, explore, consolidate's retaking) or an army (snipe); 0: none. */
+  target: number;
+  /** Calendar day the goal was taken up. */
+  since: number;
+  /** INVASION_WAVES index this goal is serving, or -1 (an ordinary goal). */
+  wave: number;
+  /**
+   * The army the faction's lord rides with, or 0. Its stores ride with it,
+   * as the king's ride with his (armies.ts runArmyDay): a captain leading a
+   * host far from home is fed from his granaries, which is how a wave can
+   * reach the Farthest Reach at all (docs/PROVISIONAL.md K8.5).
+   */
+  rides: number;
+};
+
+/**
+ * What a faction remembers of every holding, in holding order: who held it,
+ * how many men stood in it and what walls it had, as of the last day it was
+ * SEEN (explore.ts). The AI weighs a holding by this and never by the world:
+ * this is the kingdom-layer fog (PLAN §B.8, "may only act on what it has seen").
+ */
+export type FactionIntel = {
+  /** Faction index, or -1 for unclaimed. */
+  readonly owner: number[];
+  /** Men standing there (garrison and every army), as seen. */
+  readonly men: number[];
+  /** FORTIFICATIONS index, as seen. */
+  readonly walls: number[];
+  /** Calendar day last seen; -1: only told of (the start's owners, from common knowledge). */
+  readonly seen: number[];
+};
+
+/** A rumour the king has heard and not yet seen out: one host riding at one holding. */
+export type Rumour = {
+  readonly army: number;
+  readonly target: number;
+  /** The holding the road it was seen on is named for. */
+  readonly from: number;
+  /** Days out, when heard. */
+  readonly days: number;
+  readonly day: number;
+};
+
+/** Holdings whose fields were burned, and days left before an army can live off them again. */
+export type Burned = { readonly holding: number; days: number };
+/** Holdings whose people were called out, and the day. */
+export type Levied = { readonly holding: number; readonly day: number };

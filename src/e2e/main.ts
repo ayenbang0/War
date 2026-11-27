@@ -1,0 +1,27 @@
+/**
+ * Entry point of e2e.html: register the scenarios, run what the query asks for.
+ * See harness.ts for how to run it and what the output means.
+ */
+
+import { runFromQuery } from "./harness.ts";
+import "./scenarios-k0.ts";
+import "./scenarios-k2.ts";
+import "./scenarios-k2fix.ts";
+import "./scenarios-k3.ts";
+import "./scenarios-k3a.ts";
+import "./scenarios-k3b.ts";
+import "./scenarios-k4.ts";
+import "./scenarios-k5.ts";
+import "./scenarios-k6.ts";
+import "./scenarios-k7.ts";
+import "./scenarios-k8.ts";
+import "./scenarios-econ.ts";
+import "./scenarios-k9.ts";
+import "./scenarios-k10.ts";
+
+const out = document.getElementById("e2e-results") as HTMLElement;
+document.title = "E2E RUNNING";
+void runFromQuery(location.search, out).catch((err: unknown) => {
+  out.textContent = "FAIL  harness crashed: " + String(err);
+  document.title = "E2E FAIL harness";
+});

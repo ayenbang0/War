@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 export default defineConfig({
@@ -5,10 +6,19 @@ export default defineConfig({
   // including GitHub Pages under /War/.
   base: "./",
   build: {
-    // The entry point awaits the menu before it can build a world, and
-    // top-level await needs a modern target. The game already requires Pointer
-    // Events and a current Canvas2D, so nothing older could run it anyway.
+    // The game requires Pointer Events and a current Canvas2D, so nothing
+    // older than es2022 could run it anyway.
     target: "es2022",
+    rollupOptions: {
+      input: {
+        // The game.
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        // The browser end-to-end harness (src/e2e/). Shipped alongside the
+        // game so a browser can run it on the published site; nothing links
+        // to it from the game.
+        e2e: fileURLToPath(new URL("./e2e.html", import.meta.url)),
+      },
+    },
   },
   server: {
     // Honour an externally assigned port so the dev server can coexist with

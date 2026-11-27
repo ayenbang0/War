@@ -19,14 +19,16 @@
  *   3. Each soldier steers toward its own slot, pushing off neighbours.
  */
 
-import { atan2, clamp, cos, dist, max, min, PI, rotateToward, round, sin, sqrt, TAU } from "./math.ts";
+import { atan2, clamp, cos, dist, floor, max, min, PI, rotateToward, round, sin, sqrt, TAU } from "./math.ts";
 import { Rng, Stream } from "./rng.ts";
-import { OrderQueue, type Order } from "./orders.ts";
-import { generateTerrain, Terrain, TerrainGrid, TERRAIN_INFO, TILE_SIZE } from "./terrain.ts";
+import { OrderQueue, SETUP_ORDER_KINDS, type Order } from "./orders.ts";
+import { generateTerrain, isGate, isWork, Terrain, TerrainGrid, TERRAIN_INFO, TILE_SIZE, type TerrainType } from "./terrain.ts";
+import { FIRE_TILE_DPS, igniteDisc, stepFire } from "./fire.ts";
+import { gateTiles, raiseSiegeWorks, siegeDamage, type SiegeWorks } from "./siege.ts";
 import { formationSlots, formationRadius, type FormationShape } from "./formations.ts";
 import { advanceToward } from "./movement.ts";
 import { SpatialHash } from "./spatial.ts";
-import { clearLine, findPath, smoothRoute } from "./pathfind.ts";
+import { clearLine, findPathPartial, findPathStrict, smoothRoute } from "./pathfind.ts";
 import { UNIT_TYPES } from "../content/unit-types.ts";
 import { companyName } from "../content/companies.ts";
 import { type DoctrineId } from "../content/doctrines.ts";
@@ -37,7 +39,7 @@ import {
 import { MELEE_RANGE, d2, hitDamage, isFlanking } from "./combat.ts";
 import { COMPANY_BREAK, globalMorale, nextMorale } from "./morale.ts";
 import { DEFAULT_VICTORY, evaluate, type ArmyState, type ControlPoint, type Outcome, type VictoryConfig } from "./victory.ts";
-import { FogField, concealment, effectiveSight, hasLineOfSight, rangeFromHeight } from "./vision.ts";
+import { FogField, concealment, effectiveSight, hasLineOfSight, parapetCover, rangeFromHeight } from "./vision.ts";
 import { ArmyAI } from "./ai.ts";
 import type { Commander } from "../content/commanders.ts";
 import {
@@ -262,8 +264,28 @@ const CHARGE_SECONDS = 2;
 const CHARGE_BONUS = 0.45;
 /** Digger-ticks of work a fieldwork costs. Eight sappers take about ten seconds. */
 const FORTIFY_WORK = 1600;
-/** Damage one siege-capable soldier does to works per tick. */
-const BATTER_PER_ENGINE = 0.9;
+/**
+ * Damage one engine does to works per tick. A full battery of four takes a
+ * stone wall section (2400) in about 25 seconds and a gate (900) in under ten.
+ */
+const BATTER_PER_ENGINE = 1.2;
+/**
+ * Damage one sapper does per tick, to works, bridges and woods. Eight take a
+ * wall section in under forty seconds, a span of bridge or a tile of wood in
+ * about four. Slower than engines at a wall, but they can work right up
+ * against it and they are the only men who can fell a wood or cut a bridge.
+ */
+const SAP_PER_SAPPER = 0.4;
+/** How far a sapper reaches to work: the tiles around where the company stands. */
+const SAP_REACH = TILE_SIZE * 2;
+/** Damage a barrage does to works and bridges under it, per second. */
+const BARRAGE_WORKS_PER_SEC = 60;
+/** Share of a firepot throw's radius that sets timber and woods alight. */
+const FIREPOT_IGNITE_SHARE = 0.5;
+/** Nerve lost by a man flung off a span as it falls. Nobody drowns. */
+const FALL_SHOCK = 0.2;
+/** How far, in tiles, to look for standing ground for a man the ground fell from. */
+const EVICT_SEARCH = 8;
 /** Share of a full load a standing-down company recovers each second. */
 const RESUPPLY_FRACTION_PER_SEC = 0.05;
 const RECOVER_MORALE_PER_SEC = 0.06;
@@ -281,6 +303,12 @@ export type CombatEvent = {
   readonly y1: number;
   lethal: boolean;
   readonly victim: number;
+  /**
+   * The soldier who struck. Presentation only, like the rest of the event: the
+   * renderer gates a blow on whether the viewer can see EITHER man (audit
+   * RF-04), which needs to know who threw it, not merely from where.
+   */
+  readonly attacker: number;
 };
 
 export type WorldConfig = {
@@ -307,6 +335,11 @@ export type WorldConfig = {
   readonly sightScale?: number;
   /** The river rises at this second: every bridge goes under and ford turns to flood. */
   readonly floodAtSeconds?: number;
+  /**
+   * A siege: walls and gates raised round the defended place before anyone is
+   * set down (sim/siege.ts). The hook a K10 siege battle builds its field with.
+   */
+  readonly siege?: SiegeWorks;
 };
 
 export { statsFor, typeAt, typeIndex, STANCES } from "./entities.ts";
@@ -403,7 +436,7 @@ export class World {
    */
   readonly casualtiesByCause: [number[], number[]] = [[0, 0, 0], [0, 0, 0]];
   /** Companies that broke, in the order they broke, for the after-action. */
-  readonly breakages: { name: string; player: number; tick: number; cause: string }[] = [];
+  readonly breakages: { name: string; player: number; tick: number; cause: string; group: number }[] = [];
 
   readonly rng: {
     readonly combat: Rng;
@@ -427,6 +460,10 @@ export class World {
   readonly floodAt: number;
   /** Has it risen yet? */
   flooded = false;
+  /** The siege works this field was laid out with, or null. */
+  readonly siege: SiegeWorks | null;
+  /** terrain.sightAt as of the last perception sweep. */
+  private sightSwept = 0;
   /** Breakthrough: each side's living men in the exit ground this tick. */
   readonly through: [number, number] = [0, 0];
   /**
@@ -458,6 +495,12 @@ export class World {
     this.controlPoints = config.controlPoints ?? [];
     this.heldBy = new Int8Array(this.controlPoints.length).fill(-1);
     this.terrain = generateTerrain(config.tilesWide, config.tilesHigh, this.seed);
+    this.siege = config.siege ?? null;
+    if (this.siege) {
+      raiseSiegeWorks(this.terrain, this.siege);
+      // Laid out before anyone stands here: there is nothing to settle.
+      this.terrain.drainChanges();
+    }
     const capacity = config.soldierCapacity ?? 1024;
     this.soldiers = new Soldiers(capacity);
     this.hash = new SpatialHash(
@@ -494,7 +537,13 @@ export class World {
    * structure. A soldier stands where it is put, alone, until the player draws
    * a group around it.
    */
-  spawnSoldier(player: number, type: UnitTypeId, x: number, y: number, facing: number): number {
+  /**
+   * Set one soldier down. `nerve` (0..1] is the morale he starts with: 1, a
+   * fresh man, for every battle until K5; a kingdom army brings its own
+   * (content/kingdom/descent.ts nerveFromMorale). The default leaves every
+   * earlier battle exactly as it was.
+   */
+  spawnSoldier(player: number, type: UnitTypeId, x: number, y: number, facing: number, nerve = 1): number {
     const s = this.soldiers;
     if (s.count >= s.capacity) {
       // Writing past a Float64Array is a silent no-op rather than a throw, so an
@@ -509,7 +558,7 @@ export class World {
     s.facing[id] = facing;
     s.hp[id] = stats.hp;
     s.maxHp[id] = stats.hp;
-    s.morale[id] = 1;
+    s.morale[id] = nerve;
     s.cooldown[id] = 0;
     s.incoming[id] = 0;
     s.struckBy[id] = -1;
@@ -568,6 +617,9 @@ export class World {
       radius: 0,
       path: [],
       pathRevision: this.terrain.revision,
+      routeShort: false,
+      goalX: 0,
+      goalY: 0,
       stance: "idle",
       target: -1,
       holdX: 0,
@@ -662,7 +714,7 @@ export class World {
     if (dying.destroyedAt < 0 && dying.losses >= dying.raisedWith) {
       dying.destroyedAt = this.tick;
       this.breakages.push({
-        name: dying.name, player: dying.player, tick: this.tick, cause: "wiped out",
+        name: dying.name, player: dying.player, tick: this.tick, cause: "wiped out", group: dying.id,
       });
     }
     for (const m of this.groups[at].members) {
@@ -838,8 +890,17 @@ export class World {
 
   step(): void {
     if (this.outcome) return;
-    if (this.deploying) return;
+    if (this.deploying) {
+      // The board is being set out and the clock does not run, but the setup
+      // orders -- placing a company, dressing its ranks -- still land here, at
+      // a tick boundary, and nowhere else (audit PC-05).
+      this.applySetupOrders();
+      return;
+    }
     if (this.tick === this.floodAt) this.raiseFlood();
+    // Anything that changed the ground between ticks (a flood above, or a
+    // tool poking the terrain) is settled before anyone moves over it.
+    this.settleTerrain();
     this.landReinforcements();
     for (const ai of this.ai) ai.update(this);
     this.applyOrders();
@@ -861,9 +922,14 @@ export class World {
     this.updateAmbushes();
     this.updateSpecials();
     this.applyFields();
+    this.updateFire();
     this.resolveCombat();
     this.applyWorkings();
     this.updateEngineering();
+    // Whatever fell this tick -- to engines, sappers, a barrage or fire -- is
+    // settled before the tick ends, so no man ends a tick on ground that has
+    // just become water.
+    this.settleTerrain();
     this.updateMorale();
     this.updateObjectives();
     this.tick++;
@@ -908,11 +974,10 @@ export class World {
       if (this.tick !== round(r.atSeconds * TICK_RATE)) continue;
       const ids: number[] = [];
       for (let i = 0; i < r.count; i++) {
-        ids.push(this.spawnSoldier(
-          r.player, r.type,
-          r.x + (i % 5) * 14, r.y + ((i / 5) | 0) * 14,
-          r.player === 0 ? 0 : PI,
-        ));
+        // Set down on standing ground: a level's arrival point can sit beside
+        // a wall or a river, and a man must never begin inside either.
+        const at = this.standingGround(r.x + (i % 5) * 14, r.y + ((i / 5) | 0) * 14);
+        ids.push(this.spawnSoldier(r.player, r.type, at.x, at.y, r.player === 0 ? 0 : PI));
       }
       // Arriving as a formed company, not as a crowd -- these are troops
       // marching on, and a player has no chance to draw a loop round them.
@@ -924,9 +989,65 @@ export class World {
     for (const order of this.orders.drain(this.tick)) this.applyOrder(order);
   }
 
+  /**
+   * Apply the setup orders due now while deploying. Other orders stay queued
+   * for the battle, exactly as before setup orders existed (the commander
+   * refuses to issue them while deploying, so the player banks nothing; this
+   * only keeps a peer's or a test's tick-0 order from vanishing).
+   */
+  private applySetupOrders(): void {
+    for (const order of this.orders.drainKinds(this.tick, SETUP_ORDER_KINDS)) {
+      if (order.kind === "place") this.applyPlace(order.player, order.squad, order.x, order.y);
+      else if (order.kind === "formation") this.applyOrder(order);
+    }
+  }
+
+  /**
+   * Set a company down with its centre on (x, y). Refused whole -- nobody
+   * moves -- if any man would land off the map or on ground nobody can stand
+   * on, so a company is never dropped half into a river (audit FL-01).
+   */
+  private applyPlace(player: number, squad: number, x: number, y: number): void {
+    const g = this.groupById(squad);
+    if (!g || g.player !== player) return;
+    const s = this.soldiers;
+    let cx = 0;
+    let cy = 0;
+    let n = 0;
+    for (const m of g.members) {
+      if (s.alive[m] !== 1) continue;
+      cx += s.x[m];
+      cy += s.y[m];
+      n++;
+    }
+    if (n === 0) return;
+    const dx = x - cx / n;
+    const dy = y - cy / n;
+    for (const m of g.members) {
+      if (s.alive[m] !== 1) continue;
+      const nx = s.x[m] + dx;
+      const ny = s.y[m] + dy;
+      if (nx < 0 || ny < 0 || nx >= this.terrain.worldWidth || ny >= this.terrain.worldHeight) return;
+      if (!this.terrain.passableAt(floor(nx / TILE_SIZE), floor(ny / TILE_SIZE))) return;
+    }
+    for (const m of g.members) {
+      if (s.alive[m] !== 1) continue;
+      s.x[m] += dx;
+      s.y[m] += dy;
+    }
+    // The anchor goes with them, or the men would walk back to where they were
+    // picked up from the moment the battle began.
+    g.anchorX += dx;
+    g.anchorY += dy;
+  }
+
   private applyOrder(order: Order): void {
     if (order.kind === "ability") {
       this.applyAbility(order.player, order.ability, order.x, order.y, order.squad);
+      return;
+    }
+    if (order.kind === "gates") {
+      this.applyGates(order.player, order.open);
       return;
     }
     const g = this.groupById(order.squad);
@@ -986,6 +1107,10 @@ export class World {
         g.path = this.routeThrough(g, order.path);
         return;
       }
+      case "place":
+        // A setup order that arrived after the battle began. Picking men up
+        // and putting them down mid-battle would be teleporting.
+        return;
       case "recover":
         g.stance = "recover";
         g.target = -1;
@@ -996,22 +1121,114 @@ export class World {
   }
 
   /**
+   * K10: the garrison swings its gates (docs/PROVISIONAL.md K10.1). Only the
+   * side holding the walls; a gate already broken is rubble and does not
+   * swing. Opening is always allowed -- a sally port is a decision, not a
+   * risk the sim refuses. Shutting is refused, gate by gate, while ANYONE
+   * stands in the gateway, friend or foe: a gate is never closed on men,
+   * so nobody is ever settled out of a closing gate and the "nobody inside a
+   * wall" invariant holds without an eviction. Gates are taken in the
+   * record's order, tiles ascending, so two peers swing the same tiles.
+   */
+  private applyGates(player: number, open: boolean): void {
+    const w = this.siege;
+    if (!w || w.defender !== player) return;
+    const t = this.terrain;
+    const occupied = open ? null : this.occupiedTiles();
+    for (let k = 0; k < w.gates.length; k++) {
+      const tiles = gateTiles(t, w, k);
+      if (occupied && tiles.some((i) => occupied.has(i))) continue;
+      for (const i of tiles) t.swingGate(i % t.width, (i / t.width) | 0, open);
+    }
+  }
+
+  /** Every tile a living soldier or a company's anchor stands on (tile indices). */
+  private occupiedTiles(): Set<number> {
+    const t = this.terrain;
+    const occupied = new Set<number>();
+    const s = this.soldiers;
+    for (let i = 0; i < s.count; i++) {
+      if (s.alive[i] !== 1) continue;
+      occupied.add(floor(s.y[i] / TILE_SIZE) * t.width + floor(s.x[i] / TILE_SIZE));
+    }
+    for (const g of this.groups) occupied.add(floor(g.anchorY / TILE_SIZE) * t.width + floor(g.anchorX / TILE_SIZE));
+    return occupied;
+  }
+
+  /**
+   * K10: is an open gate of this player's held open by men standing in it
+   * right now (so a `gates` shut order would leave it open)? For the HUD's
+   * answer to the key (audit K10-04); reads the world, changes nothing.
+   */
+  gateHeldOpen(player: number): boolean {
+    const w = this.siege;
+    if (!w || w.defender !== player) return false;
+    const t = this.terrain;
+    const occupied = this.occupiedTiles();
+    for (let k = 0; k < w.gates.length; k++) {
+      const tiles = gateTiles(t, w, k);
+      if (tiles.some((i) => t.type[i] === Terrain.GateOpen) && tiles.some((i) => occupied.has(i))) return true;
+    }
+    return false;
+  }
+
+  /** K10: does this player hold walls with a gate standing open? (The HUD's button reads it.) */
+  gatesOpen(player: number): boolean {
+    const w = this.siege;
+    if (!w || w.defender !== player) return false;
+    for (let k = 0; k < w.gates.length; k++) {
+      for (const i of gateTiles(this.terrain, w, k)) if (this.terrain.type[i] === Terrain.GateOpen) return true;
+    }
+    return false;
+  }
+
+  /** K10: does this player hold walls with a gate still standing (shut or open)? */
+  hasGates(player: number): boolean {
+    const w = this.siege;
+    if (!w || w.defender !== player) return false;
+    for (let k = 0; k < w.gates.length; k++) {
+      for (const i of gateTiles(this.terrain, w, k)) {
+        const ty = this.terrain.type[i];
+        if (ty === Terrain.Gate || ty === Terrain.GateOpen) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * K10: how badly this field's siege works are battered, per mille (0 with
+   * none). The kingdom takes it back as the holding's wall damage.
+   */
+  wallDamage(): number {
+    return this.siege ? siegeDamage(this.terrain, this.siege) : 0;
+  }
+
+  /**
    * Turn a drawn route into a walkable one. The player draws intent, not a
    * traversable path -- a stroke crosses rivers freely -- so every leg is
    * re-routed by A* and the results concatenated.
    */
   private routeThrough(g: Group, waypoints: readonly number[]): number[] {
     g.pathRevision = this.terrain.revision;
+    g.routeShort = false;
     if (waypoints.length < 2) return [];
     const out: number[] = [];
     let cx = g.anchorX;
     let cy = g.anchorY;
     for (let i = 0; i + 1 < waypoints.length; i += 2) {
-      const leg = findPath(this.terrain, cx, cy, waypoints[i], waypoints[i + 1]);
-      if (leg.length === 0) break;
-      for (const v of leg) out.push(v);
-      cx = leg[leg.length - 2];
-      cy = leg[leg.length - 1];
+      const leg = findPathPartial(this.terrain, cx, cy, waypoints[i], waypoints[i + 1]);
+      if (!leg.reached) {
+        // The way is shut. Go as near as the ground allows and remember where
+        // the order was for, so a breach can finish what the order began.
+        g.routeShort = true;
+        g.goalX = waypoints[waypoints.length - 2];
+        g.goalY = waypoints[waypoints.length - 1];
+        for (const v of leg.route) out.push(v);
+        break;
+      }
+      for (const v of leg.route) out.push(v);
+      cx = leg.route[leg.route.length - 2];
+      cy = leg.route[leg.route.length - 1];
     }
     // Round the joints off before anyone walks it, so a group sweeps through a
     // turn instead of pivoting on the spot at every waypoint.
@@ -1045,7 +1262,9 @@ export class World {
         if (g.stance === "patrol") {
           this.advancePatrolLeg(g);
           g.path = this.legRoute(g);
-        } else if (g.stance === "move" || g.stance === "retreat") {
+        } else if (g.stance === "retreat" || (g.stance === "move" && !g.routeShort)) {
+          // A march whose road was shut is not over: the company waits at the
+          // wall under its order until a breach lets it through.
           g.stance = "idle";
         }
         if (g.path.length < 2) continue;
@@ -1069,12 +1288,27 @@ export class World {
       g.facing = rotateToward(g.facing, desired, this.groupTurnRate(g) * TICK_DT);
 
       let budget = speed * TICK_DT;
+      let replanned = false;
       while (budget > 1e-9 && g.path.length >= 2) {
         const r = advanceToward(this.terrain, g.anchorX, g.anchorY, g.path[0], g.path[1], budget);
         g.anchorX = r.x;
         g.anchorY = r.y;
         budget -= r.travelled;
         if (r.blocked) {
+          // The leg grazes something the planner's samples missed: a cliff's
+          // corner, or the end of a wall. Once a tick, re-plan just this leg
+          // to the letter from where the anchor stands (findPathStrict) and
+          // walk on; only if even that finds no way is the route given up.
+          // Dropping it outright froze companies against the rock for good,
+          // which a siege, all corners and gateways, made common.
+          if (!replanned) {
+            replanned = true;
+            const leg = findPathStrict(this.terrain, g.anchorX, g.anchorY, g.path[0], g.path[1]);
+            if (leg.reached && leg.route.length >= 2) {
+              g.path.splice(0, 2, ...leg.route);
+              continue;
+            }
+          }
           g.path.length = 0;
           break;
         }
@@ -1095,15 +1329,31 @@ export class World {
     const rev = this.terrain.revision;
     for (const g of this.groups) {
       if (g.pathRevision === rev) continue;
+      const since = g.pathRevision;
       g.pathRevision = rev;
+      // A BREACH: something impassable has opened since this route was
+      // planned, and this company's road had been shut. Re-plan to where it
+      // was ordered. Only companies whose route fell short are affected -- a
+      // breach can shorten anyone's walk, but re-planning a drawn route the
+      // player chose would throw away their waypoints for a few seconds saved.
+      if (g.routeShort && this.terrain.openedAt > since) {
+        if (g.stance === "patrol") g.path = this.legRoute(g);
+        else if (g.stance === "move" || g.stance === "attack" || g.stance === "hold" || g.stance === "retreat") {
+          g.path = this.routeThrough(g, [g.goalX, g.goalY]);
+        }
+        continue;
+      }
+      // Only a CLOSURE can cut a route; anything else leaves every route as
+      // walkable as it was.
+      if (this.terrain.closedAt <= since) continue;
       if (g.path.length < 2) continue;
       let ok = clearLine(this.terrain, g.anchorX, g.anchorY, g.path[0], g.path[1]);
       for (let i = 0; ok && i + 3 < g.path.length; i += 2) {
         ok = clearLine(this.terrain, g.path[i], g.path[i + 1], g.path[i + 2], g.path[i + 3]);
       }
       if (ok) continue;
-      const gx = g.path[g.path.length - 2];
-      const gy = g.path[g.path.length - 1];
+      const gx = g.routeShort ? g.goalX : g.path[g.path.length - 2];
+      const gy = g.routeShort ? g.goalY : g.path[g.path.length - 1];
       g.path = this.routeThrough(g, [gx, gy]);
     }
   }
@@ -1485,7 +1735,11 @@ export class World {
   }
 
   private updateVision(): void {
-    if (this.tick % SIGHT_INTERVAL !== 0) return;
+    // Swept on its interval -- or at once when the ground that blocks sight
+    // has changed (a wall breached, a wood burnt out), because a sightline that
+    // opened is news that should not wait for the next sweep.
+    if (this.tick % SIGHT_INTERVAL !== 0 && this.terrain.sightAt === this.sightSwept) return;
+    this.sightSwept = this.terrain.sightAt;
     const s = this.soldiers;
     this.lightGround();
 
@@ -1919,6 +2173,13 @@ export class World {
       s.y[victim],
     );
     if (charging) dmg *= 1 + CHARGE_BONUS;
+    // Shot over a wall: the stone takes what it takes. Read along the line of
+    // the shot, because nobody stands IN a wall -- they stand behind it. Only
+    // a field with walls on it asks.
+    if (this.siege !== null && st.range > MELEE_RANGE) {
+      const behind = parapetCover(this.terrain, s.x[attacker], s.y[attacker], s.x[victim], s.y[victim]);
+      if (behind > 0) dmg *= 1 - behind;
+    }
     // -- the second roster's habits. Every test is on a special in force, so a
     // battle without these troops takes exactly the arithmetic it always did.
     if (charging && ag0 && this.hasSpecial(ag0, "couch")) dmg *= 1 + COUCH_BONUS;
@@ -1974,6 +2235,7 @@ export class World {
       y1: s.y[victim],
       lethal: false,
       victim,
+      attacker,
     });
   }
 
@@ -2346,7 +2608,11 @@ export class World {
         const dx = toX - g.anchorX;
         for (const m of g.members) {
           if (s.alive[m] !== 1) continue;
-          s.x[m] = clamp(s.x[m] + dx, TILE_SIZE, this.terrain.worldWidth - TILE_SIZE);
+          const at = this.standingGround(
+            clamp(s.x[m] + dx, TILE_SIZE, this.terrain.worldWidth - TILE_SIZE), s.y[m],
+          );
+          s.x[m] = at.x;
+          s.y[m] = at.y;
         }
         g.path.length = 0;
         g.stance = "idle";
@@ -2570,14 +2836,19 @@ export class World {
       // simply men.
       const ids: number[] = [];
       for (let i = 0; i < LEVY_STRENGTH; i++) {
-        ids.push(this.spawnSoldier(
-          player, "line", x + (i % 4) * 14, y + ((i / 4) | 0) * 14,
-          player === 0 ? 0 : PI,
-        ));
+        // Pointing at a wall or a river turns the levy out beside it, not in it.
+        const at = this.standingGround(x + (i % 4) * 14, y + ((i / 4) | 0) * 14);
+        ids.push(this.spawnSoldier(player, "line", at.x, at.y, player === 0 ? 0 : PI));
       }
       if (ids.length > 0) this.createGroup(player, ids);
       return;
     }
+
+    // Fire on the ground as well as on men: pitch thrown into a wood or onto
+    // a stockade sets it alight, and a barrage's burst fires whatever timber
+    // it lands on. What burns then spreads and burns out by fire.ts's rules.
+    if (id === "firepots") igniteDisc(this.terrain, x, y, spec.radius * FIREPOT_IGNITE_SHARE, TILE_SIZE);
+    else if (id === "barrage") igniteDisc(this.terrain, x, y, TILE_SIZE * 0.75, TILE_SIZE);
 
     this.fields.push({
       ability: id,
@@ -2609,6 +2880,7 @@ export class World {
       // just for standing there.
       if (f.ability !== "barrage" && f.ability !== "firepots") continue;
       const fire = f.ability === "firepots";
+      if (!fire) this.batterUnder(f.x, f.y, f.radius);
       const rr = f.radius * f.radius;
       for (let i = 0; i < s.count; i++) {
         if (s.alive[i] !== 1) continue;
@@ -2748,7 +3020,7 @@ export class World {
           this.noteBuilding(tx, ty, g.player, g.buildTicks / FORTIFY_WORK);
           if (g.buildTicks >= FORTIFY_WORK) {
             g.buildTicks = 0;
-            if (this.terrain.fortify(tx, ty)) {
+            if (this.terrain.fortify(tx, ty, g.player)) {
               // What it becomes depends on what it joins onto: a lone hole is a
               // redoubt, one that continues a line is wall, and one that ties
               // several together is a battlement worth standing on.
@@ -2772,38 +3044,92 @@ export class World {
           }
         } else {
           g.buildTicks = 0;
+          // Nothing here can be dug: a wood to fell or a bridge to cut, then.
+          const clear = this.clearSite(g);
+          if (clear >= 0) {
+            this.terrain.damage(clear % this.terrain.width, (clear / this.terrain.width) | 0,
+              diggers * SAP_PER_SAPPER);
+          }
         }
       } else {
         g.buildTicks = 0;
       }
 
-      // BREAKING DOWN. An engine with nothing to shoot turns on the works in
-      // front of it: a wall it cannot get past, or a bridge better denied to
-      // the enemy than left standing.
+      // BREAKING DOWN. Engines and sappers on the march or the attack turn on
+      // the enemy works in front of them: a wall they cannot get past, a gate,
+      // a palisade, an enemy fieldwork. Never their own side's. Engines reach
+      // as far as they shoot; sappers only what they can put a pick to.
       if (breakers > 0 && (g.stance === "attack" || g.stance === "move")) {
-        const reach = this.stats(g.members[0]).range;
-        const target = this.nearestWorks(g.anchorX, g.anchorY, max(reach, TILE_SIZE * 2));
+        let engines = 0;
+        let reach = SAP_REACH;
+        for (const m of g.members) {
+          if (s.alive[m] !== 1 || !UNIT_TYPES[this.typeOf(m)].siege) continue;
+          if (UNIT_TYPES[this.typeOf(m)].builds) continue;
+          engines++;
+          reach = max(reach, this.stats(m).range);
+        }
+        const sappers = breakers - engines;
+        const target = this.nearestWorks(g.anchorX, g.anchorY, reach, g.player);
         if (target >= 0) {
           const tx = target % this.terrain.width;
           const ty = (target / this.terrain.width) | 0;
-          this.terrain.damage(tx, ty, breakers * BATTER_PER_ENGINE);
+          // Sappers only count when the work is within their own short reach.
+          const near = d2(g.anchorX, g.anchorY, (tx + 0.5) * TILE_SIZE, (ty + 0.5) * TILE_SIZE) <=
+            SAP_REACH * SAP_REACH;
+          this.terrain.damage(tx, ty, engines * BATTER_PER_ENGINE + (near ? sappers * SAP_PER_SAPPER : 0));
         }
       }
     }
   }
 
   /**
-   * The nearest works worth knocking down, by tile index, or -1.
-   *
-   * Walls and bridges OUTRANK woods, and the tile the company is standing on is
-   * never a target. Taking the plain nearest destructible tile meant a battery
-   * that happened to be parked in a forest spent the battle demolishing the
-   * trees around its own feet while the wall in front of it stood untouched.
-   * A wall or a bridge is an obstacle; a wood is only cover.
-   *
-   * Ties break on the lower tile index so two peers always pick the same wall.
+   * Sappers holding ground that cannot be dug work it the other way: a wood is
+   * felled, a bridge is broken. Bridges first -- a crossing denied is worth
+   * more than a sightline -- then woods, nearest first, ties on tile index.
+   * Only tiles inside the ring they were told to hold, and within a pick's
+   * reach of where they stand, and never the tile under their own feet.
    */
-  private nearestWorks(x: number, y: number, reach: number): number {
+  private clearSite(g: Group): number {
+    const t = this.terrain;
+    const cx = (g.anchorX / TILE_SIZE) | 0;
+    const cy = (g.anchorY / TILE_SIZE) | 0;
+    const span = (SAP_REACH / TILE_SIZE) | 0;
+    let best = -1;
+    let bestRank = 9;
+    let bestD = Infinity;
+    for (let ty = cy - span; ty <= cy + span; ty++) {
+      for (let tx = cx - span; tx <= cx + span; tx++) {
+        if (tx === cx && ty === cy) continue;
+        const type = t.typeAt(tx, ty);
+        const rank = type === Terrain.Bridge ? 0 : type === Terrain.Forest ? 1 : 9;
+        if (rank === 9 || !t.inBounds(tx, ty)) continue;
+        const wx = (tx + 0.5) * TILE_SIZE;
+        const wy = (ty + 0.5) * TILE_SIZE;
+        if (d2(g.holdX, g.holdY, wx, wy) > g.holdRadius * g.holdRadius) continue;
+        const dd = d2(g.anchorX, g.anchorY, wx, wy);
+        if (dd > SAP_REACH * SAP_REACH) continue;
+        if (rank < bestRank || (rank === bestRank && dd < bestD)) {
+          bestRank = rank;
+          bestD = dd;
+          best = ty * t.width + tx;
+        }
+      }
+    }
+    return best;
+  }
+
+  /**
+   * The nearest enemy work worth knocking down, by tile index, or -1.
+   *
+   * Gates OUTRANK walls: the gate is the weak point of any circuit, a third of
+   * the stone's strength, and an engine in reach of one has no business
+   * pounding the curtain beside it. Woods and bridges are not works -- an
+   * engine battering every tree and bridge it marched past demolished the
+   * very crossings its own army needed; those are sappers' work, done on a
+   * hold order (see clearSite). The tile the company stands on is never a
+   * target. Ties break on the lower tile index so two peers pick the same.
+   */
+  private nearestWorks(x: number, y: number, reach: number, player: number): number {
     const cx = (x / TILE_SIZE) | 0;
     const cy = (y / TILE_SIZE) | 0;
     const span = max(1, (reach / TILE_SIZE) | 0);
@@ -2813,9 +3139,10 @@ export class World {
     for (let ty = cy - span; ty <= cy + span; ty++) {
       for (let tx = cx - span; tx <= cx + span; tx++) {
         if (tx === cx && ty === cy) continue;
-        if (!this.terrain.destructibleAt(tx, ty)) continue;
         const type = this.terrain.typeAt(tx, ty);
-        const rank = type === Terrain.Forest ? 1 : 0;
+        if (!isWork(type) || !this.terrain.inBounds(tx, ty)) continue;
+        if (this.terrain.ownerAt(tx, ty) === player) continue;
+        const rank = isGate(type) ? 0 : 1;
         const wx = (tx + 0.5) * TILE_SIZE;
         const wy = (ty + 0.5) * TILE_SIZE;
         const dd = d2(x, y, wx, wy);
@@ -2828,6 +3155,135 @@ export class World {
       }
     }
     return best;
+  }
+
+  /** A barrage wears down every work and bridge it falls on, whoever's. */
+  private batterUnder(x: number, y: number, radius: number): void {
+    const t = this.terrain;
+    const r = (radius / TILE_SIZE) | 0;
+    const cx = (x / TILE_SIZE) | 0;
+    const cy = (y / TILE_SIZE) | 0;
+    const amount = BARRAGE_WORKS_PER_SEC * TICK_DT;
+    for (let ty = cy - r; ty <= cy + r; ty++) {
+      for (let tx = cx - r; tx <= cx + r; tx++) {
+        const type = t.typeAt(tx, ty);
+        if (!isWork(type) && type !== Terrain.Bridge) continue;
+        if (d2(x, y, (tx + 0.5) * TILE_SIZE, (ty + 0.5) * TILE_SIZE) > radius * radius) continue;
+        t.damage(tx, ty, amount);
+      }
+    }
+  }
+
+  // -- fire and falling ground -------------------------------------------------
+
+  /**
+   * One tick of fire: step the fires (spread, burn out -- fire.ts), then burn
+   * whoever is standing in them. Both sides: a burning wood does not ask whose
+   * firepots lit it. Skipped outright on a field with nothing alight.
+   */
+  private updateFire(): void {
+    const t = this.terrain;
+    if (t.burning.length === 0) return;
+    stepFire(t, this.tick, this.seed);
+    const s = this.soldiers;
+    const hurt = FIRE_TILE_DPS * TICK_DT;
+    for (let i = 0; i < s.count; i++) {
+      if (s.alive[i] !== 1) continue;
+      const tx = floor(s.x[i] / TILE_SIZE);
+      const ty = floor(s.y[i] / TILE_SIZE);
+      if (!t.burningAt(tx, ty)) continue;
+      s.incoming[i] += hurt;
+      s.struckBy[i] = -1;
+      s.struckHow[i] = HOW_RANGED;
+    }
+  }
+
+  /**
+   * Settle every tile that changed type since the last settling.
+   *
+   * Changing the ground under men invalidates three things, and this is where
+   * the first is handled (the other two read the terrain's own revisions):
+   *
+   *   1. ANYONE STANDING ON GROUND THAT HAS JUST BECOME IMPASSABLE -- a span
+   *      that fell into the river, a bridge the flood took -- is put on the
+   *      nearest standing ground at once (standingGround: closest point of the
+   *      closest passable tile, ties to the lower tile index) and loses
+   *      FALL_SHOCK of nerve. Nobody drowns and nobody wades: no man ends a
+   *      tick on water. A company's anchor caught the same way is moved the
+   *      same way. Walls are only ever raised before anyone is on the field,
+   *      so nobody can be caught inside one.
+   *   2. Routes: revalidateRoutes, on the next updateGroups, compares each
+   *      company's pathRevision against terrain.openedAt / closedAt.
+   *   3. Sight: updateVision sweeps at once when terrain.sightAt has moved.
+   *
+   * Fieldworks that fell are struck off the works list, so nobody goes on
+   * counting a heap of rubble as a redoubt to hold.
+   */
+  private settleTerrain(): void {
+    const changed = this.terrain.drainChanges();
+    if (changed.length === 0) return;
+    const t = this.terrain;
+    const lost = new Set<number>();
+    for (const i of changed) {
+      if (TERRAIN_INFO[t.type[i] as TerrainType].moveScale <= 0) lost.add(i);
+    }
+    if (lost.size > 0) {
+      const s = this.soldiers;
+      for (let i = 0; i < s.count; i++) {
+        if (s.alive[i] !== 1) continue;
+        const tile = floor(s.y[i] / TILE_SIZE) * t.width + floor(s.x[i] / TILE_SIZE);
+        if (!lost.has(tile)) continue;
+        const at = this.standingGround(s.x[i], s.y[i]);
+        s.x[i] = at.x;
+        s.y[i] = at.y;
+        s.morale[i] = max(0, s.morale[i] - FALL_SHOCK);
+      }
+      for (const g of this.groups) {
+        const tile = floor(g.anchorY / TILE_SIZE) * t.width + floor(g.anchorX / TILE_SIZE);
+        if (!lost.has(tile)) continue;
+        const at = this.standingGround(g.anchorX, g.anchorY);
+        g.anchorX = at.x;
+        g.anchorY = at.y;
+      }
+    }
+    for (let k = this.works.length - 1; k >= 0; k--) {
+      const w = this.works[k];
+      if (t.typeAt(w.tx, w.ty) !== Terrain.Fortification) this.works.splice(k, 1);
+    }
+  }
+
+  /**
+   * The nearest point a man can stand on, from (x, y): the point itself if the
+   * ground there holds, otherwise the closest point (a margin inside the tile
+   * edge) of the closest passable tile within EVICT_SEARCH tiles. Ties go to
+   * the lower tile index, so it is a pure function of the grid. Left where it
+   * is if nothing within reach can be stood on, which no generated or siege
+   * field produces.
+   */
+  standingGround(x: number, y: number): { x: number; y: number } {
+    const t = this.terrain;
+    const tx0 = floor(x / TILE_SIZE);
+    const ty0 = floor(y / TILE_SIZE);
+    if (t.passableAt(tx0, ty0)) return { x, y };
+    const margin = 2;
+    let bestD = Infinity;
+    let bx = x;
+    let by = y;
+    for (let ty = ty0 - EVICT_SEARCH; ty <= ty0 + EVICT_SEARCH; ty++) {
+      for (let tx = tx0 - EVICT_SEARCH; tx <= tx0 + EVICT_SEARCH; tx++) {
+        if (!t.inBounds(tx, ty) || !t.passableAt(tx, ty)) continue;
+        const px = clamp(x, tx * TILE_SIZE + margin, (tx + 1) * TILE_SIZE - margin);
+        const py = clamp(y, ty * TILE_SIZE + margin, (ty + 1) * TILE_SIZE - margin);
+        const dd = d2(x, y, px, py);
+        // Scanned in ascending tile order, so strict < keeps the lower index.
+        if (dd < bestD) {
+          bestD = dd;
+          bx = px;
+          by = py;
+        }
+      }
+    }
+    return { x: bx, y: by };
   }
 
   // -- morale -------------------------------------------------------------------
@@ -2928,7 +3384,7 @@ export class World {
         g.flankLosses * 2 >= g.losses && g.losses > 0 ? "flanked"
           : g.losses >= max(1, (g.losses + living) / 2) ? "cut to pieces"
             : "worn down";
-      this.breakages.push({ name: g.name, player: g.player, tick: this.tick, cause });
+      this.breakages.push({ name: g.name, player: g.player, tick: this.tick, cause, group: g.id });
     }
   }
 }

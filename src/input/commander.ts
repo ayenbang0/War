@@ -8,8 +8,9 @@
  */
 
 import type { World } from "../sim/world.ts";
-import { anchorSquad, pointInPolygon, recognize, gestureLabel, type GestureContext, type PendingLine, type Point, type Recognized, type SquadView } from "./gestures.ts";
+import { anchorSquad, pathLength, pointInPolygon, recognize, gestureLabel, TAP_LENGTH, type GestureContext, type PendingLine, type Point, type Recognized, type SquadView } from "./gestures.ts";
 import { ABILITIES, type AbilityId } from "../content/abilities.ts";
+import { signal, type TutorialSignal } from "../ui/story/signals.ts";
 
 /**
  * Ticks between issuing an order and it taking effect. One tick keeps orders
@@ -45,6 +46,24 @@ const ALLOWED_WHILE_DEPLOYING: ReadonlySet<string> = new Set([
   "select", "lasso", "formation",
 ]);
 
+/**
+ * What the pen's ghost should show for the stroke in progress (ink.ts draws
+ * it). One source for the ghost's label and the HUD line a commit would give,
+ * so what the player reads before lifting the pen is what happens after.
+ *
+ *  - order:   the recognizer's reading, with a label the Commander has checked
+ *             against the world (a lasso counts MEN, audit PC-07);
+ *  - ability: an armed ability will take this stroke, whatever its shape
+ *             (audit PC-03), so its name and footprint are shown, not an order;
+ *  - place:   a deployment drag carrying a company (audit PC-04);
+ *  - none:    the stroke so far means nothing, and `label` says why (PC-02).
+ */
+export type PenGhost =
+  | { mode: "order"; read: Recognized; label: string }
+  | { mode: "ability"; ability: AbilityId; label: string; radius: number }
+  | { mode: "place"; label: string; ok: boolean }
+  | { mode: "none"; label: string };
+
 /** Loose soldiers get negative handles so they never collide with group ids. */
 function looseHandle(soldier: number): number {
   return -(soldier + 1);
@@ -70,6 +89,33 @@ export class Commander {
   armed: AbilityId | null = null;
   /** What the recognizer currently reads the in-progress stroke as. */
   preview: Recognized | null = null;
+  /** What the ghost shows for the stroke in progress; see PenGhost. */
+  ghost: PenGhost | null = null;
+  /**
+   * Whether the last committed stroke did nothing. The pen lets such a stroke
+   * fade out in grey instead of vanishing, so a stroke that meant nothing is
+   * SEEN to mean nothing (audit PC-02).
+   */
+  rejected = false;
+  /**
+   * K9: what the last committed stroke did, in the tutorial's terms, or null
+   * when it did nothing. Sent to the tutorial (ui/story/signals.ts) only once
+   * the stroke has really been carried out, never for a refusal.
+   */
+  heard: TutorialSignal | null = null;
+  /**
+   * Where the player may set men down while deploying. Supplied by the battle,
+   * which knows the level's zones; null means anywhere on the map.
+   */
+  placeable: ((x: number, y: number) => boolean) | null = null;
+  /**
+   * The company a deployment stroke picked up at its first point, or null.
+   * Decided once per stroke: a stroke that grabbed a company is a placement
+   * and is never also read as a gesture (audit PC-04).
+   */
+  private grabbed: number | null = null;
+  private grabOffset: Point = { x: 0, y: 0 };
+  private lastPlaced: Point | null = null;
 
   /** A split line waiting to see whether a parallel one follows. */
   private pendingLine: PendingLine = null;
@@ -190,8 +236,8 @@ export class Commander {
     const id = this.armed;
     if (id === null || points.length === 0) return null;
     this.armed = null;
-    if (this.world.deploying) return "not until the battle begins";
-    if (!this.world.abilityReady(this.player, id)) return ABILITIES[id].name + ": not ready";
+    if (this.world.deploying) return this.refuse("not until the battle begins");
+    if (!this.world.abilityReady(this.player, id)) return this.refuse(ABILITIES[id].name + ": not ready");
 
     const at = points[points.length - 1];
     // A charge is given to a company, so it needs one: whichever of your own
@@ -200,13 +246,14 @@ export class Commander {
     if (ABILITIES[id].target === "own" && ABILITIES[id].id === "charge") {
       const on = anchorSquad(this.context(), at);
       squad = on !== null && on >= 0 ? on : (this.selected.find((h) => h >= 0) ?? -1);
-      if (squad < 0) return "charge: give it to a company";
+      if (squad < 0) return this.refuse("charge: give it to a company");
     }
     this.world.orders.issue(
       { kind: "ability", squad, ability: id, x: at.x, y: at.y },
       this.player,
       this.world.tick + ORDER_DELAY,
     );
+    this.heard = { kind: "ui", action: "abilityCast" };
     return ABILITIES[id].name;
   }
 
@@ -269,49 +316,202 @@ export class Commander {
     return out;
   }
 
-  /** Re-read an in-progress stroke. Pure and cheap, so it runs every move. */
+  /**
+   * Re-read an in-progress stroke. Cheap, so it runs every move.
+   *
+   * Pure apart from one thing: a deployment drag issues `place` orders as it
+   * goes, so the company follows the pen. They are orders like any other,
+   * applied by the world at the next tick boundary (audit PC-05).
+   */
   update(points: readonly Point[]): void {
-    const read = points.length > 1 ? recognize(points, this.context()) : null;
+    if (points.length === 0) return;
+    if (points.length === 1) this.beginStroke(points[0]);
 
-    // No ghost for a stroke that will do nothing. Previewing a march during
-    // deployment would promise an order the game is about to ignore, which is
-    // worse than showing nothing.
+    // An armed ability takes this stroke whatever its shape, so the ghost must
+    // say so rather than promise the march the shape happens to resemble.
+    if (this.armed !== null) {
+      this.preview = null;
+      const a = ABILITIES[this.armed];
+      this.ghost = {
+        mode: "ability", ability: a.id, radius: a.radius,
+        label: this.world.deploying ? "not until the battle begins" : a.name + " here",
+      };
+      return;
+    }
+
+    // A company picked up while setting out is being carried, not ordered.
+    if (this.world.deploying && this.grabbed !== null) {
+      this.preview = null;
+      if (pathLength(points) < TAP_LENGTH) {
+        this.ghost = null;
+        return;
+      }
+      const tip = points[points.length - 1];
+      const ok = this.mayPlace(tip);
+      if (ok) this.issuePlace(tip);
+      this.ghost = { mode: "place", ok, label: ok ? "place" : "outside your ground" };
+      return;
+    }
+
+    const read = points.length > 1 ? recognize(points, this.context()) : null;
+    // No order ghost for a stroke that will do nothing. Previewing a march
+    // during deployment would promise an order the game is about to ignore.
     this.preview =
       read && this.world.deploying && !ALLOWED_WHILE_DEPLOYING.has(read.kind) ? null : read;
+    if (pathLength(points) < TAP_LENGTH && (!read || read.kind === "select")) {
+      // Still a tap: nothing to say yet.
+      this.ghost = null;
+      return;
+    }
+    const label = this.preview ? this.labelFor(this.preview) : null;
+    this.ghost = this.preview && label !== null
+      ? { mode: "order", read: this.preview, label }
+      : { mode: "none", label: this.whyNothing(read) };
+  }
 
+  /** The first point of a stroke: decide, once, whether it picked a company up. */
+  private beginStroke(at: Point): void {
+    this.grabbed = null;
+    this.lastPlaced = null;
+    this.rejected = false;
+    if (!this.world.deploying || this.armed !== null) return;
     // While setting out, touching one of your own groups picks it up, so
     // placing men is a single motion rather than tap-then-drag.
-    if (this.world.deploying && points.length > 0) {
-      const grabbed = anchorSquad(this.context(), points[0]);
-      if (grabbed !== null && grabbed >= 0) this.selected = [grabbed];
+    const grabbed = anchorSquad(this.context(), at);
+    if (grabbed !== null && grabbed >= 0) {
+      this.selected = [grabbed];
+      this.grabbed = grabbed;
+      // Carried by the point you took hold of, not snapped centre-to-pen: a
+      // company grabbed by its edge must not jump half its width on the first
+      // move (PC-04).
+      const c = this.centreOf(grabbed);
+      this.grabOffset = c ? { x: c.x - at.x, y: c.y - at.y } : { x: 0, y: 0 };
     }
+  }
+
+  private centreOf(squad: number): Point | null {
+    const g = this.world.groupById(squad);
+    if (!g) return null;
+    const s = this.world.soldiers;
+    let x = 0;
+    let y = 0;
+    let n = 0;
+    for (const m of g.members) {
+      if (s.alive[m] !== 1) continue;
+      x += s.x[m];
+      y += s.y[m];
+      n++;
+    }
+    return n > 0 ? { x: x / n, y: y / n } : null;
+  }
+
+  private mayPlace(at: Point): boolean {
+    return this.placeable === null || this.placeable(at.x, at.y);
+  }
+
+  /** Carry the grabbed company to a point: a setup order, applied at once. */
+  private issuePlace(at: Point): void {
+    if (this.grabbed === null) return;
+    const x = at.x + this.grabOffset.x;
+    const y = at.y + this.grabOffset.y;
+    // One order per distinct position: a pen held still sends nothing more.
+    if (this.lastPlaced && this.lastPlaced.x === x && this.lastPlaced.y === y) return;
+    this.lastPlaced = { x, y };
+    // Stamped for the current tick: while deploying the clock does not run,
+    // and the world drains setup orders due now at every step it is given.
+    this.world.orders.issue({ kind: "place", squad: this.grabbed, x, y }, this.player, this.world.tick);
+  }
+
+  /**
+   * The ghost's words for a reading, checked against the world. Null when the
+   * reading would in fact do nothing -- a loop that encloses no men.
+   */
+  private labelFor(r: Recognized): string | null {
+    if (r.kind !== "lasso") return gestureLabel(r);
+    // Counted the way commit() will count them: per man inside the loop, else
+    // the companies it was thrown round (PC-07).
+    const men = this.menInside(r.poly);
+    const gathered = men.length > 0 ? men : this.soldiersBehind(r.squads);
+    if (gathered.length === 0) return null;
+    const taken = new Set(gathered);
+    const carving = this.world.groups.some(
+      (q) => q.player === this.player &&
+        q.members.some((m) => taken.has(m)) &&
+        q.members.some((m) => !taken.has(m)),
+    );
+    const n = gathered.length;
+    return (carving ? "split off " : "group ") + n + (n === 1 ? " man" : " men");
+  }
+
+  /**
+   * Why a stroke does nothing, in words a player can act on (PC-02). Gentle on
+   * purpose: the spec asks for errors to be gently corrected, not scolded.
+   */
+  private whyNothing(read: Recognized | null): string {
+    if (read && this.world.deploying && !ALLOWED_WHILE_DEPLOYING.has(read.kind)) {
+      return "not until the battle begins";
+    }
+    if (read && read.kind === "lasso") return "no men inside that loop";
+    if (this.selected.length === 0) return "nothing selected - draw from a company, or loop some men";
+    return "no order read - try again";
   }
 
   cancel(): void {
     this.preview = null;
+    this.ghost = null;
+    this.grabbed = null;
   }
 
   /** Commit a finished stroke. Returns a short label for the HUD. */
   commit(points: readonly Point[]): string {
+    this.heard = null;
+    const said = this.commitStroke(points);
+    if (this.heard && !this.rejected) signal(this.heard);
+    this.grabbed = null;
+    this.preview = null;
+    this.ghost = null;
+    return said;
+  }
+
+  private refuse(why: string): string {
+    this.rejected = true;
+    return why;
+  }
+
+  private commitStroke(points: readonly Point[]): string {
+    this.rejected = false;
+    // A stroke handed over whole (the tests, the tutorial) never went through
+    // update(), so it has not been checked for a grab yet.
+    if (points.length > 0 && this.grabbed === null) this.beginStroke(points[0]);
     // An armed ability takes the stroke and nothing else happens with it, so
     // placing a barrage can never also march the company you drew across.
     const placed = this.placeArmed(points);
-    if (placed !== null) {
-      this.preview = null;
-      return placed;
+    if (placed !== null) return placed;
+
+    // A deployment drag that carried a company puts it down where the pen
+    // lifted and is never read as a glyph as well (PC-04). A short touch on a
+    // company is still a tap, and falls through to select it.
+    if (this.world.deploying && this.grabbed !== null && pathLength(points) >= TAP_LENGTH) {
+      this.clearPending();
+      const tip = points[points.length - 1];
+      if (!this.mayPlace(tip)) return this.refuse("outside your ground - set them down in your own zone");
+      this.issuePlace(tip);
+      this.heard = { kind: "ui", action: "deployDrag" };
+      return "placed";
     }
+
     const r = recognize(points, this.context());
-    this.preview = null;
-    if (!r) return "";
+    if (!r) return this.refuse(this.whyNothing(null));
 
     if (this.world.deploying && !ALLOWED_WHILE_DEPLOYING.has(r.kind)) {
       this.clearPending();
-      return "not until the battle begins";
+      return this.refuse("not until the battle begins");
     }
 
     if (r.kind === "select") {
       this.clearPending();
       this.selected = r.squads.slice();
+      this.heard = { kind: "gesture", class: "select", detail: r.squads.length > 0 ? "picked" : "cleared" };
       return r.squads.length > 0 ? "selected" : "cleared";
     }
 
@@ -328,7 +528,7 @@ export class Commander {
       // caught, which is the case where a loop is thrown round a company from
       // well outside it.
       const gathered = men.length > 0 ? men : this.soldiersBehind(r.squads);
-      if (gathered.length === 0) return "";
+      if (gathered.length === 0) return this.refuse("no men inside that loop");
       // Is this taking men OUT of a company, or gathering men who were in none?
       // Decided across every company the loop touched, not from the first man
       // it happened to catch -- a single loose soldier caught alongside half a
@@ -339,9 +539,23 @@ export class Commander {
           q.members.some((m) => taken.has(m)) &&
           q.members.some((m) => !taken.has(m)),
       );
+      // K9: a loop round two or more WHOLE companies, and nobody else, takes
+      // them as a group -- held together, each still its own company -- which
+      // is how a group is held at all with the pen alone (the group verbs
+      // below need two or more held; before this only a split's kept half
+      // could be). Gathering them into one company instead would throw away
+      // the very companies the group verbs act on.
+      const whole = this.world.groups.filter((q) => q.player === this.player && q.members.length > 0 && q.members.every((m) => taken.has(m)));
+      const inWhole = whole.reduce((n, q) => n + q.members.length, 0);
+      if (!carving && whole.length >= 2 && inWhole === gathered.length) {
+        this.selected = whole.map((q) => q.id);
+        this.heard = { kind: "gesture", class: "lasso", detail: "group" };
+        return "took " + whole.length + " companies";
+      }
       const g = this.world.createGroup(this.player, gathered);
       this.selected = g ? [g.id] : [];
-      if (!g) return "";
+      if (!g) return this.refuse("no men inside that loop");
+      this.heard = carving ? { kind: "gesture", class: "lasso", detail: "carve" } : { kind: "gesture", class: "lasso" };
       return (carving ? "split off " : "grouped ") + g.members.length;
     }
 
@@ -353,6 +567,7 @@ export class Commander {
       this.pendingLine = { a: { x: r.line[0], y: r.line[1] }, b: { x: r.line[2], y: r.line[3] } };
       this.pendingKeep = r.keep.slice();
       this.pendingDeadline = nowMs() + PAIR_WINDOW_MS;
+      this.heard = { kind: "gesture", class: "split" };
       // A line clear of the group cuts nothing; it is purely a rail awaiting a
       // partner, and saying "split 0/6" would read as a mistake.
       return r.keep.length === 0 || r.drop.length === 0
@@ -369,7 +584,8 @@ export class Commander {
         this.world.orders.issue({ kind: "ambush", squad: id }, this.player, tick);
         issued++;
       }
-      return issued > 0 ? "lie in wait" : "locked (recovering)";
+      if (issued > 0) this.heard = { kind: "gesture", class: "ambush" };
+      return issued > 0 ? "lie in wait" : this.refuse("locked (recovering)");
     }
 
     if (r.kind === "feint") {
@@ -383,7 +599,8 @@ export class Commander {
         );
         issued++;
       }
-      return issued > 0 ? "feint - advance and withdraw" : "locked (recovering)";
+      if (issued > 0) this.heard = { kind: "gesture", class: "feint" };
+      return issued > 0 ? "feint - advance and withdraw" : this.refuse("locked (recovering)");
     }
 
     if (r.kind === "grid") {
@@ -399,7 +616,8 @@ export class Commander {
         );
         issued++;
       });
-      return issued > 0 ? "rows and columns" : "locked (recovering)";
+      if (issued > 0) this.heard = { kind: "gesture", class: "grid" };
+      return issued > 0 ? "rows and columns" : this.refuse("locked (recovering)");
     }
 
     if (r.kind === "patrolArea") {
@@ -421,7 +639,8 @@ export class Commander {
         this.world.orders.issue({ kind: "patrol", squad: id, path }, this.player, tick);
         issued++;
       });
-      return issued > 0 ? "patrol area" : "locked (recovering)";
+      if (issued > 0) this.heard = { kind: "gesture", class: "patrolArea" };
+      return issued > 0 ? "patrol area" : this.refuse("locked (recovering)");
     }
 
     if (r.kind === "recover") {
@@ -433,7 +652,8 @@ export class Commander {
         this.world.orders.issue({ kind: "recover", squad: id }, this.player, tick);
         issued++;
       }
-      return issued > 0 ? "recover (30s, cannot act)" : "already recovering";
+      if (issued > 0) this.heard = { kind: "gesture", class: "recover" };
+      return issued > 0 ? "recover (30s, cannot act)" : this.refuse("already recovering");
     }
 
     this.clearPending();
@@ -466,7 +686,11 @@ export class Commander {
         case "move":
           // Hold on to the route: retracing it inside the pair window is how a
           // feint is asked for, reusing the same window the grid gesture uses.
-          this.pendingRoute = r.path.slice();
+          // K9: from where the stroke began. An order's path leaves out its
+          // start (the men are already there), so a straight march held only
+          // its end point -- and a one-point route can never be retraced, which
+          // made the feint unreachable from the commonest march there is.
+          this.pendingRoute = points.length > 0 ? [points[0].x, points[0].y, ...r.path] : r.path.slice();
           this.pendingRouteDeadline = nowMs() + PAIR_WINDOW_MS;
           this.world.orders.issue(
             { kind: "move", squad: id, path: fanOut(r.path, lateral) },
@@ -513,15 +737,19 @@ export class Commander {
           return;
         }
         case "formation":
-          // Applied directly while deploying, because nothing is ticking to
-          // drain the queue -- see World.setFormation.
-          if (this.world.deploying) this.world.setFormation(id, r.shape);
-          else this.world.orders.issue({ kind: "formation", squad: id, shape: r.shape }, this.player, tick);
+          // While deploying the clock stands still, so the order is stamped
+          // for now: the world drains setup orders due at the current tick on
+          // every step it is given, which is the tick boundary (PC-05).
+          this.world.orders.issue(
+            { kind: "formation", squad: id, shape: r.shape }, this.player,
+            this.world.deploying ? this.world.tick : tick,
+          );
           return;
       }
     });
 
-    if (issued === 0) return "locked (recovering)";
+    if (issued === 0) return this.refuse("locked (recovering)");
+    this.heard = r.kind === "formation" ? { kind: "gesture", class: "formation", shape: r.shape } : { kind: "gesture", class: r.kind };
     return gestureLabel(r);
   }
 }

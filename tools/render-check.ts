@@ -18,6 +18,11 @@ import { UNIT_TYPES, type UnitTypeId } from "../src/content/unit-types.ts";
 import { Renderer, type Snapshot } from "../src/render/renderer.ts";
 import { Camera } from "../src/render/camera.ts";
 import { presenceOf, isMoving } from "../src/render/presence.ts";
+import { Effects } from "../src/render/effects.ts";
+import type { CombatEvent } from "../src/sim/world.ts";
+import { TerrainLayer } from "../src/render/terrain-layer.ts";
+import { motion } from "../src/render/motion.ts";
+import { Terrain } from "../src/sim/terrain.ts";
 
 type Call = { op: string; args: unknown[] };
 
@@ -150,7 +155,7 @@ console.log("\n== Render glitches ==");
   w.soldiers.alive[deadFoe] = 0;
   const ev = (victim: number) => ({
     kind: "melee" as const, player: 0, type: "line" as UnitTypeId,
-    x0: 0, y0: 0, x1: w.soldiers.x[victim], y1: w.soldiers.y[victim], lethal: true, victim,
+    attacker: -1, x0: 0, y0: 0, x1: w.soldiers.x[victim], y1: w.soldiers.y[victim], lethal: true, victim,
   });
   // Put the enemy's death in unlit ground for player 0.
   const fog = w.fog[0];
@@ -160,9 +165,148 @@ console.log("\n== Render glitches ==");
   r.fallen.ingest(w, [ev(deadFoe)], 0, 1);
   check("an enemy who dies in the fog leaves nothing to find", !lit && r.fallen.count === 1, lit ? "was lit" : "fog");
   const seenFoe = near.members[0];
+  // The dead are kept only for men the viewer actually saw (RF-04): give this
+  // one player 0's sight bit, as the sight sweep would for a man in view.
+  // (This world has already ended -- setup() stepped it with one side only --
+  // so it will not run another sweep by itself.)
+  w.soldiers.seen[seenFoe] |= 1;
   w.soldiers.alive[seenFoe] = 0;
   r.fallen.ingest(w, [ev(seenFoe)], 0, 1);
   check("an enemy who dies in view lies there", r.fallen.count === 2);
+}
+
+console.log("\n== Fog honesty (K2: RF-04, RF-06) ==");
+
+{
+  // RF-04: effects are drawn above the fog, so they must obey the same sight
+  // rule as the men. A blow between two men the viewer cannot see -- in a
+  // lit disc behind a wood, say -- leaves nothing; a shot whose archer is
+  // hidden lands on its (seen) victim without drawing a streak back to him.
+  const fx = new Effects(0);
+  const shot: CombatEvent = {
+    kind: "shot", player: 1, type: "line" as UnitTypeId, attacker: 3, victim: 4,
+    x0: 10, y0: 10, x1: 200, y1: 10, lethal: false,
+  };
+  fx.ingest([shot], 0, () => ({ attacker: false, victim: false }));
+  check("a blow between two unseen men leaves no effect", fx.count === 0, fx.count + " effects");
+  const priv = fx as unknown as { shots: unknown[]; impacts: unknown[] };
+  fx.ingest([shot], 0, () => ({ attacker: false, victim: true }));
+  check("a shot from a hidden archer draws no streak back to him", priv.shots.length === 0 && priv.impacts.length === 1);
+  fx.ingest([shot], 0, () => ({ attacker: true, victim: true }));
+  check("a shot in plain view still streaks", priv.shots.length === 1);
+}
+
+{
+  // RF-06: last-seen marks age on the SIM clock. A paused battle (tick
+  // constant) drawn at very different wall-clock times keeps every mark at the
+  // same strength; only ticks age it.
+  const { w, cam, r } = setup();
+  const hidden = unit(w, 1, "line", 2200, 1200);
+  const marks = (r as unknown as { lastSeen: Map<number, unknown> }).lastSeen;
+  marks.set(hidden.id, {
+    x: 2200, y: 1200, tick: w.tick - 5 * 20, n: 20, radius: hidden.radius, player: 1, emptySince: -1,
+  });
+  const prev = snap(w);
+  r.draw(w, cam, prev, 1, [], 1, 0);
+  const before = r.lastSeenFade(w, hidden.id);
+  r.draw(w, cam, prev, 1, [], 500, 0);
+  const after = r.lastSeenFade(w, hidden.id);
+  check("a last-seen mark is aging", before > 0 && before < 1, "fade " + before.toFixed(2));
+  check("a last-seen mark does not fade while the battle is paused", before === after, before + " -> " + after);
+  (w as unknown as { tick: number }).tick += 40;
+  check("it fades as the battle runs", r.lastSeenFade(w, hidden.id) < before);
+}
+
+console.log("\n== Destructible ground (Phase 8) ==");
+
+{
+  // Seed 52 with a stone circuit round (16, 40), the same field as
+  // tools/siege-check.ts. 120x80 tiles is 8x5 chunks of 16 tiles each.
+  const siege = { defender: 0, cx: 16, cy: 40, rx: 9, ry: 9, kind: "wall" as const, gates: [{ side: "east" as const }] };
+  const w = new World({ seed: 52, tilesWide: 120, tilesHigh: 80, soldierCapacity: 256, siege });
+  const t = w.terrain;
+  const layer = new TerrainLayer(t);
+  const cam = new Camera(t.worldWidth, t.worldHeight);
+  cam.zoom = 0.25;
+  cam.viewW = 1000;
+  cam.viewH = 700;
+  cam.x = t.worldWidth / 2;
+  cam.y = t.worldHeight / 2;
+  const ctx = fakeContext([]);
+  layer.draw(ctx, cam);
+  const first = layer.bakes;
+  layer.draw(ctx, cam);
+  check("the whole field bakes once", first === 40 && layer.bakes === first, first + " chunks, then " + (layer.bakes - first));
+
+  // Wear alone changes no tile's type: drawn live, never baked.
+  t.damage(25, 36, 10);
+  layer.draw(ctx, cam);
+  check("wear on a wall re-bakes nothing", layer.bakes === first);
+
+  // A wall tile in the middle of chunk (1, 2) falls: that chunk alone re-bakes.
+  // Tile (25, 36) sits at chunk-local (9, 4), well inside.
+  t.damage(25, 36, 1e9);
+  layer.draw(ctx, cam);
+  check("a breach re-bakes only the chunk it is in", layer.bakes === first + 1,
+    (layer.bakes - first) + " re-baked of 40");
+  // A change on a chunk's edge also redraws the neighbour whose edge
+  // decoration reads it: tile (16, 49) is the first column of chunk (1, 3),
+  // and mid-way down it.
+  const before = layer.bakes;
+  t.damage(16, 49, 1e9);
+  layer.draw(ctx, cam);
+  check("a change on a chunk edge re-bakes it and its neighbour", layer.bakes - before === 2,
+    (layer.bakes - before) + " re-baked");
+
+  // Live ground state: a garrison sees the cracks in its own walls, and fire
+  // in the wood its scouts are watching.
+  t.damage(25, 44, 1500);
+  t.ignite(31, 35);
+  t.ignite(32, 35);
+  unit(w, 0, "scout", 28 * 32, 35 * 32);
+  w.step();
+  const log: Call[] = [];
+  const r = new Renderer(fakeContext(log), t);
+  const view = new Camera(t.worldWidth, t.worldHeight);
+  view.x = 28 * 32;
+  view.y = 40 * 32;
+  view.viewW = 1600;
+  view.viewH = 1000;
+  const ground = (now: number): Call[] => {
+    log.length = 0;
+    (r as unknown as { drawGroundState(w: World, c: Camera, n: number, v: number): void })
+      .drawGroundState(w, view, now, 0);
+    return log.slice();
+  };
+  r.draw(w, view, snap(w), 1, [], 1, 0);
+  const calls = ground(1);
+  const flames = calls.filter((c) => c.op === "quadraticCurveTo");
+  const cracks = calls.filter((c) => c.op === "lineTo");
+  check("a battered wall shows its cracks", cracks.length >= 3, cracks.length + " crack strokes");
+  check("a burning wood shows flames", flames.length >= 2 * 3 * 2, flames.length / 2 + " tongues");
+  const later = ground(7.3).filter((c) => c.op === "quadraticCurveTo");
+  check("flames flicker with motion on", JSON.stringify(later) !== JSON.stringify(flames));
+  motion.reduced = true;
+  const still1 = ground(1).filter((c) => c.op === "quadraticCurveTo");
+  const still2 = ground(7.3).filter((c) => c.op === "quadraticCurveTo");
+  motion.reduced = false;
+  check("flames stand still under reduced motion, and are still drawn",
+    still1.length === flames.length && JSON.stringify(still1) === JSON.stringify(still2));
+
+  // The enemy's side of the field, out of sight: no fire is drawn there.
+  const foe = new World({ seed: 52, tilesWide: 120, tilesHigh: 80, soldierCapacity: 256, siege });
+  foe.terrain.ignite(36, 35);
+  unit(foe, 0, "line", 100 * 32, 70 * 32);
+  foe.step();
+  const r3log: Call[] = [];
+  const r3 = new Renderer(fakeContext(r3log), foe.terrain);
+  r3.draw(foe, view, snap(foe), 1, [], 1, 0);
+  r3log.length = 0;
+  (r3 as unknown as { drawGroundState(w: World, c: Camera, n: number, v: number): void })
+    .drawGroundState(foe, view, 1, 0);
+  check("fire nobody can see is not drawn", r3log.filter((c) => c.op === "quadraticCurveTo").length === 0);
+  check("the breach is drawn as what it now is", t.typeAt(25, 36) === Terrain.Rubble &&
+    t.typeAt(16, 49) === Terrain.Rubble);
 }
 
 if (failures > 0) {

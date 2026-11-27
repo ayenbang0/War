@@ -9,12 +9,18 @@
  * shifts a combat or morale roll.
  *
  * It sees exactly what the player sees. Every decision reads
- * world.visibleEnemies(); nothing consults a squad the fog is hiding.
+ * world.visibleEnemies(); nothing consults a squad the fog is hiding. That goes
+ * for its sense of the balance too (audit RF-07): how strong and how steady the
+ * enemy is gets judged from the men it has seen and remembers, never from the
+ * opponent's true totals. And it aims at where enemy soldiers were OBSERVED
+ * standing (audit RF-08), not at a company's anchor -- the anchor is the order's
+ * virtual point that walks the route ahead of the men, so reading it would be
+ * reading the opponent's plan, which the player is never allowed to do.
  */
 
-import { atan2, clamp, cos, min, sin, sqrt } from "./math.ts";
+import { atan2, clamp, cos, floor, min, sin, sqrt } from "./math.ts";
 import type { Group, World } from "./world.ts";
-import { TILE_SIZE } from "./terrain.ts";
+import { Terrain, TILE_SIZE } from "./terrain.ts";
 import { UNIT_TYPES } from "../content/unit-types.ts";
 import { COMMANDERS, type Commander } from "../content/commanders.ts";
 
@@ -26,6 +32,36 @@ const COMMIT_TICKS = 60;
 const MAX_GROUP = 20;
 /** Two enemy groups within this distance count as supporting each other. */
 const SUPPORT_RANGE = 420;
+/**
+ * How long a sighting of an enemy company is believed after it goes out of
+ * view: sixty seconds at the sim's 20 Hz. A literal rather than TICK_RATE,
+ * because world.ts imports this file and reading its constant here at module
+ * load would race the circular import.
+ */
+const MEMORY_TICKS = 60 * 20;
+
+/** What the commander believes about one enemy company. */
+type Sighting = {
+  /** Where its men were seen standing: the centre of the seen ones. */
+  x: number;
+  y: number;
+  /** How many of its men were seen. */
+  n: number;
+  /** Their mean nerve, as read off how they were carrying themselves. */
+  morale: number;
+  /** When. */
+  tick: number;
+};
+
+/** The commander's estimate of the enemy army, from sightings alone. */
+export type FoeEstimate = {
+  /** Men seen now plus men remembered. 0 when nothing is known. */
+  readonly strength: number;
+  /** Their mean nerve, or -1 when nothing is known. */
+  readonly morale: number;
+  /** Whether any enemy has been seen at all within memory. */
+  readonly known: boolean;
+};
 
 export type Playstyle = "aggressive" | "defensive" | "maneuver" | "reactive";
 
@@ -48,6 +84,19 @@ export class ArmyAI {
   private lastKnownX = 0;
   private lastKnownY = 0;
   private hasContact = false;
+  /**
+   * Every enemy company seen within MEMORY_TICKS, by group id. A Map keeps
+   * insertion order, which is the order of first sighting -- identical on two
+   * peers fed one order stream -- so summing over it is deterministic.
+   */
+  private readonly memory = new Map<number, Sighting>();
+  /** Where each enemy company visible at this think was seen standing. */
+  private readonly seenAt = new Map<number, Sighting>();
+  /** Enemy soldiers in no company, seen at this think. */
+  private looseSeen = 0;
+  private looseMoraleSum = 0;
+  /** The current estimate of the enemy, refreshed every think. */
+  estimate: FoeEstimate = { strength: 0, morale: -1, known: false };
 
   /**
    * Who is running this army. Leanings only -- never better troops, never more
@@ -80,17 +129,20 @@ export class ArmyAI {
     // With no inherent squads, the machine must organise its own men before it
     // can command them -- exactly as the player does with the pen.
     this.formGroups(world);
+    // Look before judging: the posture is chosen from what this think saw.
+    const foes = this.observe(world);
     this.chooseStyle(world);
 
-    const foes = world.visibleEnemies(this.player);
     if (foes.length > 0) {
       // Remember where they were. A commander who forgets the enemy the instant
-      // they step behind a wood is not cautious, it is amnesiac.
+      // they step behind a wood is not cautious, it is amnesiac. Where they
+      // were means where their MEN were seen, not where their orders point.
       let cx = 0;
       let cy = 0;
       for (const f of foes) {
-        cx += f.anchorX;
-        cy += f.anchorY;
+        const at = this.where(f);
+        cx += at.x;
+        cy += at.y;
       }
       this.lastKnownX = cx / foes.length;
       this.lastKnownY = cy / foes.length;
@@ -108,6 +160,73 @@ export class ArmyAI {
   }
 
   /**
+   * Look at the field: note every enemy company in view and where its seen
+   * men stand, forget sightings too old to trust, and re-estimate the enemy.
+   * Returns the companies in view, the only ones a decision may act on.
+   */
+  private observe(world: World): Group[] {
+    const foes = world.visibleEnemies(this.player);
+    const s = world.soldiers;
+    this.seenAt.clear();
+    for (const f of foes) {
+      let n = 0;
+      let cx = 0;
+      let cy = 0;
+      let nerve = 0;
+      for (const m of f.members) {
+        if (s.alive[m] !== 1 || !world.canSee(this.player, m)) continue;
+        n++;
+        cx += s.x[m];
+        cy += s.y[m];
+        nerve += s.morale[m];
+      }
+      // seenBy says some man of it is in view, so n is at least one; guarded
+      // anyway, because a sighting of nobody would divide by zero.
+      if (n === 0) continue;
+      const seen: Sighting = { x: cx / n, y: cy / n, n, morale: nerve / n, tick: world.tick };
+      this.seenAt.set(f.id, seen);
+      // Map.set keeps an existing key in place, so iterating the memory
+      // walks companies in order of first sighting: deterministic on both peers.
+      this.memory.set(f.id, seen);
+    }
+    for (const [id, seen] of this.memory) {
+      if (world.tick - seen.tick > MEMORY_TICKS) this.memory.delete(id);
+    }
+
+    // Men in no company are seen one by one, and only now: a loose man has no
+    // company to remember him by.
+    this.looseSeen = 0;
+    this.looseMoraleSum = 0;
+    const foe = 1 - this.player;
+    for (let i = 0; i < s.count; i++) {
+      if (s.alive[i] !== 1 || s.player[i] !== foe || s.group[i] >= 0) continue;
+      if (!world.canSee(this.player, i)) continue;
+      this.looseSeen++;
+      this.looseMoraleSum += s.morale[i];
+    }
+
+    let strength = this.looseSeen;
+    let nerve = this.looseMoraleSum;
+    for (const seen of this.memory.values()) {
+      strength += seen.n;
+      nerve += seen.morale * seen.n;
+    }
+    this.estimate = strength > 0
+      ? { strength, morale: nerve / strength, known: true }
+      : { strength: 0, morale: -1, known: false };
+    return foes.filter((f) => this.seenAt.has(f.id));
+  }
+
+  /** Where a visible enemy company's men were seen standing at this think. */
+  private where(g: Group): { x: number; y: number; n: number } {
+    const seen = this.seenAt.get(g.id);
+    // Never reached for a company out of view: observe() only hands decisions
+    // the ones it saw. Falling back to nothing rather than to the anchor keeps
+    // the anchor out of this file entirely.
+    return seen ?? { x: 0, y: 0, n: 0 };
+  }
+
+  /**
    * Pick a posture from the situation.
    *
    * Deliberately hysteretic: a commander that flips stance every second reads
@@ -117,11 +236,17 @@ export class ArmyAI {
     if (world.tick - this.styleSince < this.think * 12) return;
 
     const me = world.armyState(this.player);
-    const foe = world.armyState(1 - this.player);
+    // The enemy as SEEN (RF-07): the men in view and the men remembered, never
+    // the opponent's true totals. With nothing seen at all, assume parity --
+    // the field was set for an even fight -- rather than either a walkover or
+    // a rout; that prior depends on nothing the fog hides.
+    const foe = this.estimate;
+    const foeStrength = foe.known ? foe.strength : me.strength;
+    const foeMorale = foe.known ? foe.morale : me.morale;
     // A bold commander reads the same field as more favourable than it is, and
     // so presses attacks a cautious one would refuse.
-    const ratio = (foe.strength > 0 ? me.strength / foe.strength : 2) * this.commander.boldness;
-    const shaken = me.morale < foe.morale - 0.12 * this.commander.boldness;
+    const ratio = (foeStrength > 0 ? me.strength / foeStrength : 2) * this.commander.boldness;
+    const shaken = me.morale < foeMorale - 0.12 * this.commander.boldness;
 
     // Score every posture the situation allows, then let the commander's
     // leanings pick between them. The situation still rules -- a commander who
@@ -186,7 +311,12 @@ export class ArmyAI {
         // Sappers dig where digging is worth doing, and the works they raise
         // then become ground worth holding for everyone else -- which is how a
         // position grows into a base rather than a scatter of holes.
-        if (this.canDig(world, q)) {
+        // Never hold sappers on a crossing: holding ground they cannot dig,
+        // sappers break the bridge in it (Phase 8), and a defender has no
+        // business cutting the bridge it is standing on.
+        const sappers = this.canDig(world, q);
+        if (sappers && this.besideBridge(world, q)) return this.advance(world, q, tick);
+        if (sappers) {
           world.orders.issue(
             { kind: "hold", squad: q.id, x: q.anchorX, y: q.anchorY, radius: 180 },
             this.player,
@@ -214,7 +344,8 @@ export class ArmyAI {
         if (!target) return this.pressLooseEnemy(world, q, tick) || this.advance(world, q, tick);
         // Swing wide and come in off a flank rather than straight up the front.
         const side = q.id % 2 === 0 ? 1 : -1;
-        const bearing = atan2(target.anchorY - q.anchorY, target.anchorX - q.anchorX) + side * 1.15;
+        const at = this.where(target);
+        const bearing = atan2(at.y - q.anchorY, at.x - q.anchorX) + side * 1.15;
         const swing = 380 + rng.range(0, 220);
         world.orders.issue(
           {
@@ -222,10 +353,10 @@ export class ArmyAI {
             squad: q.id,
             target: target.id,
             path: [
-              target.anchorX + cos(bearing) * swing,
-              target.anchorY + sin(bearing) * swing,
-              target.anchorX,
-              target.anchorY,
+              at.x + cos(bearing) * swing,
+              at.y + sin(bearing) * swing,
+              at.x,
+              at.y,
             ],
           },
           this.player,
@@ -279,8 +410,9 @@ export class ArmyAI {
   }
 
   private assault(world: World, q: Group, target: Group, tick: number): boolean {
+    const at = this.where(target);
     world.orders.issue(
-      { kind: "attack", squad: q.id, target: target.id, path: [target.anchorX, target.anchorY] },
+      { kind: "attack", squad: q.id, target: target.id, path: [at.x, at.y] },
       this.player,
       tick,
     );
@@ -297,8 +429,9 @@ export class ArmyAI {
     let best: Group | null = null;
     let bestScore = Infinity;
     for (const f of foes) {
-      const dx = f.anchorX - q.anchorX;
-      const dy = f.anchorY - q.anchorY;
+      const at = this.where(f);
+      const dx = at.x - q.anchorX;
+      const dy = at.y - q.anchorY;
       const d = sqrt(dx * dx + dy * dy);
       // Divide and conquer: prefer whoever is unsupported. A group with no
       // friends within supporting distance can be destroyed before help
@@ -308,12 +441,14 @@ export class ArmyAI {
       let support = 0;
       for (const other of foes) {
         if (other === f) continue;
-        const ox = other.anchorX - f.anchorX;
-        const oy = other.anchorY - f.anchorY;
+        const ot = this.where(other);
+        const ox = ot.x - at.x;
+        const oy = ot.y - at.y;
         if (ox * ox + oy * oy < SUPPORT_RANGE * SUPPORT_RANGE) support++;
       }
       const isolation = 1 / (1 + support);
-      const weakness = f.members.length * 0.04;
+      // Weakness as far as can be seen: the men in view, not the muster roll.
+      const weakness = at.n * 0.04;
       const s = d * (0.6 + weakness) * (1 - this.focus * 0.6 * isolation);
       if (s < bestScore || (s === bestScore && best !== null && f.id < best.id)) {
         bestScore = s;
@@ -368,9 +503,11 @@ export class ArmyAI {
     return n === 0 ? 0 : sum / n;
   }
 
+  /** Is an enemy company, as seen, within reach of one of ours? */
   private near(q: Group, other: Group, within: number): boolean {
-    const dx = other.anchorX - q.anchorX;
-    const dy = other.anchorY - q.anchorY;
+    const at = this.where(other);
+    const dx = at.x - q.anchorX;
+    const dy = at.y - q.anchorY;
     return dx * dx + dy * dy <= within * within;
   }
 
@@ -457,6 +594,18 @@ export class ArmyAI {
     return false;
   }
 
+  /** Is there a span of bridge within a sapper's reach of this company? */
+  private besideBridge(world: World, q: Group): boolean {
+    const cx = floor(q.anchorX / TILE_SIZE);
+    const cy = floor(q.anchorY / TILE_SIZE);
+    for (let ty = cy - 2; ty <= cy + 2; ty++) {
+      for (let tx = cx - 2; tx <= cx + 2; tx++) {
+        if (world.terrain.typeAt(tx, ty) === Terrain.Bridge) return true;
+      }
+    }
+    return false;
+  }
+
   /** Does this company carry sappers? They have somewhere to be. */
   private canDig(world: World, q: Group): boolean {
     for (const m of q.members) {
@@ -472,12 +621,15 @@ export class ArmyAI {
 
   /** Snapshot for hashing: the AI's memory is state like any other. */
   snapshot(): number[] {
-    return [
+    const out = [
       PLAYSTYLES.indexOf(this.style),
       this.styleSince,
       this.hasContact ? 1 : 0,
       this.lastKnownX,
       this.lastKnownY,
+      this.memory.size,
     ];
+    for (const [id, seen] of this.memory) out.push(id, seen.x, seen.y, seen.n, seen.morale, seen.tick);
+    return out;
   }
 }

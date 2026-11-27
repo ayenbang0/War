@@ -285,9 +285,64 @@ export const theRisingWater: LevelDef = {
   ],
 };
 
+/**
+ * The Last Wall, as a siege. Same ground as the stand on the heights, a day
+ * later: the field army is gone and what is left of it holds the town itself,
+ * a stone circuit with a gate where each road comes in. The enemy has brought
+ * engines and sappers, and has twelve minutes and change to get them through.
+ *
+ * The walls are terrain (sim/siege.ts): nobody passes them while they stand,
+ * men pressed against the inside see and shoot over them, missiles crossing
+ * them lose most of their bite, and battered down they are rubble anyone can
+ * climb. The gates are the weak points and they burn. This is also the shape
+ * of the K10 siege battle: the same `siege` record, built from the kingdom.
+ */
+export const theSiegeOfTheLastWall: LevelDef = {
+  id: "last-wall-siege",
+  name: "The Siege of the Last Wall",
+  brief: "The heights are lost. Hold the town behind its walls while their engines work at the gates. Do not break.",
+  seed: 0x2ae16,
+  tilesWide: 176,
+  tilesHigh: 120,
+  duration: 14 * 60,
+  deployment: [
+    // Strictly inside the circuit: the wall line runs x 8..52, y 36..86.
+    { player: 0, x: 12, y: 40, w: 36, h: 42 },
+    { player: 1, x: 140, y: 32, w: 28, h: 56 },
+  ],
+  victory: { mode: "survive", defender: 0 },
+  controlPoints: [cp(0, "The Market Cross", 30, 61, 220)],
+  budget: 127,
+  enemyDoctrine: "siegecraft",
+  enemyCore: ["siege", "siege", "builder", "siege"],
+  suggestedDifficulty: "colonel",
+  country: "broken",
+  magic: 1,
+  siege: {
+    defender: 0,
+    cx: 30,
+    cy: 61,
+    rx: 22,
+    ry: 25,
+    kind: "wall",
+    // Where the two roads come in: the river road from the east, the old road west.
+    gates: [{ side: "east", at: 62 }, { side: "west", at: 57 }],
+  },
+  reinforcements: [
+    { atSeconds: 4 * 60, player: 1, type: "pike", count: 22, x: 160 * TILE_SIZE, y: 50 * TILE_SIZE },
+    { atSeconds: 7 * 60, player: 1, type: "oathsworn", count: 16, x: 160 * TILE_SIZE, y: 70 * TILE_SIZE },
+    // The relief comes over the hills behind the besiegers -- outside the
+    // walls, so it can only help by falling on the siege lines.
+    { atSeconds: 10 * 60, player: 0, type: "horse", count: 10, x: 110 * TILE_SIZE, y: 12 * TILE_SIZE },
+  ],
+};
+
 export const LEVELS: readonly LevelDef[] = [
   provingGround, theCrossing, theOpenField, theHighGround, theLongVigil,
   theFerryRoad, theLastWall, theColours, theStones, theRisingWater,
+  // Appended rather than slotted in beside The Last Wall, so every existing
+  // level keeps its place in the list.
+  theSiegeOfTheLastWall,
 ];
 
 export function levelById(id: string): LevelDef | undefined {

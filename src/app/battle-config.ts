@@ -1,0 +1,436 @@
+/**
+ * What a battle is built from: one plain, serialisable-shaped record.
+ *
+ * The lesson, the test launch (app/test-hook.ts) and (from K5) the kingdom
+ * map all produce one of these, and the BattleLayer takes nothing else. That
+ * is the seam the plan's descent needs (§B.9): the kingdom map arrives with
+ * pre-built armies and no point-buy, so nothing about building a battle may
+ * live in any one screen. (The old skirmish setup screen that also produced
+ * these was removed with the sandbox modes: the game is the story only.)
+ *
+ * Pure: no DOM, no randomness. Whoever builds a setup picks its commander
+ * before handing it over, so a config fully determines its battle.
+ */
+
+import { cost, validate, type ArmyList } from "../content/army.ts";
+import type { AbilityId } from "../content/abilities.ts";
+import type { Commander as Captain } from "../content/commanders.ts";
+import { COMMANDERS } from "../content/commanders.ts";
+import { DIFFICULTIES, type DifficultyId } from "../content/difficulty.ts";
+import { LEVELS, levelById, type LevelDef } from "../content/levels/index.ts";
+import { UNIT_TYPES, type UnitTypeId } from "../content/unit-types.ts";
+import { nerveFromMorale } from "../content/kingdom/descent.ts";
+import { AMBUSHED_NERVE, WALL_NERVE } from "../content/kingdom/invasions.ts";
+import { World } from "../sim/world.ts";
+import { PI, abs, floor, max, min } from "../sim/math.ts";
+import { TILE_SIZE, Terrain, generateTerrain } from "../sim/terrain.ts";
+import type { SiegeSide, SiegeWorks } from "../sim/siege.ts";
+import { SIEGE_LAYOUT } from "../content/kingdom/descent.ts";
+import type { BattleSpec, FieldedSquad } from "../sim/layers.ts";
+
+/**
+ * A battle as a player would choose one: ground, how hard, an army and its
+ * reserve, and who leads the other side. The skirmish setup screen used to
+ * build these; now only the test launch does, and K5's descent will build its
+ * configs from the armies that met instead.
+ */
+export type Setup = {
+  readonly level: LevelDef;
+  readonly difficulty: DifficultyId;
+  readonly army: ArmyList;
+  /** Who the machine's army answers to. */
+  readonly commander: Captain;
+  /** Abilities bought; distinct ones are bound to keys 1..9, 0, - and = in that order. */
+  readonly abilities: readonly AbilityId[];
+};
+
+/**
+ * A battle is either fought or taught. The lesson is not a battle with a flag
+ * on it: it has no clock, no enemy commander and no ability bar, and those are
+ * decided by this one field rather than by booleans scattered through the loop.
+ */
+export type BattleMode = "battle" | "lesson";
+
+export type BattleConfig = {
+  readonly mode: BattleMode;
+  readonly level: LevelDef;
+  /** Player 0's army, then player 1's. */
+  readonly armies: readonly [ArmyList, ArmyList];
+  /** Who commands the machine's army. */
+  readonly commander: Captain;
+  readonly difficulty: DifficultyId;
+  /**
+   * K9: the first `companies` squads of the player's army are set out as
+   * companies rather than loose men. Only the drill uses it: its first step
+   * is a deployment drag, and a drag carries a company.
+   */
+  readonly companies?: number;
+  /**
+   * K9: the far side is set out this many tiles ahead of the player's own
+   * ground instead of in its own zone. Only the drill uses it: its last step
+   * is a stroke that ends on the enemy, and on the level's own ground the
+   * enemy stood three thousand paces off, out of sight, so a new player had
+   * to march across the field before the step could be done at all.
+   */
+  readonly enemyTilesAhead?: number;
+  /** Abilities bought per side, copies included (a copy is a deeper magazine). */
+  readonly abilities: readonly [readonly AbilityId[], readonly AbilityId[]];
+  /**
+   * K5: an army that comes from the kingdom, not from a point-buy -- each
+   * squad's fit men (`armies[p].squads[j]` is its kind) and each side's nerve
+   * (kingdom morale as starting morale). Absent: every squad full, every man
+   * fresh, as every battle before K5.
+   */
+  readonly field?: {
+    readonly men: readonly [readonly number[], readonly number[]];
+    readonly nerve: readonly [number, number];
+  };
+};
+
+/**
+ * K5: the battle a kingdom contact is fought as (PLAN.md §B.9). The spec says
+ * everything; this only turns it into what the BattleLayer takes. The ground
+ * is the holding's country (its level's size, zones and night) generated from
+ * the holding's own seed; how it is won is the spec's (rout in the field, the
+ * defender holding out behind walls); nothing marches on and no river rises
+ * (docs/PROVISIONAL.md K5.9). Only the fit take the field.
+ */
+export function battleFromSpec(spec: BattleSpec): BattleConfig {
+  const base = levelById(spec.terrain.level) ?? LEVELS[0];
+  // K10: a holding with walls is fought as a siege of those walls -- the
+  // works laid out round the defender's ground, its heart the ground the
+  // attacker has to take (the spec's breakthrough exit).
+  const works = siegeFromSpec(spec, base);
+  const level: LevelDef = {
+    ...base,
+    seed: spec.seed,
+    duration: spec.duration,
+    victory: spec.victory,
+    controlPoints: works ? [works.heart] : [],
+    reinforcements: undefined,
+    floodAtSeconds: undefined,
+    siege: works ? works.siege : undefined,
+    night: spec.sightScale === 1 ? undefined : spec.sightScale,
+  };
+  const [a, b] = spec.sides;
+  // The machine's side is commanded with its faction's battle habits; a side
+  // with no commander of its own (the king's, when two machines meet headless) borrows the Badger's.
+  const commander = COMMANDERS[b.commander ?? a.commander ?? "badger"];
+  return {
+    mode: "battle",
+    level,
+    armies: [
+      { doctrine: a.doctrine, squads: a.squads.map((q) => q.unit) },
+      { doctrine: b.doctrine, squads: b.squads.map((q) => q.unit) },
+    ],
+    commander,
+    difficulty: b.difficulty,
+    abilities: [a.abilities, b.abilities],
+    field: {
+      men: [a.squads.map((q) => q.men - q.wounded), b.squads.map((q) => q.men - q.wounded)],
+      nerve: fieldNerve(spec),
+    },
+  };
+}
+
+/** Where battleWorld sets down squad `n` of a zone: the top-left tile of its block (n in fielded order). */
+function blockTile(zoneX: number, zoneY: number, n: number): { tx: number; ty: number } {
+  return { tx: zoneX + 3 + (n % 4) * 5, ty: zoneY + 4 + ((n / 4) | 0) * 9 };
+}
+
+/**
+ * K10: the holding's works as a battlefield lays them out, from the spec
+ * alone (pure: the same spec always builds the same walls).
+ *
+ * - The circuit stands round the DEFENDER's ground -- whichever seat that
+ *   is -- `SIEGE_LAYOUT.margin` tiles clear of every block its men are set
+ *   down in and of its whole deployment zone: town walls round the town. A
+ *   keep (the townsmen fell back to it) is a tight ring of two courses round
+ *   the townsmen's blocks alone: the town outside is given up.
+ * - Stone for a wall or a keep, timber for a palisade.
+ * - The gate faces the attacker, where the battlefield's road crosses that
+ *   wall line if it does (a gate belongs where the road comes in), else at
+ *   the middle; a stone town wall has a second gate in the far side, for a
+ *   sally or a retreat.
+ * - The works are raised as battered as the holding's walls are (spec
+ *   `terrain.worn`).
+ * - The heart is a control point filling the inside of the walls: the exit
+ *   of the breakthrough rule the spec's victory names.
+ *
+ * Returns null for a battle with no works.
+ */
+export function siegeFromSpec(
+  spec: BattleSpec, base: LevelDef,
+): { siege: SiegeWorks; heart: { id: number; name: string; x: number; y: number; radius: number } } | null {
+  const fort = spec.terrain.fortification;
+  if (fort === "none") return null;
+  const d = 1 - spec.deployment.attacker;
+  const zone = base.deployment.find((z) => z.player === d);
+  const foe = base.deployment.find((z) => z.player === spec.deployment.attacker);
+  if (!zone || !foe) return null;
+  const keep = fort === "keep";
+  // The defender's blocks, as battleWorld will set them down (fit squads only).
+  const fielded = spec.sides[d].squads.filter((q) => q.men - q.wounded > 0).length;
+  let x0 = zone.x + 3;
+  let y0 = zone.y + 4;
+  let x1 = x0;
+  let y1 = y0;
+  for (let n = 0; n < max(1, fielded); n++) {
+    const b = blockTile(zone.x, zone.y, n);
+    x1 = max(x1, b.tx + 5);
+    y1 = max(y1, b.ty + 6);
+  }
+  if (!keep) {
+    x0 = min(x0, zone.x);
+    y0 = min(y0, zone.y);
+    x1 = max(x1, zone.x + zone.w - 1);
+    y1 = max(y1, zone.y + zone.h - 1);
+  }
+  const thickness = keep ? SIEGE_LAYOUT.keepThickness : 1;
+  const m = (keep ? SIEGE_LAYOUT.keepMargin : SIEGE_LAYOUT.margin) + thickness;
+  // Kept a tile inside the map edge, so the wall line is always on the field.
+  const wx0 = max(1, x0 - m);
+  const wy0 = max(1, y0 - m);
+  const wx1 = min(base.tilesWide - 2, x1 + m);
+  const wy1 = min(base.tilesHigh - 2, y1 + m);
+  const cx = floor((wx0 + wx1) / 2);
+  const cy = floor((wy0 + wy1) / 2);
+  const rx = max(4, min(cx - wx0, wx1 - cx));
+  const ry = max(4, min(cy - wy0, wy1 - cy));
+  // Which side faces the attacker: the axis the two zones lie apart on.
+  const fx = foe.x + foe.w / 2 - (cx + 0.5);
+  const fy = foe.y + foe.h / 2 - (cy + 0.5);
+  const front: SiegeSide = abs(fx) >= abs(fy) ? (fx >= 0 ? "east" : "west") : (fy >= 0 ? "south" : "north");
+  const back: SiegeSide = front === "east" ? "west" : front === "west" ? "east" : front === "north" ? "south" : "north";
+  const grid = generateTerrain(base.tilesWide, base.tilesHigh, spec.seed);
+  const gateAt = (side: SiegeSide): number => {
+    const along = side === "north" || side === "south";
+    const line = side === "east" ? cx + rx : side === "west" ? cx - rx : side === "north" ? cy - ry : cy + ry;
+    const mid = along ? cx : cy;
+    const lim = (along ? rx : ry) - thickness - 2;
+    // The road crossing nearest the middle of that wall line (ties: the lower).
+    for (let k = 0; k <= lim; k++) {
+      for (const at of k === 0 ? [mid] : [mid - k, mid + k]) {
+        const t = along ? grid.typeAt(at, line) : grid.typeAt(line, at);
+        if (t === Terrain.Road) return at;
+      }
+    }
+    return mid;
+  };
+  const gates = [{ side: front, at: gateAt(front) }];
+  if (fort === "wall") gates.push({ side: back, at: gateAt(back) });
+  const siege: SiegeWorks = {
+    defender: d, cx, cy, rx, ry,
+    kind: fort === "palisade" ? "palisade" : "wall",
+    gates,
+    thickness,
+    worn: spec.terrain.worn,
+  };
+  const inner = min(rx, ry) - thickness;
+  const heart = {
+    id: 0,
+    name: keep ? "the keep yard" : "inside the walls",
+    x: (cx + 0.5) * TILE_SIZE,
+    y: (cy + 0.5) * TILE_SIZE,
+    radius: max(2, inner) * TILE_SIZE,
+  };
+  return { siege, heart };
+}
+
+/**
+ * Each side's starting nerve: its kingdom morale, and (K8, PLAN §B.8) the
+ * ground it chose. A defender behind walls starts steadier (WALL_NERVE); an
+ * army that walked into a defender lying in wait or dug in starts shaken
+ * (AMBUSHED_NERVE) -- the deployment advantage an ambush is.
+ */
+export function fieldNerve(spec: BattleSpec): [number, number] {
+  const nerve: [number, number] = [nerveFromMorale(spec.sides[0].morale), nerveFromMorale(spec.sides[1].morale)];
+  const d = 1 - spec.deployment.attacker;
+  nerve[d] = min(1, nerve[d] + WALL_NERVE[spec.terrain.fortification]);
+  if (spec.deployment.ambush) nerve[spec.deployment.attacker] *= AMBUSHED_NERVE;
+  return nerve;
+}
+
+/**
+ * Build the battle World a config describes and set its men down: the one
+ * place this happens, for the BattleLayer and for the headless suites
+ * (tools/kingdom-descent.ts fights a real battle with it). Returns where each
+ * squad's men stand (FieldedSquad, per side in squad order), which is how a
+ * kingdom battle's survivors are read back.
+ *
+ * Men are set down LOOSE -- no groups, by design: a group is something the
+ * player draws with the pen, not something the game hands them.
+ */
+export function battleWorld(
+  config: BattleConfig, opts: { aiPlayers?: readonly number[]; duration?: number } = {},
+): { world: World; fielded: [FieldedSquad[], FieldedSquad[]] } {
+  const level = config.level;
+  const diff = DIFFICULTIES[config.difficulty];
+  const lesson = config.mode === "lesson";
+  const world = new World({
+    seed: level.seed,
+    tilesWide: level.tilesWide,
+    tilesHigh: level.tilesHigh,
+    // BS-05: the lesson has no clock and no enemy commander, so neither the
+    // level's timer nor an attack can end it mid-step. The far side stands
+    // where it was set out until the player goes to it.
+    duration: opts.duration ?? (lesson ? LESSON_DURATION_SECONDS : level.duration),
+    soldierCapacity: 4096,
+    aiPlayers: opts.aiPlayers ?? (lesson ? [] : [1]),
+    aiTuning: { think: diff.thinkInterval, commit: diff.commitTicks, focus: diff.focus },
+    commander: config.commander,
+    victory: level.victory,
+    controlPoints: level.controlPoints,
+    reinforcements: level.reinforcements,
+    sightScale: level.night,
+    floodAtSeconds: level.floodAtSeconds,
+    siege: level.siege,
+  });
+  world.doctrine[0] = config.armies[0].doctrine;
+  world.doctrine[1] = config.armies[1].doctrine;
+  world.armAbilities(0, config.abilities[0]);
+  world.armAbilities(1, config.abilities[1]);
+  const fielded: [FieldedSquad[], FieldedSquad[]] = [[], []];
+  const own = level.deployment.find((z) => z.player === 0);
+  for (const zone of level.deployment) {
+    const list = config.armies[zone.player];
+    const zoneX = zone.player === 1 && own && config.enemyTilesAhead !== undefined ? own.x + config.enemyTilesAhead : zone.x;
+    const field = config.field;
+    let n = 0;
+    list.squads.forEach((type, j) => {
+      const spec = UNIT_TYPES[type];
+      const men = field ? field.men[zone.player][j] ?? 0 : spec.soldiers;
+      const nerve = field ? field.nerve[zone.player] : 1;
+      const first = world.soldiers.count;
+      if (men <= 0) {
+        // Nobody fit: the squad waits with the baggage, and takes no place in the line.
+        fielded[zone.player][j] = { first, count: 0 };
+        return;
+      }
+      const block = blockTile(zoneX, zone.y, n);
+      const blockX = block.tx * TILE_SIZE;
+      const blockY = block.ty * TILE_SIZE;
+      for (let i = 0; i < men; i++) {
+        world.spawnSoldier(
+          zone.player, type,
+          blockX + (i % 5) * 14, blockY + ((i / 5) | 0) * 14,
+          zone.player === 0 ? 0 : PI,
+          nerve,
+        );
+      }
+      fielded[zone.player][j] = { first, count: men };
+      if (zone.player === 0 && j < (config.companies ?? 0)) {
+        const ids: number[] = [];
+        for (let i = 0; i < men; i++) ids.push(first + i);
+        world.createGroup(0, ids);
+      }
+      n++;
+    });
+  }
+  // The board is set out but the battle has not begun. K9: the drill (the
+  // lesson) begins there too, because setting an army out and pressing Enter
+  // are controls it teaches.
+  world.deploying = true;
+  return { world, fielded };
+}
+
+/**
+ * How long a lesson's world runs before its clock would end it: six hours.
+ *
+ * BS-05: The Crossing's own ten-minute clock used to end the lesson mid-step and
+ * open the after-action report. The world still needs SOME duration, and six
+ * hours is beyond any lesson; the HUD shows no clock in a lesson at all.
+ */
+export const LESSON_DURATION_SECONDS = 6 * 60 * 60;
+
+/**
+ * The enemy's army, drawn to its own budget.
+ *
+ * Composed greedily from a fixed preference order rather than copied from the
+ * player, so a difficulty that affords more men fields a genuinely different
+ * force, and the list stays legal if costs are ever retuned.
+ */
+export function enemyArmy(level: LevelDef, budget: number): ArmyList {
+  const doctrine = level.enemyDoctrine;
+  // The second roster is mixed in through the list rather than tacked on the
+  // end, so even a small purse fields some of it and the enemy you meet is not
+  // always the same ten kinds of men.
+  const wish: UnitTypeId[] = [
+    "line", "archer", "pike", "scout", "horse", "line", "skirmisher",
+    "crossbow", "guard", "banner", "line", "hounds", "mage", "slinger", "siege",
+    "archer", "oathsworn", "lancer", "healer", "skirmisher", "builder", "pike",
+    "drummer", "line", "scout", "champion", "guard", "wagon", "archer", "horse",
+    "line", "skirmisher", "mage", "crossbow", "line",
+  ];
+  const squads: UnitTypeId[] = [];
+  // A siege cannot be fought without engines: the level's core goes first,
+  // bought from the same purse and held to the same caps as anything else.
+  for (const id of [...(level.enemyCore ?? []), ...wish]) {
+    squads.push(id);
+    if (!validate({ doctrine, squads }, budget).ok) squads.pop();
+  }
+  return { doctrine, squads };
+}
+
+/** A battle from a chosen setup (today the test launch only). */
+export function battleFromSetup(setup: Setup): BattleConfig {
+  return {
+    mode: "battle",
+    level: setup.level,
+    // The enemy is built to what the PLAYER actually spent, never more. A
+    // harder opponent is one that is better commanded, not one with a bigger
+    // army -- difficulty used to scale its purse, which meant the top setting
+    // simply fielded more men.
+    armies: [setup.army, enemyArmy(setup.level, cost(setup.army))],
+    commander: setup.commander,
+    difficulty: setup.difficulty,
+    // The machine is given the same kit, so nothing the player can spend is
+    // something the player alone can spend.
+    abilities: [setup.abilities, setup.abilities],
+  };
+}
+
+/**
+ * The drill on the frozen field below Rookstead (K9's tutorial, lesson
+ * "drill"): the smallest field, a plain mixed force -- two of its squads
+ * already companies, so there is something to carry while setting out --
+ * and two abilities on the bar, because readying and casting one are
+ * controls the tutorial teaches. Still a lesson (BattleMode): no clock, no
+ * enemy commander, nothing that can end it under the player.
+ */
+export function lessonConfig(): BattleConfig {
+  // K9: the Proving Ground, not the smallest field. The drill's last step is
+  // a stroke onto the enemy, so the enemy has to be SEEN from the drill
+  // ground; on The Crossing (the smallest) the far bank's cover hid them at
+  // any distance short of a melee (docs/PROVISIONAL.md K9.15).
+  const level = levelById("proving-ground") ?? LEVELS[0];
+  const army: ArmyList = { doctrine: "defensive", squads: ["line", "line", "archer", "skirmisher"] };
+  return {
+    mode: "lesson",
+    level,
+    difficulty: "recruit",
+    armies: [army, enemyArmy(level, cost(army))],
+    // Named for the after-action report only: a lesson runs no enemy AI, so
+    // nobody commands the far side (BS-05: an attack must not end the lesson).
+    commander: COMMANDERS.badger,
+    companies: 2,
+    // In sight of the companies as set out (MAX_SIGHT is 1200), and far
+    // enough that no stroke of the drill's earlier steps ends on them.
+    enemyTilesAhead: 28,
+    abilities: [["barrage", "smoke"], []],
+  };
+}
+
+/**
+ * The abilities bound to keys, each appearing once.
+ *
+ * Buying an ability twice buys a deeper magazine, not a second thing to press,
+ * so the keys address DISTINCT abilities -- otherwise buying two barrages put a
+ * barrage on key 2 and pushed the shield out to key 3, which is not something a
+ * player could be expected to work out mid-battle.
+ */
+export function distinctAbilities(bought: readonly AbilityId[]): AbilityId[] {
+  const out: AbilityId[] = [];
+  for (const id of bought) if (!out.includes(id)) out.push(id);
+  return out;
+}

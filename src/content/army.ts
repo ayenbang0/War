@@ -178,6 +178,8 @@ export function adviseFor(level: {
   duration: number;
   country: "open" | "broken" | "high";
   night?: number;
+  /** Walls on the field: the defender wants shot and staying power, not horse. */
+  siege?: unknown;
 }): Advice {
   const w: Record<UnitTypeId, number> = { ...BASE_WEIGHTS };
   const prefer: AbilityId[] = [];
@@ -251,6 +253,17 @@ export function adviseFor(level: {
     scale("scout", 2.2); scale("hounds", 1.6); scale("siege", 0.5); scale("archer", 0.8);
     prefer.unshift("flare");
     notes.push("a night battle, so eyes before anything");
+  }
+
+  if (level.siege !== undefined) {
+    // Behind a wall the work is shooting over it and plugging the breach.
+    // Nothing rides out through a shut gate, and engines are for knocking
+    // walls down, not for standing behind them.
+    scale("archer", 1.6); scale("crossbow", 1.7); scale("slinger", 1.3); scale("pike", 1.3);
+    scale("horse", 0.3); scale("lancer", 0.3); scale("scout", 0.5); scale("siege", 0.3);
+    scale("builder", 0.6);
+    prefer.unshift("shield");
+    notes.push("walls to hold, so shot over them and pikes for the breach");
   }
 
   return { weights: w, prefer, note: notes.join("; ") };

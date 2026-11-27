@@ -1,0 +1,355 @@
+/**
+ * The city's cards (K3b; docs/audit/u2-city-view.md): a LOT, a FIELD and
+ * the town's POLITICS. They share the region card's frame (ui/kingdom/
+ * cards.ts): non-modal overlays that leave the plan live under them, focus
+ * on their heading, Esc or Close shuts them, and a tap on another lot
+ * replaces the card. The build and sow menus they open are K3's modal menus,
+ * unchanged, so a choice is checked by the same KingdomWorld.check the sim
+ * uses and goes out as the same order.
+ *
+ * LOT ORDER (docs/PROVISIONAL.md K3b.1): the sim's build order takes the
+ * holding's first free slot, so a town builds round its square in turn. The
+ * card says so: a free lot that is not next opens the build menu FOR THE
+ * NEXT LOT, and the menu says which lot that is. No lot ever promises a
+ * building it would not get.
+ */
+
+import { signal } from "../story/signals.ts";
+import type { KingdomWorld } from "../../sim/kingdom/world.ts";
+import type { Holding } from "../../sim/kingdom/state.ts";
+import type { KingdomOrderBody } from "../../sim/kingdom/orders.ts";
+import type { Screen } from "../screen-stack.ts";
+import { cardFrame, make, row, setText, type FrameHooks } from "../kingdom/cards.ts";
+import {
+  buildMenu, economyPanel, nextSowing, resowMenu, ripeEstimate, sowMenu, type EconomyHooks, type EconomyPanel,
+} from "../kingdom/economy-panel.ts";
+import { autoSowWaits, grainStores, seedCost, wallRepairCost } from "../../sim/kingdom/economy.ts";
+import { WALLS_DOWN, WALL_REPAIR } from "../../content/kingdom/descent.ts";
+import { KING_PLAYER } from "../../content/kingdom/factions.ts";
+import { BUILDINGS, BUILDING_IDS, type BuildingId } from "../../content/kingdom/buildings.ts";
+import { CROPS, type CropId } from "../../content/kingdom/crops.ts";
+import { E, STAGE_NAME, amountsLine } from "../../content/kingdom/ui-strings.ts";
+import { C } from "../../content/kingdom/city-strings.ts";
+import { AC, ARMY_REFUSAL } from "../../content/kingdom/army-strings.ts";
+import { hasBarracks } from "../../sim/kingdom/armies.ts";
+import { recruitMenu } from "../kingdom/recruit-menu.ts";
+import { marketMenu } from "../kingdom/mercenary-menu.ts";
+import { MARKET, MERC_REFUSAL } from "../../content/kingdom/mercenary-strings.ts";
+import { kingsTavern } from "../../sim/kingdom/mercenaries.ts";
+import { politicsSection, type PoliticsSection } from "./politics.ts";
+
+export type CityCardHooks = FrameHooks & {
+  issue(body: KingdomOrderBody, said: string): void;
+  readonly economy: EconomyHooks;
+};
+
+export type CityCardView = {
+  readonly screen: Screen;
+  readonly kind: "lot" | "field" | "politics";
+  /** The lot or field shown (0-based), or -1 for politics. */
+  readonly index: number;
+  refresh(): void;
+};
+
+function button(doc: Document, text: string, key: string): HTMLElement {
+  const b = make(doc, "button", "k-btn", text);
+  b.setAttribute("type", "button");
+  b.setAttribute("data-key", key);
+  return b;
+}
+
+function pressed(b: HTMLElement, e: Event): void {
+  if ((e as MouseEvent).detail > 0) b.blur();
+}
+
+function show(el: HTMLElement, on: boolean, display = "inline-block"): void {
+  const want = on ? display : "none";
+  if (el.style.display !== want) el.style.display = want;
+}
+
+/** The building that can go over the one on this lot, if any. */
+function upgradeOf(id: BuildingId): BuildingId | null {
+  return BUILDING_IDS.find((b) => BUILDINGS[b].upgrades === id) ?? null;
+}
+
+// -- a lot -------------------------------------------------------------------------
+
+export function lotCard(root: HTMLElement, doc: Document, world: KingdomWorld, holdingId: number, index: number, hooks: CityCardHooks): CityCardView {
+  const h = world.holding(holdingId) as Holding;
+  let state: HTMLElement | null = null;
+  let upkeep: HTMLElement | null = null;
+  let about: HTMLElement | null = null;
+  let note: HTMLElement | null = null;
+  let build: HTMLElement | null = null;
+  let recruit: HTMLElement | null = null;
+  let market: HTMLElement | null = null;
+  let heading: HTMLElement | null = null;
+  // K10: the walls' state and their mending, on the lot of the ring.
+  let wallsRow: HTMLElement | null = null;
+  let wallsDt: HTMLElement | null = null;
+  let repair: HTMLElement | null = null;
+  let repairWhy: string | null = null;
+  let buildLabel = "";
+  let buildNote = "";
+
+  const refresh = (): void => {
+    if (!state || !upkeep || !about || !note || !build) return;
+    const id = h.buildings[index] as BuildingId | null;
+    const next = h.buildings.indexOf(null);
+    if (id === null) {
+      setText(state, next === index ? C.lotNext : C.lotLater);
+      setText(upkeep, C.upkeepNone);
+      setText(about, "");
+      setText(note, next === index ? C.lotCardNext : C.lotCardLater(next + 1));
+      buildLabel = next === index ? C.buildHere : C.buildOn(next + 1);
+      buildNote = C.buildMenuFor(next + 1);
+    } else {
+      const def = BUILDINGS[id];
+      setText(state, h.works[index] > 0 ? C.stateWorks({ left: h.works[index], total: def.days })
+        : h.idle[index] ? C.stateIdle : C.stateStanding);
+      const paid = Object.values(def.upkeep).some((v) => (v ?? 0) > 0);
+      setText(upkeep, paid ? C.upkeepLine(amountsLine(def.upkeep)) : C.upkeepNone);
+      setText(about, def.purpose);
+      const up = h.works[index] > 0 ? null : upgradeOf(id);
+      const ring = id === "palisade" || id === "wall" || id === "keep";
+      // ECON: a granary's card shows the store it is part of.
+      const store = id === "granary" && h.works[index] === 0 ? C.granaryLot(grainStores(world, KING_PLAYER)) : "";
+      setText(note, [store, up ? C.upgrade(BUILDINGS[up].name) : "", ring ? C.enclosure : ""].filter(Boolean).join(" ")
+        || (next < 0 ? C.lotCardFull : ""));
+      if (up) {
+        buildLabel = C.buildHere;
+        buildNote = C.upgrade(BUILDINGS[up].name);
+      } else if (next >= 0) {
+        // The town still has room: the menu is reachable from every lot, and says where it goes.
+        buildLabel = C.buildOn(next + 1);
+        buildNote = C.buildMenuFor(next + 1);
+      } else {
+        buildLabel = "";
+      }
+    }
+    const offer = buildLabel !== "" && h.owner === "king";
+    if (!offer && doc.activeElement === build) heading?.focus();
+    show(build, offer);
+    // K4: a barracks lot raises trained squads -- on offer while it stands,
+    // refused (and saying why) while it is still being built or unpaid.
+    if (recruit) {
+      const isBarracks = id === "barracks" && h.owner === "king";
+      if (!isBarracks && doc.activeElement === recruit) heading?.focus();
+      show(recruit, isBarracks);
+      const why = isBarracks && !hasBarracks(h) ? ARMY_REFUSAL.needsBarracks : null;
+      if (why) recruit.setAttribute("aria-disabled", "true");
+      else recruit.removeAttribute("aria-disabled");
+    }
+    // K7: a tavern lot is where the free companies drink -- the market, on
+    // offer while the tavern stands, refused (and saying why) while it is built.
+    if (market) {
+      const isTavern = id === "tavern" && h.owner === "king";
+      if (!isTavern && doc.activeElement === market) heading?.focus();
+      show(market, isTavern);
+      if (isTavern && !kingsTavern(h)) market.setAttribute("aria-disabled", "true");
+      else market.removeAttribute("aria-disabled");
+    }
+    // K10: the ring's lot says how much of it stands, and mends it.
+    if (wallsRow && wallsDt && repair) {
+      const ringHere = id === "palisade" || id === "wall" || id === "keep";
+      const standing = ringHere && h.works[index] === 0;
+      show(wallsRow, standing, "block");
+      show(wallsDt, standing, "block");
+      const pct = Math.round(h.walls / 10);
+      const state = h.walls === 0 ? C.wallsWhole : h.walls >= WALLS_DOWN ? C.wallsFallen
+        : h.mend > 0 ? C.wallsMending({ pct, days: Math.ceil(Math.min(h.walls, h.mend) / WALL_REPAIR.perDay) }) : C.wallsDown(pct);
+      const offerRepair = standing && h.owner === "king" && h.walls > 0;
+      // Audit K10-01: what mending costs is said in the card's own words, not
+      // only in the button's tooltip, which a keyboard or touch player never sees.
+      setText(wallsRow, offerRepair && h.mend < h.walls ? state + ". " + C.repairCost(amountsLine(wallRepairCost(h))) : state);
+      if (!offerRepair && doc.activeElement === repair) heading?.focus();
+      show(repair, offerRepair);
+      repairWhy = offerRepair ? world.check({ kind: "repairWalls", holding: h.id }) : null;
+      if (repairWhy) repair.setAttribute("aria-disabled", "true");
+      else repair.removeAttribute("aria-disabled");
+      repair.title = offerRepair ? C.repairCost(amountsLine(wallRepairCost(h))) : "";
+    }
+    setText(build, buildLabel || C.buildHere);
+    build.setAttribute("aria-label", (buildLabel || C.buildHere) + " " + h.name);
+    if (heading) setText(heading, C.lotTitle(index + 1) + " · " + h.name);
+  };
+
+  const screen = cardFrame("lot-card", root, doc, hooks, (body, actions) => {
+    heading = root.querySelector(".k-card-title") as HTMLElement;
+    const dl = make(doc, "dl", "k-rows");
+    state = row(doc, dl, C.state);
+    upkeep = row(doc, dl, C.upkeep);
+    wallsDt = make(doc, "dt", undefined, C.walls);
+    wallsRow = make(doc, "dd", "k-walls");
+    dl.append(wallsDt, wallsRow);
+    body.appendChild(dl);
+    about = make(doc, "p", "k-sub");
+    note = make(doc, "p", "c-note");
+    body.append(about, note);
+    build = button(doc, C.buildHere, "build");
+    build.setAttribute("aria-haspopup", "dialog");
+    build.onclick = () => hooks.economy.openMenu(buildMenu(doc, world, h, hooks.economy, buildNote));
+    actions.appendChild(build);
+    const rb = button(doc, AC.recruitButton, "recruit");
+    rb.setAttribute("aria-haspopup", "dialog");
+    rb.onclick = () => {
+      if (!hasBarracks(h)) {
+        if (note) setText(note, E.notNow(ARMY_REFUSAL.needsBarracks));
+        return;
+      }
+      hooks.economy.openMenu(recruitMenu(doc, world, h.id, hooks.economy));
+    };
+    recruit = rb;
+    actions.appendChild(rb);
+    const mb = button(doc, MARKET.button, "market");
+    mb.setAttribute("aria-haspopup", "dialog");
+    mb.title = MARKET.buttonWhy;
+    mb.onclick = () => {
+      if (!kingsTavern(h)) {
+        if (note) setText(note, E.notNow(MERC_REFUSAL.noTavern));
+        return;
+      }
+      hooks.economy.openMenu(marketMenu(doc, world, h.id, hooks.economy));
+      // K9: the tutorial's tavern step (ui/story/coach.ts).
+      signal({ kind: "ui", action: "openTavern" });
+    };
+    market = mb;
+    actions.appendChild(mb);
+    const wb = button(doc, C.repairWalls, "repair-walls");
+    wb.onclick = (e) => {
+      pressed(wb, e);
+      if (repairWhy) {
+        if (note) setText(note, E.notNow(repairWhy));
+        return;
+      }
+      const why = world.check({ kind: "repairWalls", holding: h.id });
+      if (why) {
+        if (note) setText(note, E.notNow(why));
+        return;
+      }
+      hooks.issue({ kind: "repairWalls", holding: h.id }, C.repairCost(amountsLine(wallRepairCost(h))));
+    };
+    repair = wb;
+    actions.appendChild(wb);
+  }, refresh, () => build);
+  return { screen, kind: "lot", index, refresh };
+}
+
+// -- a field -----------------------------------------------------------------------
+
+export function fieldCard(root: HTMLElement, doc: Document, world: KingdomWorld, holdingId: number, index: number, hooks: CityCardHooks): CityCardView {
+  const h = world.holding(holdingId) as Holding;
+  const plot = h.plots[index];
+  let crop: HTMLElement | null = null;
+  let stage: HTMLElement | null = null;
+  let health: HTMLElement | null = null;
+  let sow: HTMLElement | null = null;
+  let harvest: HTMLElement | null = null;
+  let resow: HTMLElement | null = null;
+  let ripe: HTMLElement | null = null;
+  let resows: HTMLElement | null = null;
+  let lost: HTMLElement | null = null;
+  let waits: HTMLElement | null = null;
+  let heading: HTMLElement | null = null;
+  let last: HTMLElement | null = null;
+
+  const refresh = (): void => {
+    if (!crop || !stage || !health || !sow || !harvest || !resow || !ripe || !resows || !lost || !waits) return;
+    const p = h.plots[index];
+    const def = p.crop ? CROPS[p.crop as CropId] : null;
+    setText(crop, def && p.stage !== "empty" ? def.name : C.nothingSown);
+    setText(stage, STAGE_NAME[p.stage] + (p.stage === "growing" ? " " + Math.floor(p.progress * 100) + "%" : ""));
+    setText(health, C.healthLine(p.health));
+    // ECON: when it will be ripe, that it reaps itself, whether it resows, and why it was lost.
+    const inGround = def !== null && (p.stage === "sown" || p.stage === "growing");
+    const when = inGround ? ripeEstimate(world, def, p) : null;
+    setText(ripe, !inGround ? "" : when ? C.ripeOn(when) : C.ripeNever);
+    const auto = p.auto ? CROPS[p.auto as CropId] : null;
+    setText(resows, auto ? C.resowsCrop(auto.name) : C.resowsOff);
+    setText(lost, p.lost ? E.lostCause(p.lost) : "");
+    const wait = autoSowWaits(world, h, p);
+    let why = "";
+    if (auto && wait === "season") why = C.waits.season({ crop: auto.name, when: nextSowing(world, auto) });
+    else if (auto && wait === "late") why = C.waits.late({ crop: auto.name, when: nextSowing(world, auto) });
+    else if (auto && wait === "seed") why = C.waits.seed({ seed: amountsLine(seedCost(auto, h)) });
+    else if (wait === "standing") why = C.waits.standing;
+    setText(waits, why);
+    show(waits, why !== "", "block");
+    show(resow, h.owner === "king");
+    const open = p.stage === "empty" || p.stage === "harvested" || p.stage === "spoiled";
+    const canSow = open && !(p.stage === "harvested" && def?.regrowDays) && h.owner === "king";
+    const canReap = p.stage === "ripe" && h.owner === "king";
+    if (!canSow && doc.activeElement === sow) heading?.focus();
+    if (!canReap && doc.activeElement === harvest) heading?.focus();
+    show(sow, canSow);
+    show(harvest, canReap);
+    if (heading) setText(heading, C.fieldTitle(index + 1) + " · " + h.name);
+  };
+
+  const screen = cardFrame("field-card", root, doc, hooks, (body, actions) => {
+    heading = root.querySelector(".k-card-title") as HTMLElement;
+    const dl = make(doc, "dl", "k-rows");
+    crop = row(doc, dl, C.crop);
+    stage = row(doc, dl, C.stage);
+    health = row(doc, dl, C.health);
+    ripe = row(doc, dl, C.ripe);
+    row(doc, dl, C.reaped).textContent = C.reapedAuto;
+    resows = row(doc, dl, C.resows);
+    lost = row(doc, dl, C.lostTo);
+    body.appendChild(dl);
+    waits = make(doc, "p", "c-note c-waits");
+    body.appendChild(waits);
+    sow = button(doc, E.sow, "sow");
+    sow.setAttribute("aria-haspopup", "dialog");
+    sow.setAttribute("aria-label", E.sowField(index + 1));
+    sow.onclick = () => { last = sow; hooks.economy.openMenu(sowMenu(doc, world, h, index, hooks.economy)); };
+    harvest = button(doc, E.harvest, "harvest");
+    harvest.setAttribute("aria-label", E.harvestField(index + 1));
+    harvest.onclick = (e) => {
+      last = harvest;
+      hooks.issue({ kind: "harvest", plot: plot.id }, E.chosen);
+      pressed(harvest as HTMLElement, e);
+    };
+    resow = button(doc, C.resowButton, "resow");
+    resow.setAttribute("aria-haspopup", "dialog");
+    resow.onclick = () => { last = resow; hooks.economy.openMenu(resowMenu(doc, world, h, index, hooks.economy)); };
+    actions.append(sow, harvest, resow);
+  }, refresh, () => (last && last.style.display !== "none" ? last : null));
+  return { screen, kind: "field", index, refresh };
+}
+
+// -- politics ----------------------------------------------------------------------
+
+export function politicsCard(root: HTMLElement, doc: Document, world: KingdomWorld, holdingId: number, hooks: CityCardHooks): CityCardView {
+  const h = world.holding(holdingId) as Holding;
+  let people: HTMLElement | null = null;
+  let panel: EconomyPanel | null = null;
+  let morale: PoliticsSection | null = null;
+  let heading: HTMLElement | null = null;
+
+  const refresh = (): void => {
+    if (!people || !panel) return;
+    setText(people, String(h.population));
+    panel.refresh();
+    morale?.refresh();
+    if (heading) setText(heading, C.politicsTitle(h.name));
+  };
+
+  const screen = cardFrame("politics-card", root, doc, hooks, (body) => {
+    heading = root.querySelector(".k-card-title") as HTMLElement;
+    const dl = make(doc, "dl", "k-rows");
+    people = row(doc, dl, C.people);
+    body.appendChild(dl);
+    // Tax, bread and famine: K3's own section, the same buttons and orders.
+    panel = economyPanel(doc, world, holdingId, hooks.economy, { sections: ["tax"], title: null });
+    body.appendChild(panel.root);
+    // K6: loyalty and unrest, what moves it, and the levers (politics.ts).
+    morale = politicsSection(doc, world, h, hooks);
+    body.appendChild(morale.root);
+    // What the realm does not reckon yet, said plainly (audit C-04): the lords are K8's.
+    const later = make(doc, "dl", "k-rows c-later");
+    row(doc, later, C.lords).textContent = C.lordsNotYet;
+    body.appendChild(later);
+  }, refresh, () => morale?.focusTarget() ?? panel?.focusTarget() ?? null);
+  return { screen, kind: "politics", index: -1, refresh };
+}

@@ -10,8 +10,14 @@
  * Works with a mouse, a trackpad, or a stylus -- Pointer Events unify all
  * three. Tuned for the mouse, which is jitterier than a pen and is what most
  * players will actually use.
+ *
+ * The pen owns no keyboard listener. Escape used to be caught here AND by
+ * main.ts, so one press both cancelled the stroke and reloaded the tutorial;
+ * now the key router calls `cancelStroke()` and a stroke in progress claims the
+ * key before anything else sees it.
  */
 
+import { cue } from "../audio/sound.ts";
 import type { Camera } from "../render/camera.ts";
 import type { Point } from "./gestures.ts";
 import type { Commander } from "./commander.ts";
@@ -27,11 +33,22 @@ export class Pen {
   drawing = false;
   /** Label of the last committed gesture, for the HUD. */
   lastAction = "";
+  /**
+   * The last stroke, if it meant nothing: kept, with the reason, so it can
+   * fade out in grey instead of vanishing (audit PC-02). `at` is real ms.
+   */
+  rejected: { points: Point[]; why: string; at: number } | null = null;
 
   private readonly canvas: HTMLCanvasElement;
   private readonly cam: Camera;
   private readonly commander: Commander;
   private pointerId: number | null = null;
+  /**
+   * Whether the pen context is live. Off while a screen that does not allow it
+   * is on top -- the canvas is still under a dialog, and a stroke begun there
+   * must not reach the world.
+   */
+  private enabled = true;
 
   constructor(canvas: HTMLCanvasElement, cam: Camera, commander: Commander) {
     this.canvas = canvas;
@@ -41,7 +58,21 @@ export class Pen {
     canvas.addEventListener("pointermove", this.onMove);
     canvas.addEventListener("pointerup", this.onUp);
     canvas.addEventListener("pointercancel", this.onCancel);
-    window.addEventListener("keydown", this.onKey);
+  }
+
+  /** Remove every listener, so a torn-down battle leaves nothing on the canvas. */
+  dispose(): void {
+    this.cancelStroke();
+    this.canvas.removeEventListener("pointerdown", this.onDown);
+    this.canvas.removeEventListener("pointermove", this.onMove);
+    this.canvas.removeEventListener("pointerup", this.onUp);
+    this.canvas.removeEventListener("pointercancel", this.onCancel);
+  }
+
+  /** Turn the pen context on or off. Turning it off abandons any stroke. */
+  setEnabled(on: boolean): void {
+    if (!on) this.cancelStroke();
+    this.enabled = on;
   }
 
   private toWorld(e: PointerEvent): Point {
@@ -53,7 +84,7 @@ export class Pen {
   }
 
   private onDown = (e: PointerEvent): void => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || !this.enabled) return;
     e.preventDefault();
     this.drawing = true;
     this.pointerId = e.pointerId;
@@ -83,7 +114,15 @@ export class Pen {
   private onUp = (e: PointerEvent): void => {
     if (!this.drawing || e.pointerId !== this.pointerId) return;
     this.release(e.pointerId);
-    this.lastAction = this.commander.commit(this.points);
+    const stroke = this.points;
+    this.lastAction = this.commander.commit(stroke);
+    // A tap that merely cleared or selected is not a refusal; a drawn stroke
+    // that did nothing is, and is shown as one.
+    this.rejected = this.commander.rejected && stroke.length > 1
+      ? { points: stroke, why: this.lastAction, at: performance.now() }
+      : null;
+    // K11: a stroke heard, or refused; a tap is a tick.
+    cue(this.rejected ? "refused" : stroke.length > 1 ? "stroke" : "click");
     this.points = [];
   };
 
@@ -94,14 +133,19 @@ export class Pen {
     this.commander.cancel();
   };
 
-  /** Escape abandons a stroke mid-draw without issuing anything. */
-  private onKey = (e: KeyboardEvent): void => {
-    if (e.key !== "Escape" || !this.drawing) return;
+  /**
+   * Abandon a stroke mid-draw without issuing anything. Returns whether there
+   * was one, so Escape can stop there instead of also opening the leave screen.
+   */
+  cancelStroke(): boolean {
+    if (!this.drawing) return false;
     if (this.pointerId !== null) this.release(this.pointerId);
+    this.drawing = false;
     this.points = [];
     this.commander.cancel();
     this.lastAction = "cancelled";
-  };
+    return true;
+  }
 
   private release(id: number): void {
     this.drawing = false;

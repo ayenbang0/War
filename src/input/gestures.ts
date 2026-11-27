@@ -153,7 +153,7 @@ export type Recognized =
 // -- tuning, all in world units ------------------------------------------------
 
 /** Below this total length a stroke is a tap, not a drawing. */
-const TAP_LENGTH = 26;
+export const TAP_LENGTH = 26;
 /** Extra grab room around a squad footprint when anchoring a stroke. */
 export const ANCHOR_SLACK = 26;
 /** Endpoint within this much of an enemy footprint counts as targeting it. */
@@ -182,7 +182,7 @@ const PARALLEL_TOLERANCE = 0.35;
  * A closed shape filling less than this much of its convex hull has a real
  * notch cut into it, i.e. it is a heart rather than a ring. See hullFill.
  */
-const HEART_HULL_FILL = 0.96;
+export const HEART_HULL_FILL = 0.96;
 /** ...and point at least this much homeward, as a cosine (about 63 degrees). */
 const RETREAT_HOMEWARD = 0.45;
 
@@ -613,7 +613,10 @@ export function gestureLabel(r: Recognized | null): string {
     case "feint":
       return "feint";
     case "lasso":
-      return "group " + r.squads.length;
+      // A bare word: how many MEN the loop takes is a question about where
+      // each man stands, which only the Commander can answer (audit PC-07).
+      // Counting anchors here read "group 0" over a loop round half a company.
+      return "group";
     default:
       return r.kind;
   }
@@ -661,7 +664,7 @@ function convexHull(pts: readonly Point[]): Point[] {
  * 1.000 of their hull; hearts fill 0.926 to 0.932. The threshold sits in the
  * gap, with about five percentage points of margin on either side.
  */
-function hullFill(pts: readonly Point[]): number {
+export function hullFill(pts: readonly Point[]): number {
   const hull = convexHull(pts);
   if (hull.length < 3) return 1;
   const hullArea = enclosedAreaOfLocal(hull);

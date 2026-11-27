@@ -1,0 +1,1071 @@
+/**
+ * Headless checks for the K0 layer controller's logic: the screen stack, the
+ * key router, the battle configs, the test launch and a BattleLayer's own
+ * life cycle, all under Node with plain-object fakes.
+ *
+ * What this cannot see is a real page: focus as the browser moves it, real
+ * pointer events on a real canvas, CSS. That is what the e2e harness
+ * (e2e.html, src/e2e/) is for, run on the published site by a browser. As with
+ * the gesture corpus, do both.
+ */
+
+import { ScreenStack, type FocusHost, type Focusable, type InputContext, type KeyInput, type KeyVerdict, type Screen, type ScreenKind } from "../src/ui/screen-stack.ts";
+import { ABILITY_SLOT_KEYS, ABILITY_SLOT_LABELS, KeyRouter, abilitySlotForCode, attachKeyRouter, classifyFocus, type FocusKind, type LayerKeys, type RawKey } from "../src/ui/keys.ts";
+import type { StorageLike } from "../src/app/kingdom-save.ts";
+import { beatSeconds, READING_WORDS_PER_SECOND } from "../src/ui/story/cutscene.ts";
+import { battleFromSetup, battleWorld, distinctAbilities, enemyArmy, lessonConfig, LESSON_DURATION_SECONDS } from "../src/app/battle-config.ts";
+import { ABILITY_IDS, type AbilityId } from "../src/content/abilities.ts";
+import { cost, validate } from "../src/content/army.ts";
+import { COMMANDERS } from "../src/content/commanders.ts";
+import { LEVELS } from "../src/content/levels/index.ts";
+import { readFileSync, readdirSync } from "node:fs";
+import { CUE_GAP_MS, CUE_VOICES, SOUND_CUES, SOUND_DEFAULTS, SOUND_KEY, Sound, readSoundSettings } from "../src/audio/sound.ts";
+import { fileURLToPath } from "node:url";
+
+let failures = 0;
+let section = "";
+function begin(name: string): void {
+  section = name;
+  console.log("\n" + name);
+}
+function check(name: string, ok: boolean, detail = ""): void {
+  console.log((ok ? "  PASS  " : "  FAIL  ") + name + (detail ? "  <- " + detail : ""));
+  if (!ok) failures++;
+}
+
+// -- fakes --------------------------------------------------------------------
+
+/** A focusable thing with a name, standing in for a button. */
+type FakeEl = Focusable & { readonly name: string; connected: boolean };
+function fakeEl(name: string): FakeEl {
+  return { name, connected: true, focus() { focusHost.current = this; } };
+}
+
+const focusHost = {
+  current: null as Focusable | null,
+  active(): Focusable | null { return this.current; },
+  focus(t: Focusable | null): void {
+    if (t) t.focus();
+    else this.current = null;
+  },
+  canFocus(t: Focusable): boolean { return (t as FakeEl).connected !== false; },
+} satisfies FocusHost & { current: Focusable | null };
+
+/** The name of whatever has focus, or "none". */
+function focused(): string {
+  return (focusHost.active() as FakeEl | null)?.name ?? "none";
+}
+
+type FakeScreen = Screen & {
+  log: string[];
+  visible: boolean;
+  inert: boolean;
+  keys: string[];
+  els: FakeEl[];
+};
+
+function fakeScreen(
+  name: string, kind: ScreenKind,
+  opts: { traps?: boolean; pauses?: boolean; inputs?: InputContext[]; onKey?: (k: KeyInput) => KeyVerdict; noFocus?: boolean } = {},
+): FakeScreen {
+  const els = [fakeEl(name + ".a"), fakeEl(name + ".b"), fakeEl(name + ".c")];
+  const s: FakeScreen = {
+    name, kind,
+    trapsFocus: opts.traps ?? true,
+    pausesSim: opts.pauses ?? false,
+    inputs: opts.inputs ?? ["ui"],
+    log: [], visible: false, inert: false, keys: [], els,
+    firstFocus: () => (opts.noFocus ? null : els[0]),
+    focusables: () => els,
+    mount() { s.log.push("mount"); },
+    unmount() { s.log.push("unmount"); },
+    setVisible(v) { s.visible = v; s.log.push(v ? "show" : "hide"); },
+    setInert(i) { s.inert = i; },
+    revealed() { s.log.push("revealed@" + (focused())); },
+    onKey: (k) => {
+      s.keys.push(k.code);
+      return opts.onKey ? opts.onKey(k) : "pass";
+    },
+  };
+  return s;
+}
+
+function key(code: string, over: Partial<RawKey> = {}): RawKey & { prevented: boolean } {
+  const k = {
+    code, repeat: false, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false,
+    target: null as unknown, prevented: false,
+    preventDefault() { k.prevented = true; },
+    ...over,
+  };
+  return k;
+}
+
+type FakeLayer = LayerKeys & { downs: string[]; ups: string[]; released: number; lastContexts: readonly InputContext[] };
+function fakeLayer(): FakeLayer {
+  const l: FakeLayer = {
+    downs: [], ups: [], released: 0, lastContexts: [],
+    keyDown(k, contexts) { l.downs.push(k.code); l.lastContexts = contexts; return "handled"; },
+    keyUp(code) { l.ups.push(code); },
+    releaseAll() { l.released++; },
+  };
+  return l;
+}
+
+// -- the screen stack ---------------------------------------------------------
+
+begin("screen stack");
+{
+  focusHost.current = null;
+  const stack = new ScreenStack(focusHost);
+  const changes: string[] = [];
+  stack.onChange(() => changes.push(stack.names().join(">")));
+  const home = fakeScreen("home", "full", { traps: false });
+  const menu = fakeScreen("menu", "full");
+  const field = fakeScreen("field", "full", { traps: false, inputs: ["pen", "camera", "ui"], noFocus: true });
+  const report = fakeScreen("report", "overlay", { pauses: true });
+
+  stack.push(home);
+  check("push mounts and shows the screen", home.log.join(",") === "mount,show", home.log.join(","));
+  check("push focuses the screen's first-focus element", focusHost.current === home.els[0]);
+  home.els[2].focus();
+  stack.push(menu);
+  check("a full screen hides the one below", !home.visible && menu.visible);
+  check("only the top is live; the rest are inert", home.inert && !menu.inert);
+  check("focus moves to the new top", focusHost.current === menu.els[0]);
+  menu.els[1].focus();
+  stack.push(field);
+  check("a screen with no first focus drops focus to the page", focusHost.current === null);
+  check("field inputs are the active contexts", stack.activeInputs().join() === "pen,camera,ui");
+  check("nothing pauses the sim yet", !stack.pausesSim());
+  stack.push(report);
+  check("an overlay leaves the screen below on view", field.visible && report.visible);
+  check("an overlay below it is still inert", field.inert);
+  check("an overlay that pauses holds the sim", stack.pausesSim());
+  check("the overlay allows only the UI context", stack.activeInputs().join() === "ui");
+
+  stack.popTo(menu);
+  check("popTo unmounts every screen above, top first",
+    report.log.includes("unmount") && field.log.includes("unmount") &&
+    report.log.lastIndexOf("unmount") >= 0, report.log.join(",") + " / " + field.log.join(","));
+  check("popTo restores the focus held when the screen above was pushed",
+    focusHost.current === menu.els[1], focused());
+  check("the revealed screen is shown again and live", menu.visible && !menu.inert);
+  // Focus was still on the popped report when the menu was revealed, i.e. the
+  // menu could redraw before focus was handed back to it.
+  check("revealed runs before focus is restored", menu.log.includes("revealed@report.a"), menu.log.join(","));
+  check("the sim is no longer held", !stack.pausesSim());
+
+  // A restore target that has gone (its screen redrew) falls back to first focus.
+  menu.els[1].connected = false;
+  stack.push(report);
+  stack.pop();
+  check("a vanished restore target falls back to the screen's first focus", focusHost.current === menu.els[0]);
+  menu.els[1].connected = true;
+
+  stack.pop();
+  check("pop returns to home with its focus", focusHost.current === home.els[2] && home.visible && !home.inert);
+  let threw = false;
+  try { stack.push(home); } catch { threw = true; }
+  check("a screen cannot be pushed twice", threw);
+  check("every change is announced", changes.length === 8, changes.join(" | "));
+
+  // Focus trap.
+  const dlg = fakeScreen("dialog", "overlay");
+  stack.push(dlg);
+  stack.cycleFocus(false);
+  const a = focused();
+  stack.cycleFocus(false);
+  stack.cycleFocus(false);
+  const c = focused();
+  stack.cycleFocus(false);
+  const wrapped = focused();
+  stack.cycleFocus(true);
+  const back = focused();
+  check("Tab cycles through the trap and wraps", a === "dialog.b" && c === "dialog.a" && wrapped === "dialog.b",
+    [a, c, wrapped].join(","));
+  check("Shift+Tab steps back", back === "dialog.a", back);
+  stack.clear();
+  check("clear empties the stack", stack.size === 0 && dlg.log.includes("unmount") && home.log.includes("unmount"));
+}
+
+// -- the key router -------------------------------------------------------------
+
+begin("key router");
+{
+  focusHost.current = null;
+  const stack = new ScreenStack(focusHost);
+  let target: FocusKind = "page";
+  const router = new KeyRouter(stack, () => target);
+  const layer = fakeLayer();
+  router.setLayer(layer);
+
+  const menu = fakeScreen("menu", "full", { onKey: (k) => (k.code === "Escape" ? "handled" : "pass") });
+  stack.push(menu);
+  router.keyDown(key("KeyW"));
+  check("a menu without pen or camera passes nothing to the layer", layer.downs.length === 0 && menu.keys.includes("KeyW"));
+
+  const field = fakeScreen("field", "full", { traps: false, inputs: ["pen", "camera", "ui"], noFocus: true });
+  stack.push(field);
+  router.keyDown(key("Escape"));
+  check("Esc goes to the top screen first, then the layer", field.keys.includes("Escape") && layer.downs.includes("Escape"));
+  check("the layer sees the top screen's contexts", layer.lastContexts.join() === "pen,camera,ui");
+  check("a covered menu never sees the key", !menu.keys.includes("Escape"));
+
+  let dialogEsc = 0;
+  const dialog = fakeScreen("dialog", "overlay", { pauses: true, onKey: (k) => (k.code === "Escape" ? (dialogEsc++, "handled") : "pass") });
+  stack.push(dialog);
+  layer.downs.length = 0;
+  router.keyDown(key("Escape"));
+  router.keyDown(key("Space"));
+  router.keyDown(key("KeyA"));
+  check("Esc on a dialog is the dialog's alone (one owner)", dialogEsc === 1 && !layer.downs.includes("Escape"));
+  check("under a dialog the layer gets no keys at all", layer.downs.length === 0, layer.downs.join());
+  router.keyUp({ code: "KeyA" });
+  check("key-up always reaches the layer, so nothing sticks", layer.ups.includes("KeyA"));
+  stack.pop();
+
+  layer.downs.length = 0;
+  target = "button";
+  router.keyDown(key("Space"));
+  router.keyDown(key("Enter"));
+  router.keyDown(key("KeyD"));
+  check("Space and Enter on a focused button belong to the button", !layer.downs.includes("Space") && !layer.downs.includes("Enter"));
+  check("other keys still reach the game with a button focused", layer.downs.includes("KeyD"));
+  target = "text-field";
+  layer.downs.length = 0;
+  router.keyDown(key("KeyW"));
+  router.keyDown(key("Escape"));
+  check("a text field owns every key but Escape", layer.downs.join() === "Escape", layer.downs.join());
+  target = "page";
+
+  layer.downs.length = 0;
+  router.keyDown(key("KeyD", { ctrlKey: true }));
+  router.keyDown(key("KeyA", { metaKey: true }));
+  check("browser shortcuts are never game keys (Ctrl+D no longer pans)", layer.downs.length === 0);
+
+  const before = layer.released;
+  router.keyUp({ code: "MetaLeft" });
+  check("letting go of Meta releases every held key (macOS)", layer.released === before + 1);
+  router.blur();
+  check("window blur releases every held key", layer.released === before + 2);
+
+  const trap = fakeScreen("trap", "overlay");
+  stack.push(trap);
+  const tab = key("Tab");
+  router.keyDown(tab);
+  check("Tab inside a trap is kept and cycles", tab.prevented && focused() === "trap.b");
+  stack.pop();
+  const tab2 = key("Tab");
+  router.keyDown(tab2);
+  check("Tab outside a trap is left to the browser", !tab2.prevented);
+
+  router.setLayer(null);
+  check("swapping the layer out releases its held keys", layer.released === before + 3);
+
+  // The DOM wiring: one listener per event type, all removed again.
+  const added: string[] = [];
+  const removed: string[] = [];
+  const target2 = {
+    hidden: false,
+    addEventListener: (t: string) => added.push(t),
+    removeEventListener: (t: string) => removed.push(t),
+  };
+  const detach = attachKeyRouter(router, target2, target2);
+  check("exactly one keydown listener is attached", added.filter((t) => t === "keydown").length === 1, added.join());
+  detach();
+  check("detach removes everything it attached", removed.sort().join() === added.sort().join());
+
+  check("buttons are classified as buttons", classifyFocus({ tagName: "BUTTON" }) === "button");
+  check("a text input is a text field", classifyFocus({ tagName: "INPUT", type: "text" }) === "text-field");
+  check("a checkbox is a button", classifyFocus({ tagName: "INPUT", type: "checkbox" }) === "button");
+  check("the body is the page", classifyFocus({ tagName: "BODY" }) === "page" && classifyFocus(null) === "page");
+}
+
+begin("ability keys");
+{
+  check("Digit1 is slot 1", abilitySlotForCode("Digit1") === 0);
+  check("Digit0 is slot 10 (AB-01)", abilitySlotForCode("Digit0") === 9);
+  check("Minus and Equal are slots 11 and 12", abilitySlotForCode("Minus") === 10 && abilitySlotForCode("Equal") === 11);
+  check("the numpad mirrors the digits", abilitySlotForCode("Numpad0") === 9 && abilitySlotForCode("Numpad5") === 4);
+  check("other keys are no slot", abilitySlotForCode("KeyA") === -1 && abilitySlotForCode("Space") === -1);
+  check("every ability can have a key of its own", ABILITY_SLOT_KEYS.length >= ABILITY_IDS.length,
+    ABILITY_SLOT_KEYS.length + " keys for " + ABILITY_IDS.length);
+  check("every slot has a label", ABILITY_SLOT_LABELS.length === ABILITY_SLOT_KEYS.length);
+  const codes = ABILITY_SLOT_KEYS.flat();
+  check("no key is bound to two slots", new Set(codes).size === codes.length);
+  check("no ability key collides with a camera or battle key",
+    !codes.some((c) => ["KeyW", "KeyA", "KeyS", "KeyD", "Space", "Period", "Enter", "Escape", "F2"].includes(c)));
+}
+
+// -- battle configs -------------------------------------------------------------
+
+begin("battle configs");
+{
+  const lesson = lessonConfig();
+  check("the lesson is a lesson", lesson.mode === "lesson");
+  // K9: the lesson is the tutorial's drill, which teaches readying and casting an ability.
+  check("K9: the drill gives the player two abilities and the far side none", lesson.abilities[0].length === 2 && lesson.abilities[1].length === 0);
+  check("K9: the drill sets two companies out to carry", lesson.companies === 2);
+  check("the lesson's clock is longer than any lesson", LESSON_DURATION_SECONDS >= 60 * 60);
+  check("K9: the drill is on the Proving Ground", lesson.level.id === "proving-ground");
+  {
+    // The drill's last step is a stroke onto the enemy: it must be seen from
+    // the drill ground, and stand far enough off that nobody fights unbidden.
+    const { world } = battleWorld(lesson);
+    world.deploying = false;
+    for (let k = 0; k < 120; k++) world.step();
+    const s = world.soldiers;
+    let seen = 0;
+    let dead = 0;
+    for (let i = 0; i < s.count; i++) {
+      if (s.player[i] === 1 && world.canSee(0, i)) seen++;
+      if (s.alive[i] !== 1) dead++;
+    }
+    check("K9: the drill's enemy is in sight of the companies as set out", seen > 0, seen + " seen");
+    check("K9: and nobody fights before an order", dead === 0, dead + " dead");
+  }
+
+  const level = LEVELS[0];
+  const army = { doctrine: "maneuver" as const, squads: ["line", "line", "archer", "horse"] as const };
+  const cfg = battleFromSetup({
+    level, difficulty: "sergeant", army: { doctrine: army.doctrine, squads: [...army.squads] },
+    commander: COMMANDERS.fox, abilities: ["barrage", "barrage", "shield"],
+  });
+  check("the enemy never spends more than the player", cost(cfg.armies[1]) <= cost(cfg.armies[0]));
+  check("the enemy's list is legal", validate(cfg.armies[1], cost(cfg.armies[0])).ok);
+  check("the enemy gets the same kit", cfg.abilities[1].join() === cfg.abilities[0].join());
+  check("a config is plain data", JSON.parse(JSON.stringify({ a: cfg.armies, b: cfg.abilities })) !== null);
+  check("keys address distinct abilities", distinctAbilities(["barrage", "barrage", "shield"]).join() === "barrage,shield");
+  check("enemy armies differ by budget", enemyArmy(level, 60).squads.length < enemyArmy(level, 300).squads.length);
+
+  // The test launch's config (test-hook.ts): the old setup screen's defaults.
+  const { testBattleConfig } = await import("../src/app/test-hook.ts");
+  const plain = testBattleConfig();
+  check("a test battle defaults to the first field at its suggested difficulty",
+    plain.mode === "battle" && plain.level === LEVELS[0] && plain.difficulty === LEVELS[0].suggestedDifficulty);
+  check("with a legal suggested army", validate(plain.armies[0], LEVELS[0].budget).ok && plain.armies[0].squads.length > 0);
+  check("and the same every time", JSON.stringify(testBattleConfig().armies) === JSON.stringify(plain.armies) &&
+    testBattleConfig().commander === plain.commander);
+  const spec = testBattleConfig({ commander: "fox", difficulty: "colonel", squads: ["line"], abilities: ["shield"] });
+  check("a test battle takes what the spec names", spec.commander === COMMANDERS.fox && spec.difficulty === "colonel" &&
+    spec.armies[0].squads.join() === "line" && spec.abilities[0].join() === "shield");
+}
+
+// -- the battle layer's life cycle, on fakes ------------------------------------
+
+begin("battle layer");
+{
+  // Just enough page for a BattleLayer: a canvas that counts its listeners, a
+  // window with a fake frame clock, and elements for the HUD and ability bar.
+  type Listener = { type: string; fn: unknown };
+  const fakeContext = (): CanvasRenderingContext2D => new Proxy({} as Record<string, unknown>, {
+    get(t, k: string) {
+      if (k in t) return t[k];
+      if (k === "createRadialGradient" || k === "createLinearGradient" || k === "createPattern") return () => ({ addColorStop() {} });
+      if (k === "measureText") return () => ({ width: 10 });
+      if (k === "getImageData") return () => ({ data: new Uint8ClampedArray(4) });
+      return () => {};
+    },
+    set(t, k: string, v) { t[k] = v; return true; },
+  }) as unknown as CanvasRenderingContext2D;
+  const fakeElement = (): Record<string, unknown> => {
+    const children: unknown[] = [];
+    const classes = new Set<string>();
+    const e: Record<string, unknown> = {
+      style: {}, textContent: "", className: "", title: "", children,
+      classList: {
+        add: (c: string) => classes.add(c), remove: (c: string) => classes.delete(c),
+        toggle: (c: string, on?: boolean) => (on ?? !classes.has(c)) ? classes.add(c) : classes.delete(c),
+        contains: (c: string) => classes.has(c),
+      },
+      append: (...n: unknown[]) => children.push(...n),
+      appendChild: (n: unknown) => children.push(n),
+      blur: () => {},
+    };
+    return e;
+  };
+  (globalThis as unknown as { document: unknown }).document = {
+    createElement: (tag: string) => tag === "canvas"
+      ? { width: 0, height: 0, getContext: () => fakeContext() }
+      : fakeElement(),
+  };
+  const canvasListeners: Listener[] = [];
+  const canvas = {
+    width: 1280, height: 720, style: {},
+    classList: { add() {}, remove() {} },
+    addEventListener: (type: string, fn: unknown) => canvasListeners.push({ type, fn }),
+    removeEventListener: (type: string, fn: unknown) => {
+      const i = canvasListeners.findIndex((l) => l.type === type && l.fn === fn);
+      if (i >= 0) canvasListeners.splice(i, 1);
+    },
+    getBoundingClientRect: () => ({ left: 0, top: 0 }),
+    setPointerCapture() {}, releasePointerCapture() {}, hasPointerCapture: () => false,
+  };
+  const winListeners: Listener[] = [];
+  let frames: ((t: number) => void)[] = [];
+  let cancelled = 0;
+  const win = {
+    innerWidth: 1280, innerHeight: 720, devicePixelRatio: 1,
+    addEventListener: (type: string, fn: unknown) => winListeners.push({ type, fn }),
+    removeEventListener: (type: string, fn: unknown) => {
+      const i = winListeners.findIndex((l) => l.type === type && l.fn === fn);
+      if (i >= 0) winListeners.splice(i, 1);
+    },
+    requestAnimationFrame: (fn: (t: number) => void) => { frames.push(fn); return frames.length; },
+    cancelAnimationFrame: () => { cancelled++; },
+  };
+  const hud = fakeElement();
+  const abilityRoot = fakeElement();
+  const { BattleLayer } = await import("../src/app/battle-layer.ts");
+  const env = {
+    win: win as unknown as Window, canvas: canvas as unknown as HTMLCanvasElement, ctx: fakeContext(),
+    hud: hud as unknown as HTMLElement, abilityRoot: abilityRoot as unknown as HTMLElement,
+  };
+  const calls = { leave: 0, outcome: 0 };
+  let held = false;
+  const hooks = {
+    onOutcome: () => { calls.outcome++; },
+    requestLeave: () => { calls.leave++; },
+    simHeld: () => held,
+  };
+  /** Run queued frames, each 50 ms (one tick) after the last. */
+  let clock = 1000;
+  const runFrames = (n: number): void => {
+    for (let i = 0; i < n; i++) {
+      const q = frames;
+      frames = [];
+      clock += 50;
+      for (const f of q) f(clock);
+    }
+  };
+  const contexts: InputContext[] = ["pen", "camera", "ui"];
+  const press = (b: { keyDown(k: KeyInput, c: readonly InputContext[]): KeyVerdict }, code: string): KeyVerdict =>
+    b.keyDown({ code, repeat: false, ctrl: false, meta: false, alt: false, shift: false, preventDefault() {} }, contexts);
+
+  // The lesson.
+  const lesson = new BattleLayer(lessonConfig(), env, hooks);
+  check("a built battle has not started its loop", frames.length === 0 && lesson.phase === "built");
+  lesson.start();
+  check("start runs the frame loop", frames.length === 1 && lesson.phase === "live");
+  check("BS-05: the lesson runs no enemy commander", lesson.world.ai.length === 0);
+  check("BS-05: the lesson's clock cannot run out mid-lesson", lesson.world.duration === LESSON_DURATION_SECONDS);
+  // K9: the drill begins deploying, because setting out and Enter are lessons too.
+  check("K9: the drill starts deploying", lesson.world.deploying);
+  check("K9: with its two companies made", lesson.world.groups.filter((g) => g.player === 0).length >= 2,
+    String(lesson.world.groups.filter((g) => g.player === 0).length));
+  press(lesson, "Enter");
+  check("K9: Enter begins the drill", !lesson.world.deploying);
+  runFrames(40);
+  check("frames advance the lesson's world", lesson.world.tick > 30, "tick " + lesson.world.tick);
+  check("the HUD shows no clock in a lesson", String(hud.textContent).startsWith("lesson"), String(hud.textContent).split("\n")[0]);
+
+  // Esc's order of ownership (GK-01, PC-06, BS-04).
+  lesson.pen.drawing = true;
+  lesson.pen.points = [{ x: 1, y: 1 }];
+  press(lesson, "Escape");
+  check("Esc mid-stroke cancels the stroke and nothing else", !lesson.pen.drawing && calls.leave === 0 && lesson.pen.lastAction === "cancelled");
+  press(lesson, "Escape");
+  check("Esc with nothing to cancel asks to leave", calls.leave === 1);
+
+  // Pause (BH-01).
+  press(lesson, "Space");
+  const t0 = lesson.world.tick;
+  runFrames(10);
+  check("Space pauses the sim", lesson.run === "paused" && lesson.world.tick === t0);
+  check("BH-01: the HUD says PAUSED", String(hud.textContent).startsWith("PAUSED"));
+  press(lesson, "Period");
+  check("'.' steps one tick while paused", lesson.world.tick === t0 + 1);
+  press(lesson, "Space");
+  held = true;
+  runFrames(5);
+  check("a screen that pauses the sim holds it too", lesson.world.tick === t0 + 1);
+  held = false;
+  runFrames(5);
+  check("and lets it go when it is gone", lesson.world.tick > t0 + 1);
+
+  const report = lesson.teardown();
+  check("teardown stops the loop", cancelled >= 1 && lesson.phase === "torn-down");
+  runFrames(3);
+  check("a torn-down battle never ticks again", lesson.world.tick === report.tick);
+  check("teardown removes every canvas listener", canvasListeners.length === 0, canvasListeners.map((l) => l.type).join());
+  check("teardown removes every window listener", winListeners.length === 0, winListeners.map((l) => l.type).join());
+  check("teardown empties the HUD (so it hides)", hud.textContent === "");
+  check("teardown reports the tick and hash", report.tick > 0 && report.hash.length > 0);
+
+  // A second battle, straight after, with ten distinct abilities.
+  const ten = ABILITY_IDS.slice(0, 10) as AbilityId[];
+  const second = new BattleLayer(battleFromSetup({
+    level: LEVELS[0], difficulty: "recruit",
+    army: { doctrine: "maneuver", squads: ["line", "line", "archer"] },
+    commander: COMMANDERS.badger, abilities: ten,
+  }), env, hooks);
+  second.start();
+  check("a second battle starts without a reload", second.phase === "live" && frames.length === 1);
+  check("a real battle deploys first and runs its AI", second.world.deploying && second.world.ai.length === 1);
+  press(second, "Digit0");
+  check("keys do not arm abilities while deploying", second.commander.armed === null);
+  press(second, "Enter");
+  check("Enter begins the battle", !second.world.deploying);
+  runFrames(2);
+  press(second, "Digit0");
+  check("AB-01: key 0 arms the tenth ability", second.commander.armed === ten[9], String(second.commander.armed));
+  press(second, "Escape");
+  check("GK-06: Esc puts an armed ability away before asking to leave", second.commander.armed === null && calls.leave === 1);
+  second.world.outcome = { winner: 0, reason: "rout", detail: "forced by ui-check" };
+  runFrames(2);
+  check("the outcome is reported once", calls.outcome === 1);
+  runFrames(2);
+  check("and only once", calls.outcome === 1);
+  second.teardown();
+  check("the second battle also leaves nothing attached", canvasListeners.length === 0 && winListeners.length === 0);
+}
+
+// -- the whole app, on a fake page ----------------------------------------------
+
+begin("app: screens and layers");
+{
+  const { installFakeDom, FakeEvent, FakeElement } = await import("./fake-dom.ts");
+  const { win, doc } = installFakeDom();
+  const { startApp } = await import("../src/app/app.ts");
+  const { testHook } = await import("../src/app/test-hook.ts");
+  type El = InstanceType<typeof FakeElement>;
+
+  const mem = new Map<string, string>();
+  const okStore: StorageLike = {
+    getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => { mem.set(k, v); }, removeItem: (k) => { mem.delete(k); },
+  };
+  const baseWin = win.listenerCount();
+  // K9's documented test path: a new exile opens on the map (AppEnv.skipOpening);
+  // the opening itself is checked in "app: the opening" below.
+  let app = startApp({ win: win as unknown as Window, doc: doc as unknown as Document, storage: () => okStore, skipOpening: true });
+  let hook = testHook(app);
+
+  const buttons = (): El[] => doc.querySelectorAll("button").filter((b) => b.shown && !b.closest("[inert]"));
+  const btn = (text: string): El | null => buttons().find((b) => b.textContent.trim() === text) ?? null;
+  const click = (text: string): boolean => {
+    const b = btn(text);
+    if (!b) return false;
+    b.focus();
+    b.click();
+    return true;
+  };
+  const focusedText = (): string => doc.activeElement.textContent.trim();
+  const press = (code: string, mods: { ctrl?: boolean } = {}): void => {
+    const target = doc.activeElement;
+    target.dispatchEvent(new FakeEvent("keydown", {
+      code, repeat: false, ctrlKey: mods.ctrl ?? false, metaKey: false, altKey: false, shiftKey: false,
+    }));
+    target.dispatchEvent(new FakeEvent("keyup", { code }));
+  };
+  const canvas = doc.getElementById("stage") as El;
+  const pointer = (type: string, x: number, y: number, button: number): void => {
+    canvas.dispatchEvent(new FakeEvent(type, { pointerId: 1, clientX: x, clientY: y, button, buttons: button === 0 ? 1 : 4 }));
+  };
+  const hud = doc.getElementById("hud") as El;
+
+  check("the app opens on the front screen", hook.top() === "home" && (doc.getElementById("home") as El).shown);
+  check("with the Exile focused", focusedText() === "The Exile of Rimaros");
+  check("the Exile is the primary button", btn("The Exile of Rimaros")?.className === "home-play");
+  check("story only: no Play button", btn("Play") === null);
+  check("story only: no Campaign button", btn("Campaign") === null);
+  check("story only: no setup or chronicle screen on the page", doc.getElementById("menu") === null && doc.getElementById("chronicle") === null);
+  check("RT-01: the empty HUD is hidden behind the front screen", !hud.shown);
+
+  // A battle, through the test launch (test-hook.ts): the second exception to
+  // "never drive". Everything after the launch is real keys and pointers.
+  const first = hook.launchBattle({ commander: "fox", difficulty: "colonel" });
+  check("the test launch puts a battle over Home", hook.top() === "battle" && hook.screens().join(">") === "home>battle");
+  check("a battle layer is live", first.phase === "live" && hook.battle() === first);
+  check("built from the spec given", first.config.commander.name === "Fox" && first.config.difficulty === "colonel");
+  check("which hides the front screen", !(doc.getElementById("home") as El).shown);
+  win.runFrames(2);
+  check("the HUD is filled and shown in battle", hud.shown && hud.textContent.includes("ENTER to begin"));
+  press("Enter");
+  check("Enter (on the page) begins the battle", !first.world.deploying);
+  win.runFrames(6);
+  check("the battle runs", first.world.tick >= 5, "tick " + first.world.tick);
+
+  press("Space");
+  win.runFrames(1);
+  const pausedAt = first.world.tick;
+  win.runFrames(4);
+  check("BH-01: Space pauses and the HUD says so", first.world.tick === pausedAt && hud.textContent.startsWith("PAUSED"));
+  press("Space");
+  win.runFrames(3);
+  check("Space resumes", first.world.tick > pausedAt);
+
+  // Middle drag pans; left drag draws.
+  const cx = first.cam.x;
+  pointer("pointerdown", 600, 300, 1);
+  pointer("pointermove", 500, 300, 1);
+  pointer("pointerup", 500, 300, 1);
+  check("PC-01: a middle drag pans the map", Math.abs(first.cam.x - (cx + 100 / first.cam.zoom)) < 1e-6 && !first.pen.drawing);
+  pointer("pointerdown", 600, 300, 0);
+  check("the left button is still the pen", first.pen.drawing);
+  press("Escape");
+  check("Esc cancels that stroke without leaving", !first.pen.drawing && hook.top() === "battle");
+
+  press("Escape");
+  check("Esc with nothing to cancel asks before leaving", hook.top() === "confirm" && focusedText() === "Stay");
+  const heldAt = first.world.tick;
+  win.runFrames(5);
+  check("the battle is held while the question is up", first.world.tick === heldAt);
+  pointer("pointerdown", 600, 300, 0);
+  check("the pen is off under the dialog", !first.pen.drawing);
+  press("KeyD");
+  check("GK-03: keys do not reach the map under the dialog", first.cam.x === cx + 100 / first.cam.zoom);
+  press("Tab");
+  check("Tab is trapped in the dialog", focusedText() === "Leave the field");
+  press("Tab");
+  check("and wraps", focusedText() === "Stay");
+  press("Escape");
+  check("Esc on the question means stay", hook.top() === "battle");
+  win.runFrames(3);
+  check("and the battle runs again", first.world.tick > heldAt);
+
+  hook.forceOutcome(0);
+  win.runFrames(1);
+  check("the end of the battle opens the report", hook.top() === "after-action" && focusedText() === "Back to the front screen");
+  check("the ability bar goes when the battle ends", !(doc.getElementById("abilities") as El).shown);
+  check("AA-01: its button goes back to the front screen", click("Back to the front screen") && hook.top() === "home");
+  check("the first battle is torn down", hook.battle() === null && first.phase === "torn-down");
+  check("its frame loop is gone", win.pendingFrames() === 0);
+  check("and every window listener it added", win.listenerCount() === baseWin + 3, String(win.listenerCount() - baseWin));
+  check("focus is back on the Exile", focusedText() === "The Exile of Rimaros");
+  check("RT-01: the HUD is empty and hidden again", hud.textContent === "" && !hud.shown);
+
+  const second = hook.launchBattle();
+  check("a second battle launches without a reload", hook.top() === "battle" && second !== first && second.world.tick === 0);
+  press("Escape");
+  check("leaving a battle asks first", hook.top() === "confirm");
+  check("Leave the field goes back to the front screen", click("Leave the field") && hook.top() === "home" && hook.battle() === null);
+  check("leaving left nothing on the stack", hook.screens().join(">") === "home");
+
+  // K9: the old lesson is the tutorial now, reached from a new exile's opening, not from Home.
+  check("K9: Home has no Learn the gestures button", btn("Learn the gestures") === null);
+
+  // The kingdom map (K2): reached from Home, and torn down as cleanly as a battle.
+  const docListeners = (): number => (doc as unknown as { count(): number }).count();
+  const winBefore = win.listenerCount();
+  const docBefore = docListeners();
+  const canvasBefore = canvas.count();
+  check("K2: Home offers the Exile", click("The Exile of Rimaros") && hook.top() === "kingdom");
+  const realm = hook.kingdom();
+  check("K2: a kingdom layer is live", realm !== null && realm.phase === "live");
+  win.runFrames(45);
+  check("K2: the realm runs in real time", (realm?.world.now ?? 0) > 0, "tick " + realm?.world.now);
+  check("K2: its HUD is on the page", doc.getElementById("kingdom-ui") !== null);
+  press("Space");
+  const kAt = realm?.world.now ?? -1;
+  win.runFrames(20);
+  check("K2: Space pauses the realm", realm?.world.now === kAt);
+  pointer("pointerdown", 600, 300, 0);
+  check("K2: the left button is the kingdom pen", realm?.intent !== null);
+  press("Escape");
+  check("K2: Esc cancels the stroke and stays", realm?.intent === null && hook.top() === "kingdom");
+  press("Escape");
+  check("K2: Esc again goes back to Home with no question", hook.top() === "home" && realm?.phase === "torn-down");
+  check("K2: its frame loop is gone", win.pendingFrames() === 0);
+  check("K2: every window listener it added is gone", win.listenerCount() === winBefore, String(win.listenerCount() - winBefore));
+  check("K2: every document listener too", docListeners() === docBefore, String(docListeners() - docBefore));
+  check("K2: and every canvas listener", canvas.count() === canvasBefore, String(canvas.count() - canvasBefore));
+  check("K2: its HUD is off the page", doc.getElementById("kingdom-ui") === null);
+  check("K2: leaving saved the realm", (mem.get("war.kingdom.v1") ?? "").length > 0);
+  check("K2: Home now offers a new exile too", btn("Begin a new exile") !== null);
+  click("The Exile of Rimaros");
+  check("K2: the Exile continues the saved realm", hook.kingdom()?.world.now === kAt);
+
+  // The city view (K3b): a layer below the map, started and torn down as cleanly.
+  {
+    const r = hook.kingdom()!;
+    const w = r.world;
+    // A fixture: give the king a hamlet (the e2e claims one the player's way).
+    const h0 = w.holdings.find((h) => h.kind === "hamlet" && h.owner === null)!;
+    (h0 as { owner: string | null }).owner = "king";
+    const winB = win.listenerCount();
+    const docB = docListeners();
+    const canB = canvas.count();
+    const clock = (): string => JSON.stringify({ run: r.clock.run, speed: r.clock.speed });
+    const clock0 = clock();
+    const now0 = w.now;
+    const mapFrames = r.renderer.stats.frames;
+    r.requestCity(h0.id);
+    const c = hook.city();
+    check("K3b: the city layer is live over the suspended map", c !== null && c.phase === "live" && hook.top() === "city" &&
+      r.isSuspended && hook.realm() === r && hook.kingdom() === null);
+    check("K3b: entering keeps the realm's clock and day", clock() === clock0 && w.now === now0);
+    check("K3b: the city panel is on the page", doc.querySelectorAll(".c-panel").length === 1);
+    check("K3b: focus lands on its heading", (doc.activeElement as unknown) === c?.panel.heading);
+    win.runFrames(12);
+    check("K3b: the city draws its plan", (c?.renderer.stats.frames ?? 0) > 5);
+    check("K3b: the map does not draw under it", r.renderer.stats.frames === mapFrames);
+    if (r.clock.run === "paused") press("Space");
+    const t1 = w.now;
+    win.runFrames(30);
+    check("K3b: the realm's clock runs on in the city", w.now > t1, (w.now - t1) + " ticks");
+    press("Space");
+    check("K3b: Space pauses it from the city", r.clock.run === "paused");
+    press("KeyP");
+    check("K3b: P opens the politics card", hook.top() === "politics-card");
+    press("Escape");
+    check("K3b: Esc closes the card first", hook.top() === "city" && c?.card === null);
+    const kept = JSON.stringify({ now: w.now, clock: clock(), stocks: w.kingStocks.stocks });
+    press("Escape");
+    check("K3b: Esc again leaves the city", hook.top() === "kingdom" && hook.kingdom() === r && !r.isSuspended && c?.phase === "torn-down");
+    check("K3b: leaving keeps the realm as the city left it", JSON.stringify({ now: w.now, clock: clock(), stocks: w.kingStocks.stocks }) === kept);
+    check("K3b: one frame loop again, the map's", win.pendingFrames() === 1, String(win.pendingFrames()));
+    check("K3b: every window listener the city added is gone", win.listenerCount() === winB, String(win.listenerCount() - winB));
+    check("K3b: every document listener too", docListeners() === docB, String(docListeners() - docB));
+    check("K3b: and every canvas listener", canvas.count() === canB, String(canvas.count() - canB));
+    check("K3b: the city panel is off the page", doc.querySelectorAll(".c-panel").length === 0);
+    win.runFrames(3);
+    check("K3b: the map draws again", r.renderer.stats.frames > mapFrames);
+    // Losing the holding while inside goes back up, and says why.
+    r.requestCity(h0.id);
+    const c2 = hook.city();
+    (h0 as { owner: string | null }).owner = null;
+    win.runFrames(2);
+    check("K3b: a holding lost while inside sends you back to the map", hook.top() === "kingdom" && c2?.phase === "torn-down" &&
+      r.hud.resultText.includes("no longer yours"), r.hud.resultText);
+    check("K3b: and leaves no listener behind", canvas.count() === canB && win.listenerCount() === winB);
+    // Another's holding has no city.
+    r.requestCity(h0.id);
+    check("K3b: another's holding cannot be entered", hook.top() === "kingdom" && hook.city() === null);
+  }
+  press("Escape");
+
+  app.dispose();
+  check("dispose removes every window listener", win.listenerCount() === baseWin, String(win.listenerCount()));
+  check("and every document listener", (doc as unknown as { count(): number }).count() === 0);
+
+  // Storage refused: the front screen still opens on the Exile (the realm
+  // then runs in memory and says so; scenario k2-no-storage-says-so).
+  app = startApp({
+    win: win as unknown as Window, doc: doc as unknown as Document,
+    storage: () => { throw Object.assign(new Error("refused"), { name: "SecurityError" }); },
+  });
+  hook = testHook(app);
+  check("with storage refused the app still opens on the Exile", hook.top() === "home" && focusedText() === "The Exile of Rimaros");
+  app.dispose();
+  check("the canvas has no listeners left", canvas.count() === 0);
+}
+
+// -- K9: the opening -- cutscene, tutorial, then the king's own realm --------------
+//
+// Headless, through the fake DOM: the flow and its teardown. The real strokes
+// of every step are driven in a browser by src/e2e/scenarios-k9.ts.
+begin("app: the opening (K9)");
+{
+  const { installFakeDom, FakeEvent, FakeElement } = await import("./fake-dom.ts");
+  const { win, doc } = installFakeDom();
+  const { startApp } = await import("../src/app/app.ts");
+  const { testHook } = await import("../src/app/test-hook.ts");
+  const { TUTORIAL } = await import("../src/content/story/tutorial.ts");
+  const { CUTSCENE } = await import("../src/content/story/cutscene.ts");
+  type El = InstanceType<typeof FakeElement>;
+  const mem = new Map<string, string>();
+  const store: StorageLike = {
+    getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => { mem.set(k, v); }, removeItem: (k) => { mem.delete(k); },
+  };
+  const app = startApp({ win: win as unknown as Window, doc: doc as unknown as Document, storage: () => store });
+  const hook = testHook(app);
+  const buttons = (): El[] => doc.querySelectorAll("button").filter((b) => b.shown && !b.closest("[inert]"));
+  const click = (text: string): boolean => {
+    const b = buttons().find((x) => x.textContent.trim() === text);
+    if (!b) return false;
+    b.focus();
+    b.click();
+    return true;
+  };
+  const press = (code: string): void => {
+    const target = doc.activeElement;
+    target.dispatchEvent(new FakeEvent("keydown", { code, repeat: false, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false }));
+    target.dispatchEvent(new FakeEvent("keyup", { code }));
+  };
+  const settle = async (): Promise<void> => { await Promise.resolve(); await Promise.resolve(); };
+
+  check("K9: a new exile opens on the cutscene", click("The Exile of Rimaros") && hook.top() === "story-cutscene");
+  check("K9: on its first beat, with Next focused", app.cutscene?.state.beat === 0 && doc.activeElement.textContent.trim() === "Next");
+  check("K9: Next goes on a beat", click("Next") && app.cutscene?.state.beat === 1);
+  press("Escape");
+  await settle();
+  check("K9: Esc skips the cutscene, into the tutorial", hook.top() === "kingdom" && app.coach !== null && app.cutscene === null);
+  const practice = hook.kingdom();
+  check("K9: the tutorial runs in a practice realm with the story on", practice !== null && practice.world.story !== null && practice === app.practice);
+  check("K9: the coach is on its first step", app.coach?.index === 0 && doc.querySelectorAll(".s-coach").length === 1);
+  check("K9: and teaches " + TUTORIAL.length + " steps", TUTORIAL.length >= 60);
+  check("K9: the cutscene has its beats", CUTSCENE.beats.length >= 8);
+  check("K9: Skip this step goes on", click("Skip this step") && app.coach?.index === 1);
+  win.runFrames(30);
+  check("K9: the practice realm is never saved", !mem.has("war.kingdom.v1"));
+  press("Escape");
+  check("K9: Esc with nothing to cancel asks whether to skip the tutorial", hook.top() === "confirm");
+  check("K9: Skip it ends the tutorial", click("Skip it"));
+  await settle();
+  const real = hook.kingdom();
+  check("K9: the king's own realm begins, not the practice one", real !== null && real !== practice && practice?.phase === "torn-down" && app.coach === null);
+  check("K9: on day one, with the story on", real?.world.now === 0 && real?.world.story?.act === 1);
+  check("K9: the coach panel is gone", doc.querySelectorAll(".s-coach").length === 0);
+  check("K9: the map has the story's buttons", buttons().some((b) => b.textContent.trim() === "Chronicle") && buttons().some((b) => b.textContent.trim() === "Menu"));
+  check("K9: Chronicle opens the chronicle", click("Chronicle") && hook.top() === "story-chronicle");
+  press("Escape");
+  check("K9: Esc closes it", hook.top() === "kingdom");
+  check("K9: Menu opens the menu", click("Menu") && hook.top() === "story-menu");
+  check("K9: Replay the tutorial goes back to the practice realm", click("Replay the tutorial") && hook.top() === "kingdom" && app.coach !== null && hook.kingdom() !== real);
+  check("K9: leaving for it saved the king's realm", (mem.get("war.kingdom.v1") ?? "").length > 0);
+  click("Skip the tutorial");
+  check("K9: Skip the tutorial asks first", hook.top() === "confirm");
+  click("Skip it");
+  await settle();
+  check("K9: and goes back to the king's own realm as it was", hook.kingdom()?.world === real?.world);
+  press("Escape");
+  check("K9: Continue skips the opening", hook.top() === "home" && click("The Exile of Rimaros") && hook.top() === "kingdom" && app.coach === null);
+  app.dispose();
+  check("K9: dispose leaves no story element behind", doc.getElementById("story") === null && doc.getElementById("story-menu") === null);
+}
+
+// -- the one scaling policy (docs/ui-policy.md) ------------------------------
+//
+// No browser runs here, so these read the stylesheet and pages as text. The
+// e2e scenario k2-text-floor checks computed sizes in a real browser.
+begin("ui policy (BS-06, BS-07, BS-10, BS-11, RT-02)");
+{
+  const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const css = read("../src/style.css").replace(/\/\*[\s\S]*?\*\//g, "");
+
+  // Every font size, longhand or in the `font:` shorthand, resolves to 1rem
+  // (16 px) or more. Sizes are rem or a --text token; a px font size is a
+  // policy break in itself, because it ignores the player's text setting.
+  const small: string[] = [];
+  const pxFonts: string[] = [];
+  for (const m of css.matchAll(/font(?:-size)?\s*:\s*([^;}]+)/g)) {
+    const v = m[1];
+    for (const n of v.matchAll(/(\d*\.?\d+)(px|rem|em)\b/g)) {
+      // In the shorthand, a size after "/" is the line height, not a size.
+      const before = v.slice(0, n.index ?? 0);
+      if (before.trimEnd().endsWith("/")) continue;
+      const size = parseFloat(n[1]);
+      if (n[2] === "px") pxFonts.push(m[0].trim());
+      else if (size < 1) small.push(m[0].trim());
+    }
+  }
+  check("no font size under 1rem in the stylesheet", small.length === 0, small.join(" | "));
+  check("no font size in px (sizes follow the player's text setting)", pxFonts.length === 0, pxFonts.join(" | "));
+  // The kingdom's own stylesheet is held to the same floor (U2-01: K2 had px labels there).
+  {
+    const kcss = read("../src/ui/kingdom/kingdom.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const bad: string[] = [];
+    for (const m of kcss.matchAll(/font(?:-size)?\s*:\s*([^;}]+)/g)) {
+      const v = m[1];
+      for (const n of v.matchAll(/(\d*\.?\d+)(px|rem|em)\b/g)) {
+        if (v.slice(0, n.index ?? 0).trimEnd().endsWith("/")) continue;
+        if (n[2] === "px" || parseFloat(n[1]) < 1) bad.push(m[0].trim());
+      }
+    }
+    check("kingdom.css: no font size in px or under 1rem", bad.length === 0, bad.join(" | "));
+    check("kingdom.css: an authored focus ring", /:focus-visible[^{]*\{[^}]*outline:\s*3px/.test(kcss));
+  }
+  // K3a: the event card and the Finds list have their own sheet, held to the same floor.
+  {
+    const xcss = read("../src/ui/kingdom/explore.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const bad: string[] = [];
+    for (const m of xcss.matchAll(/font(?:-size)?\s*:\s*([^;}]+)/g)) {
+      for (const n of m[1].matchAll(/(\d*\.?\d+)(px|rem|em)\b/g)) if (n[2] === "px" || parseFloat(n[1]) < 1) bad.push(m[0].trim());
+    }
+    check("explore.css: no font size in px or under 1rem", bad.length === 0, bad.join(" | "));
+    for (const page of ["../index.html", "../e2e.html"]) {
+      check(page.slice(3) + " links explore.css", read(page).includes("/src/ui/kingdom/explore.css"));
+    }
+  }
+  // The city view's stylesheet too (K3b, audit C-01).
+  {
+    const ccss = read("../src/ui/city/city.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const bad: string[] = [];
+    for (const m of ccss.matchAll(/font(?:-size)?\s*:\s*([^;}]+)/g)) {
+      const v = m[1];
+      for (const n of v.matchAll(/(\d*\.?\d+)(px|rem|em)\b/g)) {
+        if (v.slice(0, n.index ?? 0).trimEnd().endsWith("/")) continue;
+        if (n[2] === "px" || parseFloat(n[1]) < 1) bad.push(m[0].trim());
+      }
+    }
+    check("city.css: no font size in px or under 1rem", bad.length === 0, bad.join(" | "));
+    check("city.css: the panel heading has an authored focus ring", /\.c-title:focus-visible[^{]*\{[^}]*outline:\s*3px/.test(ccss));
+    check("city.css: index.html and e2e.html load it", read("../index.html").includes("/src/ui/city/city.css") &&
+      read("../e2e.html").includes("/src/ui/city/city.css"));
+  }
+  // K9: the story's screens (cutscene, coach, letters, chronicle, menu, ends).
+  {
+    const scss = read("../src/ui/story/story.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const bad: string[] = [];
+    for (const m of scss.matchAll(/font(?:-size)?\s*:\s*([^;}]+)/g)) {
+      const v = m[1];
+      for (const n of v.matchAll(/(\d*\.?\d+)(px|rem|em)\b/g)) {
+        if (v.slice(0, n.index ?? 0).trimEnd().endsWith("/")) continue;
+        if (n[2] === "px" || parseFloat(n[1]) < 1) bad.push(m[0].trim());
+      }
+    }
+    check("story.css: no font size in px or under 1rem", bad.length === 0, bad.join(" | "));
+    check("story.css: authored focus rings", /:focus-visible[^{]*\{[^}]*outline:\s*3px/.test(scss));
+    // K11: the coach sits over the field and the map; a stroke begun under it
+    // must reach the canvas (the real-browser k9-tutorial-drill failure).
+    check("story.css: the coach lets strokes through except its buttons",
+      /\.s-coach\s*\{[^}]*pointer-events:\s*none/.test(scss) && /\.s-coach \.k-btn\s*\{[^}]*pointer-events:\s*auto/.test(scss));
+    check("story.css: reduced motion is honoured", /@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(scss));
+    check("story.css: index.html and e2e.html load it", read("../index.html").includes("/src/ui/story/story.css") &&
+      read("../e2e.html").includes("/src/ui/story/story.css"));
+    // U3: the coach and the map's feed share the bottom-left corner.
+    check("U3: the feed and result line stand above the coach while it is up", /\.s-coached\s+\.k-foot\s*\{[^}]*bottom:\s*calc\(var\(--s-coach-h/.test(scss));
+  }
+  {
+    // U3: no beat of the cutscene moves on before its words can be read.
+    const { CUTSCENE: FILM } = await import("../src/content/story/cutscene.ts");
+    const fast = FILM.beats.filter((b) => b.text.split(/\s+/).length / beatSeconds(b) > READING_WORDS_PER_SECOND);
+    check("U3: every cutscene beat stays long enough to read (<= 3 words a second)", fast.length === 0, fast.map((b) => b.id).join(","));
+  }
+  const token = /--text:\s*(\d*\.?\d+)rem/.exec(css);
+  check("the body text token is at least 1rem", token !== null && parseFloat(token[1]) >= 1, token ? token[0] : "missing");
+
+  check("an authored focus ring exists", /:focus-visible\s*\{[^}]*outline:\s*3px/.test(css));
+  check("reduced motion is honoured", /@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(css));
+  check("panels do not scroll inside scrolling overlays (one scroll region)",
+    !/\.(menu|aa|home)-panel\s*\{[^}]*overflow:\s*auto/.test(css));
+  for (const page of ["../index.html", "../e2e.html"]) {
+    check(page.slice(3) + " declares its language", /<html lang="en">/.test(read(page)));
+  }
+
+  // Contrast of the text inks against the panels they sit on (WCAG 2.x).
+  const lum = (hex: string): number => {
+    const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  };
+  const ratio = (a: string, b: string): number => {
+    const [l1, l2] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return (l1 + 0.05) / (l2 + 0.05);
+  };
+  const tok = (name: string): string => {
+    const m = new RegExp("--" + name + ":\\s*(#[0-9a-fA-F]{6})").exec(css);
+    return m ? m[1] : "#000000";
+  };
+  const panels = ["panel", "panel-2"].map(tok).concat(["#f1e9d4", "#f2ecdc"]);
+  const low: string[] = [];
+  for (const ink of ["ink", "ink-1", "ink-2", "friend", "foe"]) {
+    for (const bg of panels) {
+      const r = ratio(tok(ink), bg);
+      if (r < 4.5) low.push(ink + " on " + bg + " " + r.toFixed(2));
+    }
+  }
+  check("every text ink holds 4.5:1 on every panel", low.length === 0, low.join(", "));
+  check("primary buttons' text holds 4.5:1", ratio("#f4efe2", tok("friend")) >= 4.5);
+  check("disabled primary text holds 4.5:1", ratio(tok("ink-1"), "#d9d1bd") >= 4.5);
+  check("the focus ring holds 3:1 on parchment", ratio(tok("focus"), tok("panel")) >= 3);
+}
+
+// -- the city plans (K3b) ----------------------------------------------------------
+
+begin("city plans (K3b)");
+{
+  const { KingdomWorld } = await import("../src/sim/kingdom/world.ts");
+  const { planFor, pickAt } = await import("../src/render/city/layout.ts");
+  type P = { readonly x: number; readonly y: number };
+  // Separating axes for two convex polygons: true when they overlap by more than `eps`.
+  const overlap = (a: readonly P[], b: readonly P[], eps = 0.5): boolean => {
+    for (const poly of [a, b]) {
+      for (let i = 0; i < poly.length; i++) {
+        const p = poly[i];
+        const q = poly[(i + 1) % poly.length];
+        const nx = q.y - p.y;
+        const ny = p.x - q.x;
+        const len = Math.hypot(nx, ny) || 1;
+        let aMin = Infinity, aMax = -Infinity, bMin = Infinity, bMax = -Infinity;
+        for (const v of a) { const d = (v.x * nx + v.y * ny) / len; aMin = Math.min(aMin, d); aMax = Math.max(aMax, d); }
+        for (const v of b) { const d = (v.x * nx + v.y * ny) / len; bMin = Math.min(bMin, d); bMax = Math.max(bMax, d); }
+        if (aMax - eps <= bMin || bMax - eps <= aMin) return false;
+      }
+    }
+    return true;
+  };
+  const w = new KingdomWorld({ seed: 7 });
+  const sigs = new Set<string>();
+  const clash: string[] = [];
+  const outside: string[] = [];
+  const counts: string[] = [];
+  const picks: string[] = [];
+  let same = true;
+  for (const h of w.holdings) {
+    const a = planFor(w, h.id);
+    const b = planFor(w, h.id);
+    if (JSON.stringify(a) !== JSON.stringify(b)) same = false;
+    sigs.add(JSON.stringify({ lots: a.lots, fields: a.fields, streets: a.streets }));
+    if (a.lots.length !== h.buildings.length || a.fields.length !== h.plots.length) counts.push(h.name);
+    for (let i = 0; i < a.lots.length; i++) {
+      for (let j = i + 1; j < a.lots.length; j++) if (overlap(a.lots[i].poly, a.lots[j].poly)) clash.push(h.name + " lots " + i + "/" + j);
+      for (const f of a.fields) if (overlap(a.lots[i].poly, f.poly)) clash.push(h.name + " lot " + i + " on field " + f.index);
+      for (const v of a.lots[i].poly) if (v.x < 0 || v.y < 0 || v.x > a.width || v.y > a.height) outside.push(h.name + " lot " + i);
+      const at = pickAt(a, { x: a.lots[i].x, y: a.lots[i].y }, 1);
+      if (!at || at.kind !== "lot" || at.index !== i) picks.push(h.name + " lot " + i);
+    }
+    for (const f of a.fields) {
+      const at = pickAt(a, { x: f.cx, y: f.cy }, 1);
+      if (!at || at.kind !== "field" || at.index !== f.index) picks.push(h.name + " field " + f.index);
+    }
+  }
+  check("every holding's plan is the same each time it is drawn", same);
+  check("every holding's plan is its own", sigs.size === w.holdings.length, sigs.size + " of " + w.holdings.length);
+  check("each plan has one lot per building slot and one field per plot", counts.length === 0, counts.join(", "));
+  check("no lot overlaps another lot or a field", clash.length === 0, clash.slice(0, 6).join(", "));
+  check("every lot is on the sheet", outside.length === 0, outside.slice(0, 6).join(", "));
+  check("a tap on a lot's or a field's middle picks it", picks.length === 0, picks.slice(0, 6).join(", "));
+  // Each country looks like itself (audit C-07).
+  const by = (pred: (p: ReturnType<typeof planFor>) => boolean): string[] =>
+    w.holdings.filter((h) => pred(planFor(w, h.id))).map((h) => h.biome);
+  const water = by((p) => p.water !== null);
+  check("river and coast towns have their water, and only they", water.length > 0 &&
+    water.every((b) => b === "river" || b === "river-town" || b === "coast"), water.join(","));
+  const hills = by((p) => p.contours.length > 0);
+  check("hill country has its height lines", hills.every((b) => b === "highland" || b === "border-hills"), hills.join(","));
+}
+
+// -- K11: sound -----------------------------------------------------------------
+begin("sound (K11): settings remembered, cues throttled, mute obeyed, never the sim's");
+{
+  const mem = new Map<string, string>();
+  const store = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); } };
+  check("on by default, at a low volume", SOUND_DEFAULTS.on && SOUND_DEFAULTS.volume > 0 && SOUND_DEFAULTS.volume <= 30 &&
+    readSoundSettings(store).on && readSoundSettings(store).volume === SOUND_DEFAULTS.volume);
+  mem.set(SOUND_KEY, "{not json");
+  check("a spoiled setting falls back to the defaults", readSoundSettings(store).on === SOUND_DEFAULTS.on && readSoundSettings(store).volume === SOUND_DEFAULTS.volume);
+  mem.delete(SOUND_KEY);
+  const a = new Sound(store, null);
+  a.setOn(false);
+  a.setVolume(70);
+  const b = new Sound(store, null);
+  check("mute and volume are remembered", !b.on && b.volume === 70, mem.get(SOUND_KEY) ?? "");
+  b.setVolume(500);
+  check("the volume stays within 0..100", b.volume === 100 && new Sound(store, null).volume === 100);
+  b.play("click", 0);
+  check("muted, nothing plays", b.played.length === 0);
+  b.setOn(true);
+  b.play("clash", 1000);
+  b.play("clash", 1000 + CUE_GAP_MS.clash - 1);
+  b.play("clash", 1000 + CUE_GAP_MS.clash);
+  check("a cue rests between plays (a melee is a clash, not a hundred)", b.played.filter((c) => c === "clash").length === 2, b.played.join());
+  b.play("letter", 5000);
+  check("with no WebAudio a cue is a silent no-op", b.played.includes("letter"));
+  check("every cue has notes", SOUND_CUES.every((c) => CUE_VOICES[c].length > 0 && CUE_GAP_MS[c] > 0));
+  const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const code = read("../src/audio/sound.ts").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  check("sound never asks about reduced motion (it is independent of it)", !code.includes("matchMedia") && !code.includes("reduced"));
+  const simFiles = readdirSync(fileURLToPath(new URL("../src/sim/", import.meta.url)), { recursive: true }) as string[];
+  const touching = simFiles.filter((f) => f.endsWith(".ts") && /audio\//.test(read("../src/sim/" + f)));
+  check("no sim file touches the sound", touching.length === 0, touching.join(", "));
+  const menu = read("../src/ui/story/menu.ts");
+  check("the Menu holds the mute and the volume", menu.includes("s-sound-toggle") && menu.includes("s-sound-louder") && menu.includes("s-sound-quieter"));
+}
+
+console.log("");
+if (failures > 0) {
+  console.log(failures + " ui check(s) FAILED (last section: " + section + ")");
+  process.exit(1);
+}
+console.log("ui checks passed");
