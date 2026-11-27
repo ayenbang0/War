@@ -41,6 +41,8 @@ export type BuildingEconomy = {
   readonly trade?: { readonly base: number; readonly perRoad: number; readonly perPeople: number };
   /** Percent added to the seasonal muster. */
   readonly musterPct?: number;
+  /** Percentage points added each season to the holding's population growth (BALANCE: how a town is made bigger). */
+  readonly growthPct?: number;
 };
 
 /** Effects for later phases. Recorded, not simulated, in K3. */
@@ -91,9 +93,9 @@ export type BuildingDef = {
 
 export const BUILDINGS: Readonly<Record<BuildingId, BuildingDef>> = {
   farm: {
-    id: "farm", name: "Farm and mill", purpose: "Better yields from every field here.",
+    id: "farm", name: "Farm and mill", purpose: "Better yields from every field here, and a town that grows faster.",
     cost: { coin: 10, timber: 8 }, days: 6, upkeep: {}, slots: 1, unique: true,
-    economy: { yieldPct: 30 }, later: {},
+    economy: { yieldPct: 30, growthPct: 2 }, later: {},
   },
   granary: {
     id: "granary", name: "Granary", purpose: "Keeps grain without it rotting: the realm's stores, which the king draws on.",
@@ -149,12 +151,12 @@ export const BUILDINGS: Readonly<Record<BuildingId, BuildingDef>> = {
   hall: {
     id: "hall", name: "Hall", purpose: "A lord's hall: calms the town, legitimacy each season, and the wounded mend here.",
     cost: { coin: 30, timber: 20 }, days: 12, upkeep: { coin: 1 }, slots: 1, unique: true,
-    economy: {}, later: { legitimacy: 2, unrest: -2, recovery: 2 },
+    economy: { growthPct: 1 }, later: { legitimacy: 2, unrest: -2, recovery: 2 },
   },
   market: {
-    id: "market", name: "Market", purpose: "Coin from trade along every road out.",
+    id: "market", name: "Market", purpose: "Coin from trade along every road out; people come to a town that trades.",
     cost: { coin: 18, timber: 12 }, days: 8, upkeep: {}, slots: 1, unique: true,
-    economy: { trade: { base: 1, perRoad: 1, perPeople: 100 } }, later: {},
+    economy: { trade: { base: 1, perRoad: 1, perPeople: 100 }, growthPct: 1 }, later: {},
   },
 };
 

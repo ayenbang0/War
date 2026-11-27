@@ -38,7 +38,7 @@ export const C = {
   fields: "Fields",
   lotButton: (p: { n: number; what: string }) => "Lot " + p.n + ": " + p.what,
   fieldButton: (p: { n: number; what: string }) => "Field " + p.n + ": " + p.what,
-  keyHint: "Tap a lot or a field · P politics · F the whole town · Esc leaves · space pause · . step · 1 2 3 speed",
+  keyHint: "Tap a lot or a field · P politics · F the whole town · Esc leaves · space pause · . step · 1 2 3 4 speed",
 
   // -- lots -----------------------------------------------------------------
   lotTitle: (n: number) => "Lot " + n,

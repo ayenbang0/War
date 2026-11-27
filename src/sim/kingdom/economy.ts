@@ -664,7 +664,8 @@ function turnSeason(world: KingdomWorld, d: CalendarDate): void {
     const book = world.books[f];
     for (const h of ownedBy(world, f)) {
       if (h.famine > 0 || h.population === 0) continue;
-      const g = TAX_RATES[TAX_RATE_IDS.indexOf(h.tax)].growthPct;
+      let g = TAX_RATES[TAX_RATE_IDS.indexOf(h.tax)].growthPct;
+      for (const b of standing(h)) if (!h.idle[b.slot]) g += b.def.economy.growthPct ?? 0;
       h.population += g >= 0 ? floor((h.population * g) / 100) : -ceil((h.population * -g) / 100);
       let pct = MUSTER_PCT;
       for (const b of standing(h)) if (!h.idle[b.slot]) pct += (MUSTER_PCT * (b.def.economy.musterPct ?? 0)) / 100;

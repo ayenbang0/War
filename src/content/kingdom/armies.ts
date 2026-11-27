@@ -63,10 +63,10 @@ export function dailyWage(points: number, levy: boolean): number {
 
 /** Grain (person-days) one man eats a day: the same ration as the king's party. */
 export const ARMY_RATION = 1;
-/** Grain one man carries in his pack, in person-days. */
-export const CARRY_PER_MAN = 5;
+/** Grain one man carries in his pack, in person-days. BALANCE: was 5, which could not cross a province. */
+export const CARRY_PER_MAN = 20;
 /** Grain a wagon squad carries besides its drivers' packs. */
-export const WAGON_CARRY = 120;
+export const WAGON_CARRY = 600;
 
 /**
  * Miles a day an army of the line marches in clear weather on a plain road:

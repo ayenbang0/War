@@ -199,7 +199,11 @@ export const FAMINE_LOSS_PCT = 1;
  */
 export const BREAD_WARNING_DAYS = 20;
 
-/** Share of a fed holding's people called to the levy at the start of each season, in percent. */
+/**
+ * Share of a fed holding's people called to the levy at the start of each season, in percent.
+ * Unchanged at 3: 4 and up starve a passive hamlet. Towns grow bigger through
+ * the buildings' growthPct instead, so the same percentage yields more men.
+ */
 export const MUSTER_PCT = 3;
 
 // -- storage and spoilage ---------------------------------------------------------
@@ -271,7 +275,7 @@ export const BIOME_ECONOMY: Readonly<Record<BiomeId, BiomeEconomy>> = {
  * it is down to RALLY_FLOOR_PCT of the people it had at the start -- the
  * rest will not leave their homes for an exile.
  */
-export const RALLY_PEOPLE_PER_FOLLOWER = 25;
+export const RALLY_PEOPLE_PER_FOLLOWER = 15; // BALANCE: was 25; at 10 a rallying king emptied his own hamlet
 export const RALLY_FLOOR_PCT = 60;
 export const RALLY_BRINGS: Readonly<Partial<Record<StockId, number>>> = { grain: 3, coin: 1 };
 

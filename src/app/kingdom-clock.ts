@@ -22,8 +22,8 @@ import { TICKS_PER_DAY } from "../sim/kingdom/clock.ts";
 export const DAY_SECONDS_AT_1X = 1;
 export const TICKS_PER_SECOND_AT_1X = TICKS_PER_DAY / DAY_SECONDS_AT_1X;
 
-export type KingdomSpeed = 1 | 2 | 4;
-export const KINGDOM_SPEEDS: readonly KingdomSpeed[] = [1, 2, 4];
+export type KingdomSpeed = 1 | 2 | 4 | 8;
+export const KINGDOM_SPEEDS: readonly KingdomSpeed[] = [1, 2, 4, 8];
 
 export type KingdomRun = "running" | "paused";
 

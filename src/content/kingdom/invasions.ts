@@ -23,7 +23,7 @@ import type { Fortification } from "./descent.ts";
  * drawsDole), so the grain is the armies' bread until the steward's first
  * harvest; the coin a few weeks of wages, the iron a few squads.
  */
-export const CAPTAIN_START: Readonly<Record<StockId, number>> = { coin: 300, grain: 2400, timber: 60, iron: 30, levy: 40 };
+export const CAPTAIN_START: Readonly<Record<StockId, number>> = { coin: 300, grain: 2400, timber: 60, iron: 30, levy: 20 };
 /**
  * Grain a crown town pays its lord a day, per 100 people (halved when
  * restless, like its coin): its own bread it keeps (economy.ts drawsDole).
@@ -46,7 +46,7 @@ export const SEAT_WORKS: readonly BuildingId[] = ["barracks", "palisade", "grana
 export const CROWN_SEAT_WORKS: readonly BuildingId[] = ["wall"];
 
 /** The garrison every seat starts with: an army in the hold posture that stands as its garrison. */
-export const SEAT_GARRISON: readonly UnitTypeId[] = ["line", "archer"];
+export const SEAT_GARRISON: readonly UnitTypeId[] = ["line"]; // BALANCE: was line + archer
 
 /**
  * Each faction's field host on day one, raised at its seat. The Hare's is
@@ -54,16 +54,16 @@ export const SEAT_GARRISON: readonly UnitTypeId[] = ["line", "archer"];
  * so the Act I skirmish is unchanged.
  */
 export const FIELD_HOSTS: Readonly<Partial<Record<FactionId, readonly UnitTypeId[]>>> = {
-  usurper: ["guard", "line", "line", "crossbow"],
-  margrave: ["lancer", "line", "line", "archer"],
-  boar: ["line", "line", "horse"],
-  fox: ["skirmisher", "horse", "archer"],
-  badger: ["pike", "line", "archer"],
+  usurper: ["guard", "line"],
+  margrave: ["lancer", "line"],
+  boar: ["line", "horse"],
+  fox: ["skirmisher", "horse"],
+  badger: ["pike", "line"],
   hare: ["scout", "scout", "skirmisher"],
-  wolf: ["horse", "horse", "line"],
-  owl: ["line", "crossbow", "archer"],
-  stag: ["lancer", "line", "archer"],
-  crow: ["skirmisher", "archer", "line"],
+  wolf: ["horse", "line"],
+  owl: ["line", "crossbow"],
+  stag: ["lancer", "line"],
+  crow: ["skirmisher", "archer"],
 };
 
 // -- the AI's temperament ------------------------------------------------------------------
@@ -99,7 +99,7 @@ export const AI = {
   /** Coin the steward keeps back from recruiting: a few days of wages. */
   reserveCoin: 60,
   /** Men the steward wants in the field hosts, recruited toward at the seat's barracks. */
-  fieldMen: 60,
+  fieldMen: 30,
   /** An attack is made only on a defence this many times weaker than the host sent (as the AI knows it). */
   margin: 1.2,
   /** Sites in its own provinces a captain explores, within this many miles of its seat. */

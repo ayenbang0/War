@@ -424,6 +424,9 @@ export class KingdomLayer implements LayerKeys {
       case "Digit3": case "Numpad3":
         if (!k.repeat) this.setSpeed(4);
         return "handled";
+      case "Digit4": case "Numpad4":
+        if (!k.repeat) this.setSpeed(8);
+        return "handled";
       case "KeyF":
         if (!k.repeat) {
           this.findKing();
@@ -1067,13 +1070,30 @@ export class KingdomLayer implements LayerKeys {
   /** K4: armies whose hunger has been said, until they eat again. */
   private hungerSaid = new Set<number>();
 
-  /** An order from a card or menu button (K3): to the queue, and say so. */
+  /**
+   * An order from a card or menu button (K3): to the queue, and say so.
+   *
+   * A DECISION put to the king by a modal card (a letter, an event, a rumour)
+   * is answered at once even with the clock paused: the card has already
+   * closed, so a queued answer would leave the letter standing and the
+   * click looking dead. One tick is run to take it (as `settle` does for a
+   * contact); every other order waits for the clock, as the pause promises.
+   */
   issueFromUi(body: KingdomOrderBody, said: string): void {
     // K9: what the tutorial waits for is an order the world will take (checked
     // before it is queued, as the tick will check it again).
     const ok = this.world.check(body) === null;
     this.world.issue(body);
-    this.hud.result(this.clock.run === "paused" ? E.queued(said) : said);
+    const paused = this.clock.run === "paused";
+    const isDecision = body.kind === "resolveEvent" || body.kind === "answerLetter" ||
+      body.kind === "callLevy" || body.kind === "burnFields" || body.kind === "ambush";
+    const answeredNow = paused && ok && isDecision;
+    this.hud.result(paused && !answeredNow ? E.queued(said) : said);
+    if (answeredNow) {
+      this.runTicks(1);
+      this.storesDirty = true;
+      this.hud.resources.update(this.world);
+    }
     if (!ok) return;
     switch (body.kind) {
       case "forage": signal({ kind: "ui", action: "forage" }); break;
